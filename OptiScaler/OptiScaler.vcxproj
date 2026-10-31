@@ -784,6 +784,11 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="shaders\rcas\RCAS_Common.h" />
     <ClInclude Include="shaders\rcas\RCAS_Dx11.h" />
     <ClInclude Include="shaders\rcas\RCAS_Dx12.h" />
+    <ClInclude Include="shaders\f5lut\F5Lut_Common.h" />
+    <ClInclude Include="shaders\f5lut\F5Lut_Dx11.h" />
+    <ClInclude Include="shaders\f5lut\F5Lut_Dx12.h" />
+    <ClInclude Include="shaders\f5lut\F5Lut_Vk.h" />
+    <ClInclude Include="shaders\dlssnr\precompile\dlssnr_lut_Shader_Dx11.h" />
     <ClInclude Include="State.h" />
     <ClInclude Include="upscalers\xess\XeSSFeature_Dx11on12.h" />
     <ClInclude Include="upscalers\xess\XeSSFeature_Vk.h" />
@@ -1190,6 +1195,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\sgsr1\SGSR1_Vk.cpp" />
     <ClCompile Include="shaders\rcas\RCAS_Dx11.cpp" />
     <ClCompile Include="shaders\rcas\RCAS_Dx12.cpp" />
+    <ClCompile Include="shaders\f5lut\F5Lut_Dx11.cpp" />
+    <ClCompile Include="shaders\f5lut\F5Lut_Dx12.cpp" />
+    <ClCompile Include="shaders\f5lut\F5Lut_Vk.cpp" />
     <ClCompile Include="upscalers\xess\XeSSFeature_Vk.cpp" />
     <ClCompile Include="Util.cpp" />
     <ClCompile Include="version_check.cpp" />

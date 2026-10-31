@@ -14,6 +14,9 @@
 //   4. An implausible texel (0, inf) falls back to the host value.
 //   5. Forced PQ grades for the game's HDR paper white: white point 2 reads the decoded light at half, so the result
 //      matches a frame of half the light graded at white 1.
+//   6. The precompiled D3D11 shader F5LUT's D3D11 chain step ships (dlssnr_lut_Shader_Dx11.h) grades bit-identically to
+//      this compile of dlssnr_lut.hlsl, with the chain step's constants (F5Lut_Common.h: no encoding, the HDR flag,
+//      white 1.0 or PreExposure / the game's exposure), so a stale header shows here.
 //
 // Build: cl /nologo /std:c++20 /EHsc /W3 tests\nr_lut_white_point_shader_smoke.cpp d3d11.lib d3dcompiler.lib
 // Reference: git show 7364a7f8:OptiScaler/shaders/dlssnr/precompile/dlssnr_lut.hlsl > precompile\dlssnr_lut_ref.hlsl
@@ -34,6 +37,7 @@
 #include <vector>
 #include "../OptiScaler/dlssnr/DlssNr_LutFile.h"
 #include "../OptiScaler/shaders/dlssnr/DlssNr_LutConstants.h"
+#include "../OptiScaler/shaders/dlssnr/precompile/dlssnr_lut_Shader_Dx11.h"
 using Microsoft::WRL::ComPtr;
 
 struct Pixel { float r, g, b, a; };
@@ -343,6 +347,34 @@ try
         for (int i = 0; i < N; ++i)
             expect(std::isfinite(atTwo[i].r) && std::isfinite(atTwo[i].g) && std::isfinite(atTwo[i].b),
                    "forced PQ at paper white 2 is not finite");
+    }
+
+    // 6. The shipped D3D11 bytecode against this compile, with the chain step's constants.
+    {
+        ComPtr<ID3D11ComputeShader> shipped;
+        check(gpu.device->CreateComputeShader(dlssnr_lut_dx11_cso, sizeof(dlssnr_lut_dx11_cso), nullptr, &shipped));
+        auto sdr = Base(0, false, 1.0f);
+        auto hdr = Base(0, true, 1.0f);
+        auto hdrExposure = Base(0, true, 1.0f);
+        hdrExposure.PreExposure = 2.0f;
+        hdrExposure.UseExposureWhitePoint = 1u;
+        hdrExposure.ExposureBaseScale = 1.0f;
+        auto hdrLog = Base(0, true, 1.0f);
+        hdrLog.LatticeCoord = 1u;
+        expect(SameBits(gpu.Run(shipped.Get(), display, sdr, 0.0f), gpu.Run(shader.Get(), display, sdr, 0.0f)),
+               "shipped D3D11 shader differs on a tone-mapped frame");
+        expect(SameBits(gpu.Run(shipped.Get(), linear, hdr, 0.0f), gpu.Run(shader.Get(), linear, hdr, 0.0f)),
+               "shipped D3D11 shader differs on a linear HDR frame");
+        expect(SameBits(gpu.Run(shipped.Get(), linear, hdrExposure, 0.5f),
+                        gpu.Run(shader.Get(), linear, hdrExposure, 0.5f)),
+               "shipped D3D11 shader differs with the game's exposure");
+        expect(SameBits(gpu.Run(shipped.Get(), linear, hdrLog, 0.0f), gpu.Run(shader.Get(), linear, hdrLog, 0.0f)),
+               "shipped D3D11 shader differs on the log-spaced lattice");
+        // The chain's white point with the game's exposure: PreExposure 2 / exposure 0.5 = 4.
+        expect(Worst(gpu.Run(shipped.Get(), linear, hdrExposure, 0.5f),
+                     gpu.Run(shader.Get(), linear, Base(0, true, 4.0f), 0.0f)) < 1e-5f,
+               "the chain step's white point is not PreExposure / exposure");
+        std::puts("shipped D3D11 shader (F5LUT chain step) checked against the source");
     }
 
     std::puts(fails == 0 ? "PASS: the LUT grades for the encode's white point, live or host (WARP HLSL)"

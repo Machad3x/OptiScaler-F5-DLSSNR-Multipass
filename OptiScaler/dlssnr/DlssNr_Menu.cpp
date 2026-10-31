@@ -28,6 +28,7 @@
 #include <nvapi/fakenvapi.h>
 
 #include <imgui/imgui.h>
+#include <imgui/imgui_internal.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <shaders/dlssnr/DlssNr_GameScale.h>
 #include <shaders/dlssnr/DlssNr_Spatial.h>
@@ -3382,7 +3383,7 @@ static void RenderLutSection(Config* config)
 
     HelpMarker("Applies a colour grade (.cube LUT) to the picture NR works from. Put files in OptiScaler\\LUTs and "
                "press Rescan. Strong grades also affect exposure, skin detection and reuse. To grade NR's result "
-               "instead, use Post-NR LUT on the Output page.");
+               "instead, use F5LUT on the Image page.");
 
     if (!current.empty())
     {
@@ -3456,8 +3457,9 @@ static std::string LookInputPreview(int setting, const DlssNr::LayerInput* found
     return text;
 }
 
-// A stack of up to four .cube LUTs graded onto the picture NR returns (memory/plans/2026-10-31-nr-lut-chain.md). Unlike
-// the Input LUT the model never sees this grade. The settings are dense (an empty slot is an absent layer), so every
+// F5LUT: a stack of up to four .cube LUTs graded onto the picture NR returns, or the upscaler's output with NR off
+// (memory/plans/2026-10-31-nr-lut-chain.md, 2026-11-01-f5lut-image-page.md). Unlike the Input LUT the model never sees
+// this grade. The settings are dense (an empty slot is an absent layer), so every
 // edit rewrites the list from its non-empty layers and the rows are always the layers in order plus, at most, one empty
 // row waiting for a file.
 static void RenderPostLutSection(Config* config)
@@ -3500,10 +3502,12 @@ static void RenderPostLutSection(Config* config)
     int moveBy = 0;
 
     // Every row's buttons start in one column, past the widest label any row can have, and a button that does not apply
-    // to a row (^ on the first, v on the last) is shown disabled rather than left out, so nothing shifts between rows.
+    // to a row (up on the first, down on the last) is shown disabled rather than left out, so nothing shifts between
+    // rows. The move buttons are drawn arrows (the menu font has no ▲ ▼ glyphs), as tall as the small x beside them.
     const ImGuiStyle& style = ImGui::GetStyle();
     const float buttonsX = ImGui::GetCursorPosX() + ImGui::CalcItemWidth() + style.ItemInnerSpacing.x +
                            ImGui::CalcTextSize("LUT strength 4").x + style.ItemSpacing.x;
+    const ImVec2 arrowSize(ImGui::GetFontSize() + style.FramePadding.x * 2.0f, ImGui::GetFontSize());
 
     for (int row = 0; row < rows; ++row)
     {
@@ -3543,7 +3547,7 @@ static void RenderPostLutSection(Config* config)
         {
             ImGui::SameLine(buttonsX);
             ImGui::BeginDisabled(row == 0);
-            if (ImGui::SmallButton(("^##postlutup" + id).c_str()))
+            if (ImGui::ArrowButtonEx(("##postlutup" + id).c_str(), ImGuiDir_Up, arrowSize))
             {
                 moveRow = row;
                 moveBy = -1;
@@ -3552,7 +3556,7 @@ static void RenderPostLutSection(Config* config)
 
             ImGui::SameLine();
             ImGui::BeginDisabled(row + 1 >= (int) layers.size());
-            if (ImGui::SmallButton(("v##postlutdown" + id).c_str()))
+            if (ImGui::ArrowButtonEx(("##postlutdown" + id).c_str(), ImGuiDir_Down, arrowSize))
             {
                 moveRow = row;
                 moveBy = 1;
@@ -3629,7 +3633,7 @@ static void RenderPostLutSection(Config* config)
     }
 
     if (layers.size() > 1)
-        ImGui::TextDisabled("Applied top to bottom, after NR.");
+        ImGui::TextDisabled("Applied top to bottom.");
 
     // One toolbar under the list: Add LUT (when there is a layer and room for another), Rescan, and the help.
     if (!layers.empty() && (int) layers.size() < kMax && !addRow)
@@ -3641,11 +3645,14 @@ static void RenderPostLutSection(Config* config)
     if (ImGui::SmallButton("Rescan##postlut"))
         lutFiles = ScanLutFolder();
     ImGui::SameLine();
-    HelpMarker("Applies a colour grade (.cube LUT) to the picture NR returns, so the model never sees it and "
-               "exposure, skin detection and reuse are not affected. Put files in OptiScaler\\LUTs and press Rescan. "
-               "With NR before Super Resolution the grade is applied before the upscaler. In Finished Picture mode it "
-               "grades the finished picture, UI included (D3D12; Vulkan does not run that mode).\n"
-               "Add LUT adds another after the last one, up to four. They are applied top to bottom (^ v move a "
+    HelpMarker("Applies a colour grade (.cube LUT) to the game's picture. Put files in OptiScaler\\LUTs and press "
+               "Rescan.\n"
+               "With Neural Rendering on, it grades the picture NR returns, so the model never sees it and exposure, "
+               "skin detection and reuse are not affected. With NR before Super Resolution the grade is applied before "
+               "the upscaler; in Finished Picture mode it grades the finished picture, UI included (D3D12; Vulkan does "
+               "not run that mode). With NR off, it grades the OptiScaler upscaler's output, before the game draws its "
+               "HUD (needs an OptiScaler upscaler).\n"
+               "Add LUT adds another after the last one, up to four. They are applied top to bottom (the arrows move a "
                "layer, x removes it); each strength blends that layer only. Strong grades stack up.\n"
                "Look input: a LUT made for a camera log space (ARRILogC4AWG4-to-..., S-Log3, ...) needs the picture in "
                "that space. Auto reads it from the file's header or name and converts the game's picture for it, so no "
@@ -3657,14 +3664,21 @@ static void RenderPostLutSection(Config* config)
     {
         const float slot = StatusSlotBegin();
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        // Each stage reports every frame it runs, so a report older than a second means neither ran (NR off and no
+        // OptiScaler upscaler, or a frame NR did not compose).
+        const bool current = status.seen && GetTickCount64() - status.reportedMs < 1000;
         if (layers.empty())
             ImGui::TextWrapped("No LUT loaded.");
-        else if (!config->DlssNrEnabled.value_or_default())
-            ImGui::TextWrapped("Not applied: NR is off.");
-        else if (!status.seen || !status.wanted)
+        else if (!current)
+            ImGui::TextWrapped("Not applied: needs Neural Rendering or an OptiScaler upscaler.");
+        else if (!status.wanted)
             ImGui::TextWrapped("Waiting for a frame.");
         else if (status.loaded)
+        {
             ImGui::TextWrapped("Loaded: %s", status.chain.c_str());
+            ImGui::TextWrapped(status.stage == DlssNr::PostLutStage::AfterNr ? "Graded after NR."
+                                                                             : "Graded on the upscaler's output.");
+        }
         else if (status.note.empty())
             ImGui::TextWrapped("Not applied.");
 
@@ -4426,10 +4440,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         HelpMarker("Higher: stronger NR colour (above 1 more saturated). 0: keeps the game's colours. Default: 1.");
     }
 
-    const bool postLutOn = std::any_of(config->DlssNrPostLutFile, config->DlssNrPostLutFile + Config::kPostLutLayers,
-                                       [](const auto& file) { return !file.value_or_default().empty(); });
-    if (NrCard card("Post-NR LUT##card", menuResScale, postLutOn); card.IsOpen())
-        RenderPostLutSection(config);
+    // The LUT stack that grades NR's result moved to the Image page (it also runs without NR).
+    ImGui::TextDisabled("Colour grades (.cube LUTs) for NR's result: F5LUT on the Image page.");
 
     ImGui::PopItemWidth();
 }
@@ -5008,6 +5020,14 @@ void UpdateMultiViewHint(Config* config)
                                 "Neural Rendering stood down: this game draws %zu views at once (a multi-monitor "
                                 "layout).\nTick the views it works on: open the menu, Neural Rendering, Input.",
                                 views.count });
+}
+
+void RenderF5LutCard(Config* config, float menuResScale)
+{
+    const bool on = std::any_of(config->DlssNrPostLutFile, config->DlssNrPostLutFile + Config::kPostLutLayers,
+                                [](const auto& file) { return !file.value_or_default().empty(); });
+    if (NrCard card("F5LUT##card", menuResScale, on); card.IsOpen())
+        RenderPostLutSection(config);
 }
 
 void RenderMenu(Config* config, float menuResScale, MenuPages::Page page)
