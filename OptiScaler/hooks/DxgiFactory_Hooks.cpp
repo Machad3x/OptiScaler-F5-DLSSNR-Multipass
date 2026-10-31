@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DxgiFactory_Hooks.h"
+#include "SwapchainCreateRule.h"
 #include "DxgiSwapchainSizing.h"
 #include "DxvkOutputs.h"
 
@@ -832,7 +833,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SwapchainCreate::Created(result, ppSwapChain))
         {
             if (sizeToWindow)
             {
@@ -1290,7 +1291,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SwapchainCreate::Created(result, ppSwapChain))
         {
             SetPlainSwapchainInterop();
 
@@ -1440,7 +1441,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForCoreWindow(IDXGIFactory2* realFactor
             o_CreateSwapChainForCoreWindow(realFactory, pDevice, pWindow, &localDesc, pRestrictToOutput, ppSwapChain);
     }
 
-    if (result == S_OK)
+    if (SwapchainCreate::Created(result, ppSwapChain))
     {
         // check for SL proxy
         IDXGISwapChain* realSC = nullptr;
@@ -1778,7 +1779,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnkno
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SwapchainCreate::Created(result, ppSwapChain))
         {
             State::Instance().currentSwapchainDesc = localDesc;
 
@@ -2097,7 +2098,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SwapchainCreate::Created(result, ppSwapChain))
         {
             // check for SL proxy
             IDXGISwapChain1* realSC = nullptr;
@@ -2228,7 +2229,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForCoreWindow(IDXGIFactory2* realF
                                                           ppSwapChain);
     }
 
-    if (result == S_OK)
+    if (SwapchainCreate::Created(result, ppSwapChain))
     {
         // check for SL proxy
         IDXGISwapChain* realSC = nullptr;

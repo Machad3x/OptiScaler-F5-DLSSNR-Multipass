@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DxgiFactory_WrappedCalls.h"
+#include "SwapchainCreateRule.h"
 
 #include "FG_Hooks.h"
 #include "D3D11_Hooks.h"
@@ -402,7 +403,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SwapchainCreate::Created(result, ppSwapChain))
         {
             State::Instance().currentSwapchainDesc = localDesc;
 
@@ -842,7 +843,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SwapchainCreate::Created(result, ppSwapChain))
         {
             if (!(VkPresentBridge::DxvkThroughVulkan() && VkPresentBridge::IsUp()))
                 State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
@@ -983,7 +984,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForCoreWindow(IDXGIFactory2* rea
         realFactory->CreateSwapChainForCoreWindow(pDevice, pWindow, &localDesc, pRestrictToOutput, ppSwapChain);
     State::Instance().skipDxgiLoadChecks = false;
 
-    if (result == S_OK)
+    if (SwapchainCreate::Created(result, ppSwapChain))
     {
         // check for SL proxy
         IDXGISwapChain* realSC = nullptr;
