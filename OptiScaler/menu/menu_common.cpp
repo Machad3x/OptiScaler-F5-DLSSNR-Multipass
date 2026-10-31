@@ -2557,7 +2557,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 
                     // XeFG's Present Id is the ID it matches against the markers; another frame generation's counter
                     // is its own, so it is only shown next to the markers' ID
-                    if (fg != nullptr && state.activeFgOutput == FGOutput::XeFG && fg->IsActive())
+                    if (fg != nullptr && UsesXeFGApi(state.activeFgOutput) && fg->IsActive())
                     {
                         ImGui::Text("XeFG ID: %u (%s), marker ID: %llu", state.xefgPresentId.load(std::memory_order_relaxed),
                                     state.xefgPresentIdFollowsMarkers.load(std::memory_order_relaxed) ? "follows the markers"
@@ -3712,7 +3712,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         FfxApiProxy::InitFfxDx12();
         inputOptions[optiFgIndex].set_disabled(!FfxApiProxy::IsFGReady(), "amd_fidelityfx_dx12.dll is missing");
     }
-    else if (!inputOptions[optiFgIndex].disabled && state.activeFgOutput == FGOutput::XeFG && !xefgInitTried &&
+    else if (!inputOptions[optiFgIndex].disabled && UsesXeFGApi(state.activeFgOutput) && !xefgInitTried &&
              XeFGProxy::Module() == nullptr)
     {
         xefgInitTried = true;
@@ -3748,6 +3748,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         { FGOutput::FSRFG, "FSR FG", "FSR3/4-FG, RDNA4 autoupgrades to FSR4-FG\n\nFSR4-FG sometimes better/worse than XeFG" },
         { FGOutput::DLSSG, "DLSSG", "DLSSG output\ncan be used in conjuction with Nukem's for example" },
         { FGOutput::XeFG, "XeFG", "XeFG - heaviest, but best universal FG\n\nXeFG 3 overall deals best with HUD\n\nEnable UI Composition if HUD ghosting" },
+        { FGOutput::F5Low, "F5Low", "F5Low frame generation - our own, up to 6x\n\nSame options as XeFG, plus the Frame Generator\nthat makes the frames (XeFG Tensor: NVIDIA tensor cores)" },
     };
 
     // clang-format on
@@ -3784,6 +3785,14 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     outputOptions[xefgOutputIndex].set_disabled(vulkanNoFg, state.swapchainApi == API::Vulkan
                                                                 ? "Needs the bridge: Vulkan route or Optical F5Low"
                                                                 : "Unsupported API");
+
+    // F5Low output requirements: the XeFG ones, plus an NVIDIA GPU and xefg_cuda.dll in the plugins folder
+    auto constexpr f5lowOutputIndex = (uint32_t) FGOutput::F5Low;
+    static const auto f5lowAvailability = F5Low::Available();
+    if (outputOptions[xefgOutputIndex].disabled)
+        outputOptions[f5lowOutputIndex].set_disabled(true, outputOptions[xefgOutputIndex].tooltip);
+    else
+        outputOptions[f5lowOutputIndex].set_disabled(!f5lowAvailability.available, f5lowAvailability.reason);
     // Unsupported FG input selected
     const auto currentInputIndex = (uint32_t) state.activeFgInput;
     if (config->FGInput != FGInput::NoFG && inputOptions.size() > currentInputIndex &&
@@ -3905,6 +3914,21 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         {
             PopulateCombo("FG Nvngx Replacement", config->FGNvngxReplacement, nvngxOptions);
             ShowTooltip("What backend to use instead of the real DLSSG");
+        }
+
+        // F5Low: what makes the frames inside it (read each time F5Low starts)
+        if (config->FGOutput.value_or_default() == FGOutput::F5Low && !replaceFgOutputWithNvngx)
+        {
+            static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
+                { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
+                  "Our XeFG frame generation on the NVIDIA tensor cores (xefg_cuda)" },
+            };
+
+            if (!config->F5LowGenerator.has_value())
+                config->F5LowGenerator = config->F5LowGenerator.value_or_default(); // need to have a value before combo
+
+            PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
+            ShowTooltip("What makes the generated frames in F5Low\nDLSS-G and libxess will follow");
         }
 
         // Try to avoid having None selected when the gpu doesn't support DLSSG + some fallbacks
@@ -4040,7 +4064,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         }
 
         auto fgOutput = state.CurrentFG();
-        if (((state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG ||
+        if (((state.activeFgOutput == FGOutput::FSRFG || UsesXeFGApi(state.activeFgOutput) ||
               state.activeFgOutput == FGOutput::DLSSG) &&
              state.activeFgInput != FGInput::NoFG && state.activeFgInput != FGInput::NvngxFG) &&
             fgOutput)
@@ -4190,7 +4214,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
                                                         "Let XeFG to handle frametimes" };
 
                         auto currentSet = (int) config->FTInput.value_or_default();
-                        auto currentSourceCount = state.activeFgOutput == FGOutput::XeFG ? 3 : 2;
+                        auto currentSourceCount = UsesXeFGApi(state.activeFgOutput) ? 3 : 2;
 
                         ImGui::PushItemWidth(95.0f * menuResScale);
 
@@ -4700,11 +4724,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
     }
 
     // XeFG controls
-    if (state.activeFgOutput == FGOutput::XeFG && state.activeFgInput != FGInput::NoFG &&
+    if (UsesXeFGApi(state.activeFgOutput) && state.activeFgInput != FGInput::NoFG &&
         state.activeFgInput != FGInput::ForceXeLL && state.currentFGSwapchain != nullptr && XeFGProxy::InitXeFG() &&
         fgOutput)
     {
-        ImGui::SeparatorText("Frame Generation (XeFG)");
+        ImGui::SeparatorText(state.activeFgOutput == FGOutput::F5Low ? "Frame Generation (F5Low)"
+                                                                     : "Frame Generation (XeFG)");
 
         // Which files are in use (worked out in the background at start, see XeModuleInfo)
         ImGui::PushTextWrapPos(0.0f);
@@ -5072,7 +5097,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         if (currentFeature != nullptr && !currentFeature->IsFrozen() &&
             ((state.activeFgOutput == FGOutput::FSRFG && FfxApiProxy::IsFGReady()) ||
-             (state.activeFgOutput == FGOutput::XeFG && XeFGProxy::Module() != nullptr) ||
+             (UsesXeFGApi(state.activeFgOutput) && XeFGProxy::Module() != nullptr) ||
              (state.activeFgOutput == FGOutput::DLSSG && StreamlineProxy::Module() != nullptr)))
         {
             if (!Config::Instance()->FGDisableHUDFix.value_or_default() &&
@@ -5356,10 +5381,12 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             ImGui::TextColored(toneMapColor({ 1.0f, 0.0f, 0.0f, 1.0f }),
                                "amd_fidelityfx_dx12.dll is missing!"); // Probably never will be visible
         }
-        else if (state.activeFgOutput == FGOutput::XeFG && XeFGProxy::Module() == nullptr)
+        else if (UsesXeFGApi(state.activeFgOutput) && XeFGProxy::Module() == nullptr)
         {
             ImGui::TextColored(toneMapColor({ 1.0f, 0.0f, 0.0f, 1.0f }),
-                               "libxess_fg.dll is missing!"); // Probably never will be visible
+                               state.activeFgOutput == FGOutput::F5Low
+                                   ? "plugins\\xefg_cuda.dll is missing!"
+                                   : "libxess_fg.dll is missing!"); // Probably never will be visible
         }
     }
 
@@ -6275,7 +6302,7 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // how fakenvapi does it.
     // Using state.reflexLimitsFps as a detection for Reflex being used on Nvidia
     // With XeFG as the output the section is always up: Force Reflex is what the low latency page's notes send the player to
-    const bool showFakenvapi = fakenvapi::isUsingAsMainNvapi() || state.activeFgOutput == FGOutput::XeFG;
+    const bool showFakenvapi = fakenvapi::isUsingAsMainNvapi() || UsesXeFGApi(state.activeFgOutput);
 
     if (!showFakenvapi)
         return;
@@ -7963,13 +7990,13 @@ void MenuCommon::RenderApiAndTextureSettings(RenderMenuContext& ctx)
 
             // FGHooks::FGPresent sends 1 instead (Intel: XeLL, which XeFG runs with, needs sync interval 1)
             if (config->ForceVsync.value_or(false) && config->VsyncInterval.value_or_default() > 1 &&
-                state.activeFgOutput == FGOutput::XeFG)
+                UsesXeFGApi(state.activeFgOutput))
             {
                 ImGui::TextDisabled("XeFG presents with sync interval 1: %d is not used while it runs.",
                                     config->VsyncInterval.value_or_default());
             }
 
-            if (vsyncChanged && state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr)
+            if (vsyncChanged && UsesXeFGApi(state.activeFgOutput) && state.currentFG != nullptr)
             {
                 // To prevent XeLL issues
                 LOG_DEBUG("V-Sync change detected, forcing XeFG reset");

@@ -15,8 +15,7 @@
 #
 # -XefgCudaKit is the folder of a built xefg_cuda kit (xefg_cuda.dll, xefg_cuda.ini and Intel's signed
 # libxess_fg.dll; built from the private libxess-weights repo, not here). Its three files go into plugins\,
-# where the built-in XeFG unlock ([MFGUnlock] XeFG) loads them by itself. Without it the unlock patches
-# whichever libxess_fg.dll the game uses, as before.
+# where FG Output F5Low loads xefg_cuda.dll by itself. Without it F5Low is greyed out in the menu.
 
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
@@ -371,9 +370,13 @@ if ($XefgCudaKit) {
     Write-Host "xefg_cuda: staged in plugins\ (xefg_cuda.dll, xefg_cuda.ini, libxess_fg.dll signed by Intel)"
 }
 
-# The XeFG unlock must ship off: plugins\xefg_cuda.dll is only loaded when a player turns it on.
-if ((Get-Content -LiteralPath "$stage\OptiScaler.ini" -Raw) -notmatch '(?m)^\[MFGUnlock\]\r?\nXeFG=auto\r?$') {
-    throw 'REFUSING: the packaged ini must ship [MFGUnlock] XeFG=auto (off)'
+# Frame generation ships off and F5Low on its default generator: plugins\xefg_cuda.dll is only loaded when a player
+# picks FG Output F5Low.
+$packagedIni = Get-Content -LiteralPath "$stage\OptiScaler.ini" -Raw
+foreach ($key in @('FGOutput', 'FrameGenerator')) {
+    if ($packagedIni -notmatch "(?m)^$key=auto\r?$") {
+        throw "REFUSING: the packaged ini must ship $key=auto"
+    }
 }
 
 # The shipped DLL is unsigned, and a scanner's static model reads these properties. They are all correct

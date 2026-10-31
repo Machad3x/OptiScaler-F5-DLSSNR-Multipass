@@ -324,7 +324,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // (VkPresentBridge BeginResize): it would wait for itself. A native Vulkan game's present takes none either.
     std::shared_lock<std::shared_mutex> dx11wDx12PresentLock(Dx11wDx12Sync::PresentResizeMutex(), std::defer_lock);
     if (State::Instance().swapchainInteropApi != SwapchainInteropApi::None &&
-        State::Instance().activeFgOutput == FGOutput::XeFG && !VkPresentBridge::DxvkThroughVulkan())
+        UsesXeFGApi(State::Instance().activeFgOutput) && !VkPresentBridge::DxvkThroughVulkan())
     {
         dx11wDx12PresentLock.lock();
     }
@@ -652,7 +652,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             InputAntiLag2::injectAl2Context(pSwapChain, fgIsActive);
         }
 #else
-        if (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG)
+        if (State::Instance().activeFgOutput == FGOutput::FSRFG || UsesXeFGApi(State::Instance().activeFgOutput))
         {
             LOG_DEBUG("Calling fakenvapi");
 
@@ -696,7 +696,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // DLSSG reports them, with the frame id of the batch XeFG marked (out of band present markers; Anti-Lag 2 takes the
     // frame type from them). InputCommon::fg_output_present does nothing while XeLL is the output.
     const bool xefgPresent = willPresent && cq != nullptr && fg != nullptr &&
-                             State::Instance().activeFgOutput == FGOutput::XeFG && fg->IsGenerating();
+                             UsesXeFGApi(State::Instance().activeFgOutput) && fg->IsGenerating();
 
     if (xefgPresent)
         InputCommon::fg_output_present(cq, false);
@@ -1437,7 +1437,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
     /*
 
     const bool outputRequiresRelease =
-        State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG;
+        State::Instance().activeFgOutput == FGOutput::FSRFG || UsesXeFGApi(State::Instance().activeFgOutput);
 
     if (outputRequiresRelease && State::Instance().currentFG != nullptr)
     {
@@ -1963,7 +1963,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
 
     // Release swapchain backbuffers to prevent errors when resizing
     const bool isUsingOptiFgFeature =
-        State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG;
+        State::Instance().activeFgOutput == FGOutput::FSRFG || UsesXeFGApi(State::Instance().activeFgOutput);
 
     if (isUsingOptiFgFeature && State::Instance().currentFG != nullptr)
     {

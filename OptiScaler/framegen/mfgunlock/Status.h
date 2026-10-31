@@ -42,8 +42,6 @@ struct FamilyStatus
     std::string sha256;
     std::vector<PatchStatus> patches;
     std::string failure;
-    // What an active family runs when it patches nothing (XeFG on our xefg_cuda)
-    std::string note;
 };
 
 inline constexpr std::array<std::string_view, static_cast<size_t>(Family::Count)> kFamilyNames = { "XeFG", "RTX 40",
@@ -88,8 +86,6 @@ inline std::string FormatStatus(const FamilyStatus& status)
         return "waiting for a provider";
     case FamilyState::Active:
     {
-        if (status.patches.empty() && !status.note.empty())
-            return "active: " + status.note;
         size_t found = 0;
         for (const auto& patch : status.patches)
             found += patch.result == "found";

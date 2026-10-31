@@ -1589,7 +1589,7 @@ static void CheckQuirks(bool isNvidia)
         quirks.reset(GameQuirk::UseFsr2VulkanInputs);
 
     if (quirks & GameQuirk::ForceBorderlessWhenUsingXeFG && !Config::Instance()->FGXeFGForceBorderless.has_value() &&
-        State::Instance().activeFgOutput == FGOutput::XeFG && State::Instance().activeFgInput != FGInput::NoFG &&
+        UsesXeFGApi(State::Instance().activeFgOutput) && State::Instance().activeFgInput != FGInput::NoFG &&
         State::Instance().activeFgInput != FGInput::NvngxFG)
     {
         Config::Instance()->FGXeFGForceBorderless.set_volatile_value(true);
@@ -1598,7 +1598,7 @@ static void CheckQuirks(bool isNvidia)
         quirks.reset(GameQuirk::ForceBorderlessWhenUsingXeFG);
 
     if (quirks & GameQuirk::OverrideVsyncWhenUsingXeFG && !Config::Instance()->OverrideVsync.has_value() &&
-        State::Instance().activeFgOutput == FGOutput::XeFG && State::Instance().activeFgInput != FGInput::NoFG &&
+        UsesXeFGApi(State::Instance().activeFgOutput) && State::Instance().activeFgInput != FGInput::NoFG &&
         State::Instance().activeFgInput != FGInput::NvngxFG)
     {
         Config::Instance()->OverrideVsync.set_volatile_value(true);
@@ -2126,7 +2126,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         };
 
         bool possibleNvidia = isNvidiaViaNvapi();
-        MfgUnlock::SetStartupNvidia(possibleNvidia);
+        F5Low::SetStartupNvidia(possibleNvidia);
 
         spdlog::info("");
         spdlog::info("Check for DLSS files");

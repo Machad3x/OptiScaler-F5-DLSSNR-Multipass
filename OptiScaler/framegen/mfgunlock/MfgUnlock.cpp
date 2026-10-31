@@ -12,7 +12,6 @@
 #include "Provider.h"
 #include "Status.h"
 #include "PtxTuring.h"
-#include "XeFGPlugin.h"
 
 #include <detours/detours.h>
 #include <Config.h>
@@ -55,9 +54,6 @@ HMODULE activeXeFgModule = nullptr;
 HMODULE activeXeLlModule = nullptr;
 bool xeFgPatchRecoveryFailed = false;
 std::atomic<bool> additionalXeFgProviderObserved { false };
-// The xefg_cuda.dll whose Active status was published (guarded by xeFgMutex): published once per module.
-HMODULE publishedXeFgCuda = nullptr;
-std::atomic<bool> startupNvidia { false };
 
 std::wstring GetModulePath(HMODULE module)
 {
@@ -1192,22 +1188,6 @@ bool MfgUnlock::PrepareXeFG()
         return true;
     }
 
-    // Our xefg_cuda offers up to 6x by itself: nothing to patch. Where it hands over to Intel's library it reports
-    // Intel's maximum, which XeFG_Dx12 then uses as is.
-    if (const HMODULE cudaModule = XeFGProxy::Module();
-        cudaModule != nullptr && HasModuleFilename(cudaModule, MfgUnlock::XeFGPlugin::kCudaFile))
-    {
-        std::lock_guard lock(xeFgMutex);
-        if (publishedXeFgCuda != cudaModule)
-        {
-            publishedXeFgCuda = cudaModule;
-            auto status = MakeStatus(MfgUnlock::FamilyState::Active, cudaModule, nullptr);
-            status.note = "xefg_cuda (own frame generation, up to 6x, nothing patched)";
-            PublishStatus(std::move(status));
-        }
-        return true;
-    }
-
     if (XeLLProxy::Module() == nullptr && !XeLLProxy::InitXeLL())
     {
         SetWaitingStatus("XeLL provider could not be initialized");
@@ -1252,51 +1232,6 @@ bool MfgUnlock::IsXeFGActive()
 {
     std::lock_guard lock(xeFgMutex);
     return xeFgPatchSet.IsActive() && !xeFgPatchRecoveryFailed;
-}
-
-bool MfgUnlock::IsXeFGCuda()
-{
-    if (Config::Instance()->MfgUnlockXeFG.value_or_default() == MfgUnlockMode::Off)
-        return false;
-    const HMODULE module = XeFGProxy::Module();
-    return module != nullptr && HasModuleFilename(module, MfgUnlock::XeFGPlugin::kCudaFile);
-}
-
-void MfgUnlock::SetStartupNvidia(bool nvidia) { startupNvidia.store(nvidia, std::memory_order_release); }
-
-std::wstring MfgUnlock::XeFGPluginPath()
-{
-    static std::once_flag once;
-    static std::wstring chosen;
-
-    std::call_once(once,
-                   []
-                   {
-                       const auto* config = Config::Instance();
-                       const std::filesystem::path folder(config->PluginPath.value_or(L"plugins"));
-                       std::error_code ec;
-
-                       XeFGPlugin::Input in;
-                       in.mode = config->MfgUnlockXeFG.value_or_default();
-                       in.xefgPathSet = config->XeFGLibrary.has_value();
-                       in.nvidia = startupNvidia.load(std::memory_order_acquire);
-                       in.cudaFileFound = std::filesystem::is_regular_file(folder / XeFGPlugin::kCudaFile, ec);
-                       in.intelFileFound = std::filesystem::is_regular_file(folder / XeFGPlugin::kIntelFile, ec);
-
-                       const auto decision = XeFGPlugin::Decide(in);
-                       if (decision.file != nullptr)
-                       {
-                           chosen = (folder / decision.file).wstring();
-                           LOG_INFO("[MFGUnlock] XeFG: using {} ({})", wstring_to_string(chosen), decision.reason);
-                       }
-                       else if (in.mode != MfgUnlockMode::Off)
-                       {
-                           LOG_INFO("[MFGUnlock] XeFG: no XeFG library taken from {} ({})",
-                                    wstring_to_string(folder.wstring()), decision.reason);
-                       }
-                   });
-
-    return chosen;
 }
 
 bool MfgUnlock::IsTrackedProviderModule(HMODULE module)
@@ -1392,6 +1327,4 @@ void MfgUnlock::OnModuleUnloaded(HMODULE module)
     std::lock_guard lock(xeFgMutex);
     if (xeFgStoodAside.has_value() && (module == xeFgStoodAside->xeFg || module == xeFgStoodAside->xeLl))
         xeFgStoodAside.reset();
-    if (module == publishedXeFgCuda)
-        publishedXeFgCuda = nullptr;
 }
