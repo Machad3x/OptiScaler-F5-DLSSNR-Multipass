@@ -34,6 +34,11 @@ class FGHooks
     static void NoteGameFsrFg(bool on);
     static bool IsDx12InteropPresentSC(IUnknown* pSwapChain);
 
+    // A swapchain of another window while the frame generation swapchain lives (framegen/FgWindowRule.h): it gets no
+    // frame generation and must not replace the State pointers frame generation reads. The game's own DXGI calls only,
+    // the Vulkan bridge manages its windows itself.
+    static bool IsOtherWindowThanFG(HWND hwnd);
+
   private:
     using PFN_Present = rewrite_signature<decltype(&IDXGISwapChain::Present)>::type;
     using PFN_Present1 = rewrite_signature<decltype(&IDXGISwapChain1::Present1)>::type;

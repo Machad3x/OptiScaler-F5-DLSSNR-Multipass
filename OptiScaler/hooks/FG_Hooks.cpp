@@ -30,6 +30,7 @@
 #include <proxies/KernelBase_Proxy.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <framegen/GameFsrFgRule.h>
+#include <framegen/FgWindowRule.h>
 
 #include <magic_enum.hpp>
 
@@ -172,6 +173,42 @@ static bool RefuseUnderGameFsrFg(HWND hwnd)
             LOG_INFO("Released XeFG's swapchain on this window so the game's own can be made");
         }
     }
+
+    return true;
+}
+
+static FgWindow::Window DescribeWindow(HWND hwnd)
+{
+    FgWindow::Window window { hwnd };
+
+    if (hwnd == nullptr || !IsWindow(hwnd))
+        return window;
+
+    window.shown = IsWindowVisible(hwnd) != FALSE;
+
+    RECT rect {};
+    if (GetClientRect(hwnd, &rect))
+        window.area = (int64_t) (rect.right - rect.left) * (rect.bottom - rect.top);
+
+    return window;
+}
+
+bool FGHooks::IsOtherWindowThanFG(HWND hwnd)
+{
+    const bool live = State::Instance().currentFGSwapchain != nullptr;
+
+    if (!live || hwnd == nullptr || hwnd == _hwnd)
+        return false;
+
+    const auto fg = DescribeWindow(_hwnd);
+    const auto requested = DescribeWindow(hwnd);
+
+    if (!FgWindow::IsOtherWindow(live, fg, requested))
+        return false;
+
+    LOG_WARN("Frame generation's swapchain lives on window {:X} ({} px), window {:X} ({} px) gets a plain swapchain "
+             "and leaves frame generation's state alone",
+             (size_t) _hwnd, fg.area, (size_t) hwnd, requested.area);
 
     return true;
 }
