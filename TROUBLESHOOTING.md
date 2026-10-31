@@ -258,7 +258,8 @@ The port is a separate optional download (`Optional-Vendor-Neutral-DLSS5-Forward
 ### XeFG offers only 2x
 - Log signs: `XeFG_Dx12::CreateSwapchain Max supported interpolations: 1`, and later
   `Requested interpolation count is higher than max supported, setting to max: 1`.
-- Cause: XeFG reports its own maximum for the card and refuses more. Only an unlock plugin can raise it.
+- Cause: XeFG reports its own maximum for the card and refuses more. Only an unlock can raise it: the built-in one
+  (`[MFGUnlock] XeFG=true`, uses `pluginsïg_cuda.dll` on NVIDIA; log `[MFGUnlock] XeFG: using ...`) or a plugin.
 
 ### "Slow motion", or the frame rate far below the cap with XeFG 3x or 4x
 - Expected: the frame cap counts all shown frames, real and generated. A cap of 120 at 4x means 30 rendered frames per

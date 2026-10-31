@@ -12,6 +12,11 @@
 # same nvngx.dll_dlssnr.dll interface that runs the model itself (no NVIDIA NGX core needed, so it
 # works on AMD/Intel). This script does not build it. Supplying the path is what opts it in; it never
 # replaces the default forwarder at the package root, only adds it under Optional\.
+#
+# -XefgCudaKit is the folder of a built xefg_cuda kit (xefg_cuda.dll, xefg_cuda.ini and Intel's signed
+# libxess_fg.dll; built from the private libxess-weights repo, not here). Its three files go into plugins\,
+# where the built-in XeFG unlock ([MFGUnlock] XeFG) loads them by itself. Without it the unlock patches
+# whichever libxess_fg.dll the game uses, as before.
 
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
@@ -22,7 +27,8 @@ param(
     [string]$HybridAssetsDirectory,
     [string]$StreamlineArchive,
     [string]$PortBackendDll,
-    [string]$PortBackendIni
+    [string]$PortBackendIni,
+    [string]$XefgCudaKit
 )
 
 $ErrorActionPreference = "Stop"
@@ -327,6 +333,47 @@ Not validated on real AMD or Intel hardware.
 "@
     Set-Content -LiteralPath "$optionalDir\README.txt" -Value $portReadme -Encoding utf8 -NoNewline
     Write-Host "vendor-neutral port backend: staged under Optional\ (not the default)"
+}
+
+if ($XefgCudaKit) {
+    $kitFiles = @('xefg_cuda.dll', 'xefg_cuda.ini', 'libxess_fg.dll')
+    foreach ($f in $kitFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $XefgCudaKit $f) -PathType Leaf)) {
+            throw "XefgCudaKit is missing ${f}: $XefgCudaKit"
+        }
+    }
+
+    # XeFG's API plus our own export, so Intel's library or an unrelated file under the wrong name is caught.
+    $cudaText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes((Join-Path $XefgCudaKit 'xefg_cuda.dll')))
+    $cudaMissing = @(@('xefgSwapChainD3D12CreateContext', 'xefgCudaXellCountsRenderedOnly') | Where-Object { $cudaText.IndexOf($_) -lt 0 })
+    if ($cudaMissing.Count -gt 0) {
+        throw "xefg_cuda.dll is missing required exports: $($cudaMissing -join ', ')"
+    }
+    # Same rule as the port backend: no PDB path or local build path in a public binary.
+    $cudaLeaks = @(@('.pdb', ('\Users\' + [Environment]::UserName + '\'), $root) |
+        Where-Object { $cudaText.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+    if ($cudaLeaks.Count -gt 0) {
+        throw "REFUSING: xefg_cuda.dll appears to contain a local path or identifying string ($($cudaLeaks -join ', '))."
+    }
+
+    # The fallback must be Intel's own file, unmodified: its signature says so.
+    $intelSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $XefgCudaKit 'libxess_fg.dll')
+    if ($intelSignature.Status -ne 'Valid' -or $intelSignature.SignerCertificate.Subject -notmatch 'Intel') {
+        throw "REFUSING: libxess_fg.dll in the kit is not validly signed by Intel ($($intelSignature.Status))"
+    }
+
+    $pluginsDir = "$stage\plugins"
+    New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
+    foreach ($f in $kitFiles) {
+        Copy-Item -LiteralPath (Join-Path $XefgCudaKit $f) -Destination "$pluginsDir\$f" -Force
+    }
+    Copy-Item -LiteralPath "$root\external\xess\LICENSE.txt" -Destination "$stage\Licenses\XeSS_LICENSE.txt" -Force
+    Write-Host "xefg_cuda: staged in plugins\ (xefg_cuda.dll, xefg_cuda.ini, libxess_fg.dll signed by Intel)"
+}
+
+# The XeFG unlock must ship off: plugins\xefg_cuda.dll is only loaded when a player turns it on.
+if ((Get-Content -LiteralPath "$stage\OptiScaler.ini" -Raw) -notmatch '(?m)^\[MFGUnlock\]\r?\nXeFG=auto\r?$') {
+    throw 'REFUSING: the packaged ini must ship [MFGUnlock] XeFG=auto (off)'
 }
 
 # The shipped DLL is unsigned, and a scanner's static model reads these properties. They are all correct

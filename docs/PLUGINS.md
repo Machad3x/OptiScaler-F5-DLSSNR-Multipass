@@ -9,6 +9,11 @@ game. A changed row says "restart to apply" until then.
 - **Built-in**: the MFG unlock for XeFG, RTX 40 and RTX 20/30. It is part of OptiScaler, so it is listed even when the
   plugins folder is empty. It is **off by default**. Each family has a mode: Off, Detect (only where this GPU needs the
   unlock; XeFG has no GPU check, so Detect acts like On) or On. The row shows what the family actually did (active, stood aside and why, waiting for a provider).
+- **XeFG unlock and the plugins folder**: the release ships `xefg_cuda.dll`, `xefg_cuda.ini` and Intel's
+  `libxess_fg.dll` in the plugins folder. With the XeFG unlock on and `[Libraries] XeFGPath` left at auto, OptiScaler
+  loads XeFG from there by itself: on an NVIDIA GPU our xefg_cuda (own frame generation, up to 6x, nothing patched;
+  the row says "active: xefg_cuda ..."), on any other GPU Intel's library, patched up to 6x. If you set XeFGPath
+  yourself, that file is used instead. These files are not ASI plugins: the ASI switch does not affect them.
 - **Loaded from plugins folder**: every `*.asi` file in the plugins folder. Unticking a file lists its name in
   `[Plugins] DisabledAsi`; the file itself is never renamed or changed. Files with `-loadlate` in the name load after
   `[Plugins] LateAsiPluginsDelay` seconds and show "waiting" until then.
@@ -30,6 +35,7 @@ listed (greyed) so you can see what would load; turn it on to tick or untick fil
 | off | a built-in family or loader is switched off for this session |
 | waiting for a provider | the built-in unlock is on, but the game has not loaded the frame generation file it patches yet |
 | active: N of M patches | the built-in unlock patched the provider; N of M patches were found |
+| active: xefg_cuda (...) | XeFG runs our xefg_cuda, which offers up to 6x by itself; nothing is patched |
 | stood aside: reason | the built-in unlock found a provider it does not recognise and left it untouched; the log has a `[MFGUnlock] ...` line with details |
 | not needed | Detect mode: this GPU does not need the unlock |
 | on, not loaded this session | a loader is on but was not needed or not reached (for example the custom amdxc64 on a GPU that is not RDNA 2) |

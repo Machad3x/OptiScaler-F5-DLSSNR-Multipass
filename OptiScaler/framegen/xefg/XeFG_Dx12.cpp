@@ -145,6 +145,17 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
 
 void XeFG_Dx12::ApplyMaxInterpolations(uint32_t reported)
 {
+    // Our xefg_cuda under the unlock: its own maximum (6x on NVIDIA, Intel's where it handed over), capped by the ini
+    if (MfgUnlock::IsXeFGCuda())
+    {
+        _nativeMaxInterpolations = reported < 1 ? 1 : static_cast<int>(reported);
+        const int configured = std::clamp(Config::Instance()->FGXeFGMaxInterpolations.value_or_default(), 1, 5);
+        _maxInterpolationCount = std::min(_nativeMaxInterpolations, configured);
+        LOG_INFO("Max supported interpolations: {} (xefg_cuda reports {}, MaxInterpolations {})",
+                 _maxInterpolationCount, reported, configured);
+        return;
+    }
+
     // Without the unlock the reported value is used as is, as before the unlock existed.
     if (!MfgUnlock::IsXeFGActive())
     {

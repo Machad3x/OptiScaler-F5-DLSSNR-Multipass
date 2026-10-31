@@ -18,6 +18,16 @@ on:
         required: false
         default: false
         type: boolean
+      xefg_cuda_kit_url:
+        description: 'xefg_cuda kit zip (https URL, e.g. an Optional-xefg_cuda-*.zip release asset); goes into plugins\. Empty = none'
+        required: false
+        default: ''
+        type: string
+      xefg_cuda_kit_sha256:
+        description: 'SHA-256 of that zip (required with the URL)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -36,6 +46,28 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
+    # The kit is built from a private repo, so it comes in as a prebuilt zip, pinned by its hash. Inputs reach the
+    # script through env only, never pasted into it.
+    - name: Fetch xefg_cuda kit
+      if: ${{ inputs.xefg_cuda_kit_url != '' }}
+      shell: powershell
+      env:
+        KIT_URL: ${{ inputs.xefg_cuda_kit_url }}
+        KIT_SHA256: ${{ inputs.xefg_cuda_kit_sha256 }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:KIT_URL -notmatch '^https://') { throw 'xefg_cuda_kit_url must be an https URL' }
+        if ($env:KIT_SHA256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'xefg_cuda_kit_sha256 must be a 64-digit SHA-256' }
+        $zip = Join-Path $env:RUNNER_TEMP 'xefg_cuda_kit.zip'
+        $dir = Join-Path $env:RUNNER_TEMP 'xefg_cuda_kit'
+        Invoke-WebRequest -Uri $env:KIT_URL -OutFile $zip -UseBasicParsing
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
+        if ($hash -ne $env:KIT_SHA256.ToUpperInvariant()) { throw "xefg_cuda kit hash mismatch: got $hash" }
+        Expand-Archive -LiteralPath $zip -DestinationPath $dir
+        $dll = @(Get-ChildItem -LiteralPath $dir -Recurse -File -Filter 'xefg_cuda.dll')
+        if ($dll.Count -ne 1) { throw "expected one xefg_cuda.dll in the kit, found $($dll.Count)" }
+        "XEFG_CUDA_KIT=$($dll[0].DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
     - name: Run package_release.ps1
       shell: powershell
       env:
@@ -43,6 +75,9 @@ jobs:
       run: |
         $params = @{
             Version = $env:PACKAGE_VERSION
+        }
+        if ($env:XEFG_CUDA_KIT) {
+            $params["XefgCudaKit"] = $env:XEFG_CUDA_KIT
         }
         if ("${{ inputs.include_dlss_fg }}" -eq "true") {
             $params["IncludeDlssFrameGeneration"] = $true

@@ -8,6 +8,7 @@
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <misc/XeModuleInfo.h>
+#include <framegen/mfgunlock/MfgUnlock.h>
 
 #include <xefg_swapchain.h>
 #include <xefg_swapchain_d3d12.h>
@@ -142,6 +143,9 @@ class XeFGProxy
             LOG_DEBUG("Trying to load {}", wstring_to_string(dllNames[i]));
 
             auto overridePath = Config::Instance()->XeFGLibrary.value_or(L"");
+            // With the XeFG unlock on and no XeFGPath: our xefg_cuda (or Intel's library) from the plugins folder
+            if (overridePath.empty())
+                overridePath = MfgUnlock::XeFGPluginPath();
 
             HMODULE memModule = nullptr;
             Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &memModule, &mainModule);
