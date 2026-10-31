@@ -65,6 +65,17 @@ int main()
     CHECK(Model(familyStx, 0x40) == FSR4Support::INT8Lite);                 // Krackan
     CHECK(Model(familyStx, 0x50) == FSR4Support::None);
 
+    // Driver frame generation is FP8 only: RDNA4 gets it, every INT8 chip (RDNA3 included) does not
+    CHECK(DriverFgAllowed(FSR4Support::FP8));
+    CHECK(!DriverFgAllowed(FSR4Support::INT8));
+    CHECK(!DriverFgAllowed(FSR4Support::INT8_2));
+    CHECK(!DriverFgAllowed(FSR4Support::INT8Lite));
+    CHECK(!DriverFgAllowed(FSR4Support::None));
+    CHECK(DriverFgAllowed(Model(familyNv4, 0x01)));  // Navi 4x
+    CHECK(!DriverFgAllowed(Model(familyNv3, 0x01))); // Navi 31
+    CHECK(!DriverFgAllowed(Model(familyNv, 0x28)));  // Navi 21
+    CHECK(!DriverFgAllowed(Model(familyNv, 0x14)));  // Navi 14
+
     // Compile-time too, so a change of the table breaks the build of this test
     static_assert(ModelForAsic(familyNv, 0x01, 0, true) == FSR4Support::None);
     static_assert(ModelForAsic(familyNv, 0x14, 0, true) == FSR4Support::INT8Lite);

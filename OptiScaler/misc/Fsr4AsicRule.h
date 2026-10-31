@@ -84,4 +84,8 @@ constexpr FSR4Support ModelForAsic(uint32_t family, uint32_t revision, uint32_t 
 
     return FSR4Support::None;
 }
+
+// The driver's FSR 4 frame generation is FP8 only (RDNA4). Upscaling has INT8 models, frame generation has none, so the
+// real support (the D3D12 checks, not a spoofed or user-picked model) decides. Same rule on D3D12 and Vulkan.
+constexpr bool DriverFgAllowed(FSR4Support realSupport) { return realSupport == FSR4Support::FP8; }
 } // namespace Fsr4Asic
