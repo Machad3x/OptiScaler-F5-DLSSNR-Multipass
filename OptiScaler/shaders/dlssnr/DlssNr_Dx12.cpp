@@ -30,6 +30,7 @@
 #include "DlssNr_SurfaceFormats.h"
 #include "DlssNr_ActiveColor.h"
 #include "DlssNr_Views.h"
+#include "DlssNr_Retire.h"
 #include "DlssNr_Guides.h"
 #include "DlssNr_SeamClock.h"
 #include "DlssNr_GameScale.h"
@@ -940,10 +941,10 @@ void DiscoverFloatSlot(NVSDK_NGX_Parameter* params)
 // clamps linear HDR into an 8-bit texture -- wrong brightness until something forces a rebuild -- or
 // hands CopyResource mismatched formats, which fails silently and makes the whole pass appear to do
 // nothing. So the set is torn down whenever the format it was built for is not the format needed now.
-// Retired model features and surfaces are parked and freed a comfortable number of evaluates later.
+// Retired model features and surfaces are parked and freed once the GPU is done with them (DlssNr_Retire.h).
 // Releasing them immediately was the device hang: with frame generation the GPU runs several frames
-// behind, this work rides the game's own queue that no module fence covers, and an NGX feature or
-// scratch texture freed under in-flight work kills the device.
+// behind, this work rides the game's own queue, and an NGX feature or scratch texture freed under
+// in-flight work kills the device.
 struct NrRetired
 {
     void* feature = nullptr;
@@ -958,10 +959,82 @@ struct NrRetired
     // out the usual 32-frame delay is the same use-after-free this whole retirement list exists to
     // prevent. DlssNr_DeferredSr.inl's ~Generation tears both down together for the same reason.
     NVSDK_NGX_Parameter* parameters = nullptr;
-    int framesLeft = 32;
+    // Set by NrLifetime once every list NR recorded before this was parked has finished on the GPU. Shared by
+    // everything parked in one Dispatch; null when the command list hooks were not on (the item waits for
+    // kStuckFrames).
+    std::shared_ptr<std::atomic_bool> gpuDone;
 };
 
-std::vector<NrRetired> g_nrRetired;
+// When they are freed: DlssNr_Retire.h.
+DlssNr::Retire::List<NrRetired> g_nrRetired;
+
+// A recorded list was destroyed: the submit and reset hooks need not hear about it any more.
+void NrListDestroyed(const void* identity) { DlssNrWatchedLists::Remove(1, &identity); }
+
+// Every list NR records on, and the queues they ran on (Dispatch, FinishedPictureSubmitted,
+// FinishedPictureResetCommandList). Kept for the process's life, like Superior Scaling's tracker.
+DlssNr::GpuLifetime& NrLifetime()
+{
+    static auto* value = new DlssNr::GpuLifetime(&NrListDestroyed);
+    return *value;
+}
+
+// NrLifetime hears about every list NR records on: the submit and the reset hook are both on. Without the submit hook
+// a list that is reset would count as finished with no GPU work, so then nothing is recorded at all.
+bool g_nrListsReported = false;
+// What everything parked since the last WatchNrList shares: one Retire per Dispatch, not one per item.
+std::shared_ptr<std::atomic_bool> g_nrParkDone;
+
+// A list NR is about to record on, at the top of Dispatch, before anything can be parked. The hooks go on first (and
+// are asked again every time: HookLateNrQueue returns at once when they are on).
+void WatchNrList(ID3D12GraphicsCommandList* cmdList)
+{
+    g_nrParkDone.reset();
+
+    ID3D12Device* device = nullptr;
+
+    if (cmdList == nullptr || FAILED(cmdList->GetDevice(IID_PPV_ARGS(&device))) || device == nullptr)
+        return;
+
+    const bool reported = ResTrack_Dx12::HookLateNrQueue(device);
+    device->Release();
+
+    if (!reported && g_nrListsReported != reported)
+        LOG_WARN("DLSS-NR: the command list hooks are not on, parked models and textures are freed by time");
+
+    g_nrListsReported = reported;
+
+    if (!reported)
+        return;
+
+    NrLifetime().Record(cmdList);
+    // The list the hooks report is the real one, not a Streamline proxy (as DlssNrGpuTime::Start and Late::Arm do).
+    DlssNrWatchedLists::Add(Util::RealObjectIdentity(cmdList));
+}
+
+void ParkNr(NrRetired& r)
+{
+    if (g_nrListsReported)
+    {
+        if (g_nrParkDone == nullptr)
+        {
+            g_nrParkDone = std::make_shared<std::atomic_bool>(false);
+            // Owned by the flag: once every item sharing it is gone (freed by time when a list never finishes), the
+            // tracker drops this without running it.
+            NrLifetime().Retire(
+                [done = std::weak_ptr<std::atomic_bool>(g_nrParkDone)]
+                {
+                    if (auto flag = done.lock())
+                        *flag = true;
+                },
+                g_nrParkDone);
+        }
+
+        r.gpuDone = g_nrParkDone;
+    }
+
+    g_nrRetired.Park(r);
+}
 
 void ParkNrFeature(void*& feature, void (*releaseFn)(void*) = nullptr,
                   NVSDK_NGX_Parameter** parameters = nullptr)
@@ -980,7 +1053,7 @@ void ParkNrFeature(void*& feature, void (*releaseFn)(void*) = nullptr,
         *parameters = nullptr;
     }
 
-    g_nrRetired.push_back(r);
+    ParkNr(r);
 }
 
 void ParkNrResource(ID3D12Resource*& res)
@@ -991,7 +1064,7 @@ void ParkNrResource(ID3D12Resource*& res)
     NrRetired r;
     r.resource = res;
     res = nullptr;
-    g_nrRetired.push_back(r);
+    ParkNr(r);
 }
 
 void ReleaseNrFeature(const NrRetired& r)
@@ -1009,23 +1082,33 @@ void ReleaseNrFeature(const NrRetired& r)
         NVNGXProxy::D3D12_DestroyParameters()(r.parameters);
 }
 
-void TickNrRetired()
+void FreeNrRetiredNow(const NrRetired& r)
 {
-    for (size_t i = 0; i < g_nrRetired.size();)
+    ReleaseNrFeature(r);
+
+    if (r.resource != nullptr)
+        r.resource->Release();
+}
+
+void FreeNrRetired(const NrRetired& r, bool gpuConfirmed)
+{
+    static bool said = false;
+
+    if (!gpuConfirmed && !said && r.gpuDone != nullptr)
     {
-        if (--g_nrRetired[i].framesLeft > 0)
-        {
-            ++i;
-            continue;
-        }
-
-        ReleaseNrFeature(g_nrRetired[i]);
-
-        if (g_nrRetired[i].resource != nullptr)
-            g_nrRetired[i].resource->Release();
-
-        g_nrRetired.erase(g_nrRetired.begin() + i);
+        said = true;
+        LOG_WARN("DLSS-NR: a parked {} was freed by time, its command lists were never reported finished",
+                 r.feature != nullptr ? "model" : "texture");
     }
+
+    FreeNrRetiredNow(r);
+}
+
+void TickNrRetired(unsigned long long epoch)
+{
+    NrLifetime().Collect();
+    g_nrRetired.Tick(
+        epoch, [](const NrRetired& r) { return r.gpuDone != nullptr && r.gpuDone->load(); }, FreeNrRetired);
 }
 
 // The inject point decides which buffer is being measured -- the upscaler's linear output or the
@@ -3515,18 +3598,14 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
     const Config& cfg = *Config::Instance();
 
-    // Parked features and scratch textures are released 32 frames after they were parked. This used to tick only where an
-    // evaluate completed, after the return for a feature just created and the one for a feature still waiting for its first
-    // submission: a game that makes the model build again on every call (views of different sizes alternating) never reached
-    // it, and each build's resources piled up. One tick per submission epoch, before any return.
-    {
-        static unsigned long long lastRetiredEpoch = ~0ull;
-        if (frame.SubmissionEpoch != lastRetiredEpoch)
-        {
-            lastRetiredEpoch = frame.SubmissionEpoch;
-            TickNrRetired();
-        }
-    }
+    // Parked features and scratch textures are released once the GPU finished every list recorded before they were
+    // parked, and no sooner than 32 epochs (DlssNr_Retire.h): this list is one of them from here on. This used to tick
+    // only where an evaluate completed, after the return for a feature just created and the one for a feature still
+    // waiting for its first submission: a game that makes the model build again on every call (views of different sizes
+    // alternating) never reached it, and each build's resources piled up. One tick per submission epoch, before any
+    // return.
+    WatchNrList(cmdList);
+    TickNrRetired(frame.SubmissionEpoch);
 
     // Superior Scaling (superior/Pipeline.inl) runs only while selected and not given up on this session; otherwise the
     // ordinary path runs, with Matched residual in its place. Selecting it again retries.
@@ -7447,15 +7526,7 @@ void Shutdown()
     CalibrationShutdown();
     EdgeCompression::Shutdown();
 
-    for (auto& r : g_nrRetired)
-    {
-        ReleaseNrFeature(r);
-
-        if (r.resource != nullptr)
-            r.resource->Release();
-    }
-
-    g_nrRetired.clear();
+    g_nrRetired.FreeAll(FreeNrRetiredNow);
 
     if (g_nr.feature != nullptr && g_nr.release != nullptr)
         g_nr.release(g_nr.feature);
