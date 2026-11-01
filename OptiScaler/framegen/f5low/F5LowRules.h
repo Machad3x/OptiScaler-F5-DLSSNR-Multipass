@@ -7,15 +7,20 @@
 // through the XeFG output code). The Frame Generator choice says who makes the frames inside it. Pure rules,
 // host-tested in tests/f5low_output_smoke.cpp; F5Low.cpp feeds them the ini, the GPU and the folder.
 //
-// Three files in plugins: xefg_cuda.dll, xefg_cuda.ini and Intel's signed libxess_fg.dll (the library xefg_cuda
-// hands over to where it cannot run, and the "libxess" generator later). Not in the release zip yet
-// (package_release.ps1 -XefgCudaKit can stage them); without xefg_cuda.dll F5Low is not available.
+// In plugins: xefg_cuda.dll and xefg_cuda.ini. Intel's libxess_fg.dll (what xefg_cuda hands over to where it cannot
+// run, and the "libxess" generator later) is the one in OptiScaler's folder, passed in XEFG_CUDA_INTEL_LIBRARY; an
+// older xefg_cuda wants its own copy next to it. Not in the release zip yet (package_release.ps1 -XefgCudaKit can
+// stage them); without xefg_cuda.dll F5Low is not available.
 namespace F5Low
 {
 inline constexpr wchar_t kLibraryFile[] = L"xefg_cuda.dll";
 
 // xefg_cuda reads this with GetEnvironmentVariable when it creates each context; it wins over its own ini.
 inline constexpr wchar_t kGeneratorEnv[] = L"XEFG_CUDA_GENERATOR";
+
+// The full path of Intel's libxess_fg.dll that xefg_cuda hands over to (and later builds on). Builds of xefg_cuda
+// that predate it look only next to themselves.
+inline constexpr wchar_t kIntelLibraryEnv[] = L"XEFG_CUDA_INTEL_LIBRARY";
 
 // [F5Low] FrameGenerator. Only XeFG Tensor exists so far; DLSS-G and libxess are planned (xefg_cuda's
 // Generator=dlssg / intel).
