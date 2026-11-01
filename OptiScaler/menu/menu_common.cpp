@@ -3717,7 +3717,10 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     {
         xefgInitTried = true;
         XeFGProxy::InitXeFG();
-        inputOptions[optiFgIndex].set_disabled(XeFGProxy::Module() == nullptr, "libxess_fg.dll is missing");
+        inputOptions[optiFgIndex].set_disabled(XeFGProxy::Module() == nullptr,
+                                               state.activeFgOutput == FGOutput::F5Low
+                                                   ? "plugins\\xefg_cuda.dll could not be loaded"
+                                                   : "libxess_fg.dll is missing");
     }
 
     // DLSSG inputs requirements

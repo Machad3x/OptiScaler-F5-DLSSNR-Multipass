@@ -357,7 +357,7 @@ if ($XefgCudaKit) {
 
     # The fallback must be Intel's own file, unmodified: its signature says so.
     $intelSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $XefgCudaKit 'libxess_fg.dll')
-    if ($intelSignature.Status -ne 'Valid' -or $intelSignature.SignerCertificate.Subject -notmatch 'Intel') {
+    if ($intelSignature.Status -ne 'Valid' -or $intelSignature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Intel Corporation(,|$)') {
         throw "REFUSING: libxess_fg.dll in the kit is not validly signed by Intel ($($intelSignature.Status))"
     }
 

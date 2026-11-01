@@ -86,6 +86,15 @@ inline const wchar_t* GeneratorEnvValue(Generator generator)
     return L"own";
 }
 
+// The most interpolated frames F5Low offers: what its library reports (at least 1), capped by [XeFG]
+// MaxInterpolations (1-5, 5 = up to 6x). Unlike the XeFG unlock it never goes above what the library reports.
+inline int MaxInterpolations(unsigned reported, int configured)
+{
+    const int library = reported < 1 ? 1 : static_cast<int>(reported);
+    const int cap = configured < 1 ? 1 : (configured > 5 ? 5 : configured);
+    return library < cap ? library : cap;
+}
+
 // Whether F5Low can be offered, and why not (menu tooltip, log). XeFG Tensor needs CUDA, so an NVIDIA GPU.
 struct Availability
 {

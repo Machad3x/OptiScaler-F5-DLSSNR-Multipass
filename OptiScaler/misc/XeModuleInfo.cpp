@@ -51,13 +51,17 @@ bool SameFolder(const std::filesystem::path& file, const std::wstring& folder)
 // Where a module's file comes from, in the words the menu uses. Without an OptiScaler subfolder OptiScaler's folder
 // is the game's own, and the label says so.
 std::string SourceOf(const std::filesystem::path& file, const std::wstring& overridePath,
-                     const std::wstring& optiFolder)
+                     const std::wstring& optiFolder, const std::wstring& pluginFolder)
 {
     std::error_code error;
 
     if (!overridePath.empty() &&
         (std::filesystem::equivalent(file, overridePath, error) || SameFolder(file, overridePath)))
         return "the ini's path";
+
+    // FG Output F5Low's xefg_cuda.dll (and its Intel fallback) ship there
+    if (SameFolder(file, pluginFolder))
+        return "the plugins folder";
 
     const bool inGameFolder = SameFolder(file, Util::ExePath().parent_path().wstring());
 
@@ -174,7 +178,7 @@ struct Module
 };
 
 // The log line and the menu line of one module
-std::string DescribeOne(const Module& m, const std::wstring& optiFolder)
+std::string DescribeOne(const Module& m, const std::wstring& optiFolder, const std::wstring& pluginFolder)
 {
     if (m.module == nullptr || m.path.empty())
     {
@@ -183,7 +187,7 @@ std::string DescribeOne(const Module& m, const std::wstring& optiFolder)
     }
 
     const std::filesystem::path file(m.path);
-    const auto source = SourceOf(file, m.overridePath, optiFolder);
+    const auto source = SourceOf(file, m.overridePath, optiFolder, pluginFolder);
     const auto version = VersionOf(m.path);
     const auto signature = SignatureOf(m.path);
 
@@ -211,6 +215,7 @@ struct Work
     Module xefg;
     Module xell;
     std::wstring optiFolder;
+    std::wstring pluginFolder;
     HMODULE self = nullptr; // a reference on OptiScaler, so it stays mapped while the thread runs
 };
 
@@ -221,8 +226,8 @@ DWORD WINAPI DescribeThread(LPVOID parameter)
 
     try
     {
-        auto fg = DescribeOne(work->xefg, work->optiFolder);
-        auto ll = DescribeOne(work->xell, work->optiFolder);
+        auto fg = DescribeOne(work->xefg, work->optiFolder, work->pluginFolder);
+        auto ll = DescribeOne(work->xell, work->optiFolder, work->pluginFolder);
 
         std::scoped_lock lock(lineMutex);
         xefgLine = std::move(fg);
@@ -262,11 +267,14 @@ void XeModuleInfo::Describe()
 
     // Read here: the paths and handles do not change once the proxies have loaded
     auto work = std::make_unique<Work>();
+    // F5Low does not use XeFGPath (it loads from the plugins folder), so the ini's path is not its source
+    const bool f5low = State::Instance().activeFgOutput == FGOutput::F5Low;
     work->xefg = { "XeFG", xefg, XeFGProxy::MemModule(), XeFGProxy::Module_Path(),
-                   Config::Instance()->XeFGLibrary.value_or(L"") };
+                   f5low ? std::wstring() : Config::Instance()->XeFGLibrary.value_or(L"") };
     work->xell = { "XeLL", xell, XeLLProxy::MemModule(), XeLLProxy::Module_Path(),
                    Config::Instance()->XeLLLibrary.value_or(L"") };
     work->optiFolder = Config::Instance()->MainDllPath.value_or(L"");
+    work->pluginFolder = Config::Instance()->PluginPath.value_or(L"");
 
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR) &DescribeThread, &work->self))
         work->self = nullptr;

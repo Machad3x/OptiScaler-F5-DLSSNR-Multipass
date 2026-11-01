@@ -54,6 +54,14 @@ int main()
     CHECK(strcmp(F5Low::GeneratorLabel(F5Low::Generator::XefgTensor), "XeFG Tensor") == 0);
     CHECK(wcscmp(F5Low::GeneratorEnvValue(F5Low::Generator::XefgTensor), L"own") == 0);
 
+    // Max interpolations: the library's report, capped by the ini, never above the library
+    CHECK(F5Low::MaxInterpolations(5, 5) == 5);
+    CHECK(F5Low::MaxInterpolations(5, 2) == 2);
+    CHECK(F5Low::MaxInterpolations(3, 5) == 3); // library handed over to Intel: no more than it reports
+    CHECK(F5Low::MaxInterpolations(0, 5) == 1); // nothing reported reads as 1
+    CHECK(F5Low::MaxInterpolations(5, 9) == 5); // ini out of range is clamped
+    CHECK(F5Low::MaxInterpolations(5, 0) == 1);
+
     // Availability
     CHECK(F5Low::CheckAvailable(true, true).available);
     CHECK(!F5Low::CheckAvailable(false, true).available);

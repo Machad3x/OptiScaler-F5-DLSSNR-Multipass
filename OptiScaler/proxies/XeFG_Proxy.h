@@ -141,12 +141,12 @@ class XeFGProxy
         // FG Output F5Low: our xefg_cuda from the plugins folder only, never Intel's library in its place
         if (State::Instance().activeFgOutput == FGOutput::F5Low)
         {
-            // One try per session: the output does not change without a restart
-            static bool f5lowTried = false;
-            if (std::exchange(f5lowTried, true))
-                return false;
+            // One try per session (the output does not change without a restart); a second caller waits for it
+            static std::once_flag f5lowOnce;
+            static HMODULE f5lowModule = nullptr;
+            std::call_once(f5lowOnce, [] { f5lowModule = F5Low::LoadLibraryForOutput(); });
 
-            mainModule = F5Low::LoadLibraryForOutput();
+            mainModule = f5lowModule;
             if (mainModule == nullptr)
                 return false;
 

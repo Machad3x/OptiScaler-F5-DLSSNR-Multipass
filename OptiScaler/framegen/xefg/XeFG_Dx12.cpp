@@ -154,8 +154,8 @@ void XeFG_Dx12::ApplyMaxInterpolations(uint32_t reported)
     if (State::Instance().activeFgOutput == FGOutput::F5Low)
     {
         _nativeMaxInterpolations = reported < 1 ? 1 : static_cast<int>(reported);
-        const int configured = std::clamp(Config::Instance()->FGXeFGMaxInterpolations.value_or_default(), 1, 5);
-        _maxInterpolationCount = std::min(_nativeMaxInterpolations, configured);
+        const int configured = Config::Instance()->FGXeFGMaxInterpolations.value_or_default();
+        _maxInterpolationCount = F5Low::MaxInterpolations(reported, configured);
         LOG_INFO("Max supported interpolations: {} (F5Low library reports {}, MaxInterpolations {})",
                  _maxInterpolationCount, reported, configured);
         return;
