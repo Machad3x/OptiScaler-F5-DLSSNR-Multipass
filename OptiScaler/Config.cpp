@@ -125,6 +125,17 @@ bool Config::Reload(std::filesystem::path iniPath)
                     FGOutput.set_from_config(FGOutput::XeFG);
                 else if (lstrcmpiA(FGOutputString.value().c_str(), "dlssg") == 0)
                     FGOutput.set_from_config(FGOutput::DLSSG);
+                else if (lstrcmpiA(FGOutputString.value().c_str(), "f5low") == 0)
+                    FGOutput.set_from_config(FGOutput::F5Low);
+            }
+
+            {
+                const std::string value = ini.GetValue("F5Low", "FrameGenerator", "auto");
+                bool valid = true;
+                F5LowGenerator.set_from_config(F5Low::ParseGenerator(value, valid));
+                if (!valid)
+                    LOG_WARN("[F5Low] FrameGenerator '{}' is not available; using the default ({})", value,
+                             F5Low::GeneratorLabel(F5Low::kDefaultGenerator));
             }
 
             FGStreamlineIgnoreOTA.set_from_config(readBool("FrameGen", "StreamlineIgnoreOTA"));
@@ -155,7 +166,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             auto ftInput = readInt("FrameGen", "FTInput");
             if (ftInput.has_value() && ftInput.value() >= 0 &&
-                ftInput.value() <= (FGOutput.value_or_default() == FGOutput::XeFG ? 2 : 1))
+                ftInput.value() <= (UsesXeFGApi(FGOutput.value_or_default()) ? 2 : 1))
             {
                 FTInput.set_from_config(static_cast<FrameTimeSource>(ftInput.value()));
             }
@@ -2020,8 +2031,11 @@ bool Config::SaveIni()
                 FGOutputString = "XeFG";
             else if (FGOutputHeld.value() == FGOutput::DLSSG)
                 FGOutputString = "DLSSG";
+            else if (FGOutputHeld.value() == FGOutput::F5Low)
+                FGOutputString = "F5Low";
         }
         ini.SetValue("FrameGen", "FGOutput", FGOutputString.c_str());
+        ini.SetValue("F5Low", "FrameGenerator", F5Low::GeneratorText(Instance()->F5LowGenerator.value_for_config()));
 
         ini.SetValue("FrameGen", "StreamlineIgnoreOTA",
                      GetBoolValue(Instance()->FGStreamlineIgnoreOTA.value_for_config()).c_str());
@@ -2860,7 +2874,7 @@ bool Config::IsFGEnabled() const
         const auto format = state.currentSwapchainDesc.BufferDesc.Format;
         const bool floatSwapchain = format >= DXGI_FORMAT_R32G32B32A32_TYPELESS && format <= DXGI_FORMAT_R16G16B16A16_SINT;
 
-        if (FGFollowGame::FollowBlocked(state.activeFgOutput == FGOutput::XeFG, FGXeFGIgnoreInitChecks.value_or_default(),
+        if (FGFollowGame::FollowBlocked(UsesXeFGApi(state.activeFgOutput), FGXeFGIgnoreInitChecks.value_or_default(),
                                         state.realExclusiveFullscreen, floatSwapchain))
             return false;
     }

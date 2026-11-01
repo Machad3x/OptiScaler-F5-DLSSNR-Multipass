@@ -208,7 +208,7 @@ Inputs GatherInputs()
     // Optical F5Low's modes only: the Vulkan route (frame generation from the game's upscaler) is not Optical F5Low,
     // and with no upscaler call (menus) it has nothing running to pace.
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !gameUpscaler;
-    in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr &&
+    in.xefgRunning = UsesXeFGApi(state.activeFgOutput) && state.currentFG != nullptr &&
                      state.currentFG->SwapchainContext() != nullptr;
     // While it is on. Its short pauses (toggles, a changed interpolation count, swap chain remakes, about ten frames) do
     // not count: stopping and starting again for them would change the sleep mode twice and hand the cap back and forth
@@ -307,7 +307,7 @@ const void* GameQueue()
 // calls go to its VkDevice (PresentTarget): the Vulkan ones count then too.
 Method CurrentMethod(Api api)
 {
-    if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+    if (UsesXeFGApi(State::Instance().activeFgOutput) &&
         (api == Api::D3D || ReflexHooks::bridgedXellDevice() != nullptr))
         return MethodWithXefg(XefgSide());
 
@@ -403,7 +403,7 @@ const char* PathText(Api api)
 const char* OutputText(Api api)
 {
     // With XeFG and Reflex or Anti-Lag 2 as its Output: they lower latency, XeLL stays for XeFG
-    if (State::Instance().activeFgOutput == FGOutput::XeFG)
+    if (UsesXeFGApi(State::Instance().activeFgOutput))
     {
         switch (XefgSide())
         {
@@ -950,7 +950,7 @@ bool XefgGenerating()
 
     // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
     // FGXeFGForceBorderless had its say, so it means the real thing
-    return state.activeFgOutput == FGOutput::XeFG && fgGenerating && !state.realExclusiveFullscreen;
+    return UsesXeFGApi(state.activeFgOutput) && fgGenerating && !state.realExclusiveFullscreen;
 }
 
 void WaitForGameQueueIdle()
@@ -1011,7 +1011,7 @@ OutputInputs CurrentOutputInputs()
 
     OutputInputs in;
     in.fakenvapiMain = fakenvapi::isUsingAsMainNvapi();
-    in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
+    in.xefgOutput = UsesXeFGApi(State::Instance().activeFgOutput);
     in.amdGpu = vendor == VendorId::AMD;
     in.nvidiaGpu = vendor == VendorId::Nvidia;
     in.driverReflex = (in.nvidiaGpu && !in.fakenvapiMain) || InputCommon::active_output() == LowLatencyMode::Reflex;

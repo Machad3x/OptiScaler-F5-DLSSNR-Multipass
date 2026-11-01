@@ -6,6 +6,7 @@
 #include "motion/MotionProfiles.h"
 #include "shaders/dlssnr/DlssNr_InputStyles.h"
 #include "framegen/mfgunlock/Mode.h"
+#include "framegen/f5low/F5LowRules.h"
 #include "dlssnr/DlssNr_Profiles.h"
 
 #include <optional>
@@ -1194,6 +1195,8 @@ class Config
     bool RemovedAdaMfgUnlockSet = false;
     bool RemovedAmpereMfgUnlockSet = false;
     CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
+    // [F5Low] FrameGenerator: who makes the frames in FG Output F5Low
+    CustomOptional<F5Low::Generator> F5LowGenerator { F5Low::kDefaultGenerator };
     // Keeps Streamline from picking up the driver's OTA/downloaded plugins; only files in
     // OptiScaler/streamline are used for sl.* plugins and nvngx_dlssg.dll
     CustomOptional<bool> FGStreamlineIgnoreOTA { false };

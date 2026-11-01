@@ -8,6 +8,7 @@
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <misc/XeModuleInfo.h>
+#include <framegen/f5low/F5Low.h>
 
 #include <xefg_swapchain.h>
 #include <xefg_swapchain_d3d12.h>
@@ -136,6 +137,22 @@ class XeFGProxy
         std::vector<std::wstring> dllNames = { L"libxess_fg.dll" };
 
         auto optiPath = Config::Instance()->MainDllPath.value();
+
+        // FG Output F5Low: our xefg_cuda from the plugins folder only, never Intel's library in its place
+        if (State::Instance().activeFgOutput == FGOutput::F5Low)
+        {
+            // One try per session (the output does not change without a restart); a second caller waits for it
+            static std::once_flag f5lowOnce;
+            static HMODULE f5lowModule = nullptr;
+            std::call_once(f5lowOnce, [] { f5lowModule = F5Low::LoadLibraryForOutput(); });
+
+            mainModule = f5lowModule;
+            if (mainModule == nullptr)
+                return false;
+
+            _dllPath = F5Low::LibraryPath();
+            return HookXeFG(mainModule);
+        }
 
         for (size_t i = 0; i < dllNames.size(); i++)
         {

@@ -51,7 +51,7 @@ static void NoteRtssMarker(uint64_t frameId)
     if ((frameId >> 32) == 0)
         return;
 
-    if (!State::Instance().rtssReflexInjection && State::Instance().activeFgOutput == FGOutput::XeFG)
+    if (!State::Instance().rtssReflexInjection && UsesXeFGApi(State::Instance().activeFgOutput))
     {
         ImGuiToast notification { ImGuiToastType::Warning, 10000 };
         notification.setTitle("RTSS + XeFG detected");
@@ -65,7 +65,7 @@ static void NoteRtssMarker(uint64_t frameId)
 
 ID3D12Device* ReflexHooks::bridgedXellDevice()
 {
-    const bool xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
+    const bool xefgOutput = UsesXeFGApi(State::Instance().activeFgOutput);
 
     // Lock-free (XeFG's present thread asks while the bridge's teardown holds its lock and waits for that thread)
     ID3D12Device* device = xefgOutput ? VkPresentBridge::Device() : nullptr;
@@ -79,7 +79,7 @@ ID3D12Device* ReflexHooks::bridgedXellDevice()
 bool ReflexHooks::gameReflexFeedsXell()
 {
     // XeFG is a Vulkan game's output only on the bridge, where the game's calls are InputCommon's too
-    return State::Instance().activeFgOutput == FGOutput::XeFG && gameCalledReflex();
+    return UsesXeFGApi(State::Instance().activeFgOutput) && gameCalledReflex();
 }
 
 namespace
@@ -107,7 +107,7 @@ NV_SET_SLEEP_MODE_PARAMS WithMode(const NV_SET_SLEEP_MODE_PARAMS& params, const 
 
 bool ForceDisabled() { return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable; }
 
-bool XefgOutput() { return State::Instance().activeFgOutput == FGOutput::XeFG; }
+bool XefgOutput() { return UsesXeFGApi(State::Instance().activeFgOutput); }
 
 // The Framerate page's Input is Off: the sleep mode goes out with low latency off (XefgReflexRule.h)
 bool Blocked() { return native::lowlatency::GameLowLatencyBlocked(); }

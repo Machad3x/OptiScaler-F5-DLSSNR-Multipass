@@ -530,7 +530,7 @@ static void RecordGameDlssgRequest(const sl::DLSSGOptions& options)
              follows ? "OptiScaler FG follows it"
                      : "not followed, Frame Generation is set in OptiScaler (or Streamline 1)");
 
-    if (FGFollowGame::NeedsFGChange(follows, previous, next, state.activeFgOutput == FGOutput::XeFG))
+    if (FGFollowGame::NeedsFGChange(follows, previous, next, UsesXeFGApi(state.activeFgOutput)))
         state.fgChanged = true;
 }
 
