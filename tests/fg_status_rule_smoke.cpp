@@ -51,6 +51,36 @@ int main()
         CHECK(Describe(in).text.find("Active") != std::string::npos);
     }
 
+    // Blocked: the reason comes before "Active is unticked" (the block unticks Active itself)
+    {
+        auto in = Running(2, 180.0);
+        in.active = false;
+        in.blockedReason = "needs borderless display mode";
+        const auto s = Describe(in);
+        CHECK(s.tone == Tone::Waiting);
+        CHECK(s.text == "F5Low: off, needs borderless display mode");
+    }
+    {
+        // Following the game: says so instead of "unticked"
+        auto in = Running(2, 180.0);
+        in.active = false;
+        in.followsGame = true;
+        CHECK(Describe(in).text.find("follows the game") != std::string::npos);
+    }
+    {
+        // No feature and Active off: waiting for the swap chain comes first
+        auto in = Running(2, 180.0);
+        in.hasFeature = false;
+        in.active = false;
+        CHECK(Describe(in).text.find("swap chain") != std::string::npos);
+    }
+    {
+        // A null label does not crash
+        auto in = Running(2, 180.0);
+        in.outputLabel = nullptr;
+        CHECK(Describe(in).text == ": generating 3X   60 -> 180 fps");
+    }
+
     // Waiting
     {
         auto in = Running(2, 180.0);
@@ -95,9 +125,9 @@ int main()
         CHECK(s.text == "F5Low: generating 3X");
     }
     {
-        // A count of 0 while generating still reads 2X (one generated frame)
+        // A count of 0 reads as the FPS overlay counts it: 1X, rendered = shown
         const auto s = Describe(Running(0, 100.0));
-        CHECK(s.text == "F5Low: generating 2X   50 -> 100 fps");
+        CHECK(s.text == "F5Low: generating 1X   100 -> 100 fps");
     }
 
     if (fails == 0)

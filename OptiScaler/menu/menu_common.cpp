@@ -4142,6 +4142,48 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     }
 }
 
+MenuCommon::XeFGRunChecks MenuCommon::CheckXeFGRun(RenderMenuContext& ctx, IFGFeature* fg)
+{
+    auto& state = ctx.state;
+    auto config = ctx.config;
+
+    XeFGRunChecks checks;
+    checks.ignoreChecks = config->FGXeFGIgnoreInitChecks.value_or_default();
+    checks.exclusiveFullscreen = state.realExclusiveFullscreen;
+
+    if (fg == nullptr)
+        return checks;
+
+    bool nativeAA = false;
+    if (state.activeFgInput == FGInput::Upscaler && ctx.currentFeature != nullptr)
+        nativeAA = ctx.currentFeature->RenderWidth() == ctx.currentFeature->DisplayWidth();
+
+    checks.correctMVs = fg->IsLowResMV() || nativeAA ||
+                        (State::Instance().gameQuirks & GameQuirk::ForceFGRenderSizeMVs) || checks.ignoreChecks;
+
+    checks.restartNeeded = config->FGXeFGDepthInverted.value_or_default() != fg->IsInvertedDepth() ||
+                           config->FGXeFGJitteredMV.value_or_default() != fg->IsJitteredMVs() ||
+                           config->FGXeFGHighResMV.value_or_default() == fg->IsLowResMV();
+
+    const bool outputIsHdr = getUiTargetMode() != UiTargetMode::SDR;
+    checks.borderlessMissing = !checks.restartNeeded && !checks.ignoreChecks && state.realExclusiveFullscreen;
+    checks.hdrUnsupported = !checks.restartNeeded && !checks.ignoreChecks && outputIsHdr &&
+                            state.currentSwapchainDesc.BufferDesc.Format >= DXGI_FORMAT_R32G32B32A32_TYPELESS &&
+                            state.currentSwapchainDesc.BufferDesc.Format <= DXGI_FORMAT_R16G16B16A16_SINT;
+    return checks;
+}
+
+const char* MenuCommon::XeFGRunChecks::BlockedReason() const
+{
+    if (!correctMVs)
+        return "needs dilated motion vectors turned off";
+    if (exclusiveFullscreen)
+        return "needs borderless display mode";
+    if (hdrUnsupported)
+        return "only HDR10 output is supported";
+    return nullptr;
+}
+
 // The page's one-line answer to "what is frame generation doing right now" (menu/FgStatusRule.h).
 void MenuCommon::RenderFgStatusLine(RenderMenuContext& ctx)
 {
@@ -4176,7 +4218,11 @@ void MenuCommon::RenderFgStatusLine(RenderMenuContext& ctx)
         in.generationOff = fg->GenerationOff();
         in.generating = fg->IsGenerating();
         in.interpolated = static_cast<int>(fg->GetInterpolatedFrameCount());
+
+        if (UsesXeFGApi(state.activeFgOutput))
+            in.blockedReason = CheckXeFGRun(ctx, fg).BlockedReason();
     }
+    in.followsGame = ctx.config->FGFollowsGame();
     in.shownFps = ctx.frameRate;
 
     const auto status = fgstatus::Describe(in);
@@ -4287,7 +4333,9 @@ void MenuCommon::RenderFrameGenerationFooter(RenderMenuContext& ctx)
 
             if (state.dlssgGameDMFGSupported && !dlssgInputOrOutput)
             {
-                ImGui::SameLine(0.0f, 16.0f);
+                // Next to the ratio combo / telemetry when they were drawn, else on its own line
+                if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1)
+                    ImGui::SameLine(0.0f, 16.0f);
 
                 if (bool dynamicMFG = config->FGDLSSGOverrideForceDMFG.value_or_default();
                     ImGui::Checkbox("Game DLSS-G dynamic", &dynamicMFG))
@@ -4827,16 +4875,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         const bool f5low = state.activeFgOutput == FGOutput::F5Low;
         MenuCard xefgCard(f5low ? "F5Low" : "XeFG", menuResScale);
 
-        bool ignoreChecks = config->FGXeFGIgnoreInitChecks.value_or_default();
+        const auto checks = CheckXeFGRun(ctx, fgOutput);
+        bool ignoreChecks = checks.ignoreChecks;
+        const bool correctMVs = checks.correctMVs;
 
-        bool nativeAA = false;
-        if (state.activeFgInput == FGInput::Upscaler && currentFeature != nullptr)
-            nativeAA = currentFeature->RenderWidth() == currentFeature->DisplayWidth();
-
-        const bool correctMVs = fgOutput->IsLowResMV() || nativeAA ||
-                                (State::Instance().gameQuirks & GameQuirk::ForceFGRenderSizeMVs) || ignoreChecks;
-
-        if (!correctMVs || state.realExclusiveFullscreen)
+        if (!correctMVs || checks.exclusiveFullscreen)
         {
             config->FGEnabled.reset();
 
@@ -4847,15 +4890,13 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             config->FGXeFGDebugView.reset();
         }
 
-        const bool restartNeeded = config->FGXeFGDepthInverted.value_or_default() != fgOutput->IsInvertedDepth() ||
-                                   config->FGXeFGJitteredMV.value_or_default() != fgOutput->IsJitteredMVs() ||
-                                   config->FGXeFGHighResMV.value_or_default() == fgOutput->IsLowResMV();
+        const bool restartNeeded = checks.restartNeeded;
+        const bool borderlessMissing = checks.borderlessMissing;
+        const bool hdrUnsupported = checks.hdrUnsupported;
+        const bool cantActivate = checks.CantActivate();
 
-        const bool borderlessMissing = !restartNeeded && !ignoreChecks && state.realExclusiveFullscreen;
-        const bool hdrUnsupported = !restartNeeded && !ignoreChecks && outputIsHdr &&
-                                    state.currentSwapchainDesc.BufferDesc.Format >= DXGI_FORMAT_R32G32B32A32_TYPELESS &&
-                                    state.currentSwapchainDesc.BufferDesc.Format <= DXGI_FORMAT_R16G16B16A16_SINT;
-        const bool cantActivate = borderlessMissing || hdrUnsupported;
+        // Picks up an XeFG / XeLL library loaded after start and logs it, whether the card is open or not
+        XeModuleInfo::Describe();
 
         if (xefgCard.IsOpen())
         {
@@ -4990,7 +5031,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             {
                 const bool canCompose = fgOutput->IsUsingHudlessAny() && XeFGProxy::SetUiCompositionState() != nullptr;
 
-                ImGui::BeginDisabled(!canCompose);
+                ImGui::BeginDisabled(!canCompose || !correctMVs || cantActivate);
                 bool fgCompositeUI = config->FGXeFGUIComposition.value_or_default();
                 if (ImGui::Checkbox("UI Composition", &fgCompositeUI))
                     config->FGXeFGUIComposition = fgCompositeUI;
@@ -5096,12 +5137,15 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 return from == std::string::npos ? line : line.substr(0, from);
             };
 
-            if (!xefgLine.empty() || !xellLine.empty())
+            const auto joined = [](const std::string& a, const std::string& b, const char* separator)
+            { return a.empty() ? b : (b.empty() ? a : a + separator + b); };
+
+            if (const auto shortText = joined(shortLine(xefgLine), shortLine(xellLine), "   "); !shortText.empty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled("%s   %s", shortLine(xefgLine).c_str(), shortLine(xellLine).c_str());
+                ImGui::TextDisabled("%s", shortText.c_str());
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s\n%s", xefgLine.c_str(), xellLine.c_str());
+                    ImGui::SetTooltip("%s", joined(xefgLine, xellLine, "\n").c_str());
             }
         }
     }

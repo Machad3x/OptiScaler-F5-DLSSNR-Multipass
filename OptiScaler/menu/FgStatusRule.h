@@ -6,7 +6,7 @@
 #include <string>
 
 // The Frame Generation page's status line: what frame generation is doing right now, in one line. Pure, host-tested
-// in tests/fg_status_rule_smoke.cpp; the menu fills FgStatusInput from State and the current FG feature.
+// in tests/fg_status_rule_smoke.cpp; the menu fills Input from State and the current FG feature.
 namespace fgstatus
 {
 enum class Tone
@@ -26,8 +26,10 @@ struct Input
     bool paused = false;
     bool generationOff = false; // Dynamic MFG holding at 1X
     bool generating = false;
-    int interpolated = 0;  // generated frames per rendered frame
-    double shownFps = 0.0; // frames on screen per second; 0 = not measured yet
+    int interpolated = 0;                // generated frames per rendered frame
+    double shownFps = 0.0;               // frames on screen per second; 0 = not measured yet
+    const char* blockedReason = nullptr; // why the output cannot run now (it turns itself off); null = nothing
+    bool followsGame = false;            // Active follows the game's DLSS FG setting
 };
 
 struct Status
@@ -46,8 +48,12 @@ inline Status Describe(const Input& in)
         return { Tone::Neutral, "Off: pick an FG Input" };
     if (!in.hasFeature)
         return { Tone::Waiting, name + ": waiting for the game's swap chain" };
+    // Before Active: a blocked output unticks Active itself, so "unticked" would send the player to the wrong switch
+    if (in.blockedReason != nullptr)
+        return { Tone::Waiting, name + ": off, " + in.blockedReason };
     if (!in.active)
-        return { Tone::Neutral, name + ": off (Active is unticked)" };
+        return { Tone::Neutral, name + (in.followsGame ? ": off (follows the game's DLSS FG setting)"
+                                                       : ": off (Active is unticked)") };
     if (in.paused)
         return { Tone::Waiting, name + ": paused" };
     if (in.generationOff)
@@ -55,7 +61,8 @@ inline Status Describe(const Input& in)
     if (!in.generating)
         return { Tone::Waiting, name + ": waiting for the game's frames" };
 
-    const int multiplier = (in.interpolated > 0 ? in.interpolated : 1) + 1;
+    // As the FPS overlay counts it: shown frames per rendered frame
+    const int multiplier = (in.interpolated > 0 ? in.interpolated : 0) + 1;
     char buffer[96];
     if (in.shownFps > 0.0)
         snprintf(buffer, sizeof(buffer), "%s: generating %dX   %.0f -> %.0f fps", name.c_str(), multiplier,
