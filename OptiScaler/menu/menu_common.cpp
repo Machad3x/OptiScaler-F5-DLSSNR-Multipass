@@ -4960,9 +4960,9 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
                     ShowTooltip(
                         "What makes the generated frames in F5Low\nDLSS-G and libxess will follow\n\n"
-                        "f5low.dll builds this generator from libxess_fg.dll the first time it runs (about half a "
-                        "second, once), kept in f5low_cache next to f5low.dll (or in %LOCALAPPDATA%\\f5low when that "
-                        "folder isn't writable).\nIf it can't, it hands over to Intel's XeFG (up to 4x).");
+                        "On every start f5low.dll builds this generator from libxess_fg.dll in memory, in the "
+                        "background (about half a second); it starts by itself when ready. Nothing is written to "
+                        "disk.\nIf it can't, it hands over to Intel's XeFG (up to 4x).");
 
                     const auto f5lowStatus = F5Low::QueryStatus();
                     ImGui::TextColored(toneMapColor(f5lowStatus.state == F5Low::RunState::Own
@@ -4970,7 +4970,10 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                                                     : f5lowStatus.state == F5Low::RunState::Unavailable
                                                         ? ImVec4(1.0f, 0.2f, 0.2f, 1.0f)
                                                         : ImVec4(1.0f, 0.8f, 0.0f, 1.0f)),
-                                       "%s", F5Low::RunStateLabel(f5lowStatus.state));
+                                       "%s",
+                                       f5lowStatus.state == F5Low::RunState::Undecided && !f5lowStatus.reason.empty()
+                                           ? ("starting: " + f5lowStatus.reason).c_str()
+                                           : F5Low::RunStateLabel(f5lowStatus.state));
                     if (!f5lowStatus.reason.empty())
                         ShowTooltip(f5lowStatus.reason.c_str());
                 }

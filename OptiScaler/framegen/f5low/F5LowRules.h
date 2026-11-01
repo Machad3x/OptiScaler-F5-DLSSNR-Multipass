@@ -11,8 +11,8 @@
 // run, and the "libxess" generator later) is the one in OptiScaler's folder, passed in XEFG_CUDA_INTEL_LIBRARY. It was
 // built as xefg_cuda.dll before 1.0.0; F5Low loads only f5low.dll. The release zip carries f5low.dll
 // (package_release.ps1 -F5LowKit) and libxess_fg.dll 1.3.4.95; f5low.dll builds its frame generator from the player's
-// libxess_fg.dll on first use (about half a second, once), keeping the result in f5low_cache next to itself (in
-// %LOCALAPPDATA%\f5low when the plugins folder is not writable). Without f5low.dll F5Low is not available.
+// libxess_fg.dll on every start, in memory and in the background (about half a second); nothing is written to disk.
+// Without f5low.dll F5Low is not available.
 namespace F5Low
 {
 inline constexpr wchar_t kLibraryFile[] = L"f5low.dll";

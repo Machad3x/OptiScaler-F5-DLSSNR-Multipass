@@ -123,9 +123,10 @@ HMODULE F5Low::LoadLibraryForOutput()
         LOG_INFO("F5Low: Intel's XeFG library for f5low.dll: {}", wstring_to_string(intel));
         version_t version {};
         if (Util::GetFileVersion(intel, &version))
-            LOG_INFO("F5Low: that libxess_fg.dll is {}.{}.{}.{} (f5low.dll builds its own generator from 1.3.4.95 or "
-                     "1.3.1.78, once, in about half a second; otherwise it hands over to Intel's XeFG)",
-                     version.major, version.minor, version.patch, version.reserved);
+            LOG_INFO(
+                "F5Low: that libxess_fg.dll is {}.{}.{}.{} (f5low.dll builds its own generator from 1.3.4.95 or "
+                "1.3.1.78, in memory in the background, about half a second; otherwise it hands over to Intel's XeFG)",
+                version.major, version.minor, version.patch, version.reserved);
     }
     else
     {

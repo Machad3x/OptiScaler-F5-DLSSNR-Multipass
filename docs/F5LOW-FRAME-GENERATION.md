@@ -11,11 +11,11 @@
   are fine). It used to be called `xefg_cuda.dll`: rename an old copy to `f5low.dll`; an old `xefg_cuda.ini` keeps
   working until you put an `f5low.ini` next to it.
 - Intel's `libxess_fg.dll`, version **1.3.4.95** or **1.3.1.78**, in OptiScaler's folder (or `XeFGPath`, or next to
-  `f5low.dll`). The zip ships 1.3.4.95. f5low.dll contains none of Intel's code: **the first time F5Low runs, it
-  builds its frame generator from your `libxess_fg.dll`** (about half a second, once) and keeps the result in
-  `f5low_cache` next to `f5low.dll` (in `%LOCALAPPDATA%\f5low\f5low_cache` when the plugins folder is not writable;
-  its log goes to `%LOCALAPPDATA%\f5low\f5low.log` then too). Later starts load it from there; deleting the folder
-  only makes it build again. With another `libxess_fg.dll` version, or if the build fails, f5low.dll hands over to
+  `f5low.dll`). The zip ships 1.3.4.95. f5low.dll contains none of Intel's code: **on every start it builds its frame generator
+  from your `libxess_fg.dll`** in memory, in the background (about half a second); frame generation starts by itself
+  when it is ready (until then only the real frames are shown). Nothing is written to disk, so there is no cache
+  folder (old `f5low_cache` folders from earlier versions are removed by f5low itself); its log, if you turn it on,
+  goes to `%LOCALAPPDATA%\f5low\f5low.log` when the plugins folder is not writable. With another `libxess_fg.dll` version, or if the build fails, f5low.dll hands over to
   Intel's own XeFG (up to 4x, as with FG Output XeFG). The Frame Generation page shows which one runs: "own frame
   generator running", "running on Intel's XeFG" or "unavailable", with the reason on hover. Needs a D3D12 game.
 

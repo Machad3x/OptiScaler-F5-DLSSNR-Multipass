@@ -272,9 +272,11 @@ The port is a separate optional download (`Optional-Vendor-Neutral-DLSS5-Forward
 - The Frame Generation page says "running on Intel's XeFG (up to 4x)": f5low.dll could not build its own generator
   (the hover text gives the reason). Only libxess_fg.dll 1.3.4.95 and 1.3.1.78 work; put the shipped 1.3.4.95 back.
 - `F5Low could not start its frame generation` (toast): switch FG Output to XeFG and restart; the log has the reason.
-- The first start with F5Low builds the generator from libxess_fg.dll (about half a second, a short stall) and keeps
-  it in `f5low_cache` next to f5low.dll (in `%LOCALAPPDATA%\f5low` when the plugins folder is not writable, together
-  with `f5low.log`); later starts load it. Deleting that folder just rebuilds it.
+- On every start f5low.dll builds its frame generator from libxess_fg.dll in memory, in the background (about half a
+  second); frame generation starts by itself when it is ready. Nothing is written to disk. The Frame Generation page
+  says "building its frame generator in the background" meanwhile; it should clear within about a second. If it stays,
+  the status hover text and f5low.log say why. Old `f5low_cache` folders from earlier versions are removed by f5low
+  itself. `f5low.log` goes to `%LOCALAPPDATA%\f5low` when the plugins folder is not writable.
 
 ### "Slow motion", or the frame rate far below the cap with XeFG 3x or 4x
 - Expected: the frame cap counts all shown frames, real and generated. A cap of 120 at 4x means 30 rendered frames per
