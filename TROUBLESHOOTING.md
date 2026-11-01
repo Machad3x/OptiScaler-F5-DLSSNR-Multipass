@@ -266,7 +266,15 @@ The port is a separate optional download (`Optional-Vendor-Neutral-DLSS5-Forward
 - Log signs: `F5Low: F5Low frame generation needs an NVIDIA GPU ...; FG Output set to None for this session` or
   `F5Low: f5low.dll is not in the plugins folder; FG Output set to None for this session`.
 - Cause: F5Low's XeFG Tensor generator runs on NVIDIA tensor cores, and its library must be in the plugins folder
-  next to OptiScaler.dll (`[Plugins] Path`). f5low.dll is not in the release zip yet; use FG Output XeFG.
+  next to OptiScaler.dll (`[Plugins] Path`). f5low.dll is in the release zip; if you removed it, put it back.
+- `F5Low: libxess_fg.dll is missing`: F5Low builds its frame generator from Intel's libxess_fg.dll. The zip ships
+  version 1.3.4.95 in OptiScaler's folder; keep it there.
+- The Frame Generation page says "running on Intel's XeFG (up to 4x)": f5low.dll could not build its own generator
+  (the hover text gives the reason). Only libxess_fg.dll 1.3.4.95 and 1.3.1.78 work; put the shipped 1.3.4.95 back.
+- `F5Low could not start its frame generation` (toast): switch FG Output to XeFG and restart; the log has the reason.
+- The first start with F5Low builds the generator from libxess_fg.dll (about half a second, a short stall) and keeps
+  it in `f5low_cache` next to f5low.dll (in `%LOCALAPPDATA%\f5low` when the plugins folder is not writable, together
+  with `f5low.log`); later starts load it. Deleting that folder just rebuilds it.
 
 ### "Slow motion", or the frame rate far below the cap with XeFG 3x or 4x
 - Expected: the frame cap counts all shown frames, real and generated. A cap of 120 at 4x means 30 rendered frames per

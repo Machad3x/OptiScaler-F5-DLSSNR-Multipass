@@ -19,7 +19,22 @@ std::wstring LibraryPath();
 // empty when there is none
 std::wstring IntelLibraryPath();
 
-// Whether F5Low can run on this PC (NVIDIA GPU, library present), with the reason when not.
+// What f5low.dll reports (f5lowGetStatus) with its one-line reason; Unknown when it is not loaded or has no such
+// export.
+struct Status
+{
+    RunState state = RunState::Unknown;
+    std::string reason;
+};
+Status QueryStatus();
+
+// Logs QueryStatus once per change (call after a context was made).
+void LogStatus();
+
+// A once-per-session toast for an F5Low that cannot generate frames, plus the log line.
+void ReportFailure(const char* what);
+
+// Whether F5Low can run on this PC (NVIDIA GPU, f5low.dll and libxess_fg.dll present), with the reason when not.
 Availability Available();
 
 // Loads f5low.dll from the plugins folder (XeFGPath is the XeFG output's, not used here). Null when F5Low is not

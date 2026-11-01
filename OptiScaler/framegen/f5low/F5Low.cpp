@@ -3,6 +3,8 @@
 #include "F5Low.h"
 
 #include <Config.h>
+#include <imgui/ImGuiNotify.hpp>
+#include <Util.h>
 #include <proxies/Ntdll_Proxy.h>
 
 #include <atomic>
@@ -26,7 +28,51 @@ F5Low::Availability F5Low::Available()
 {
     std::error_code ec;
     return CheckAvailable(startupNvidia.load(std::memory_order_acquire),
-                          std::filesystem::is_regular_file(LibraryPath(), ec));
+                          std::filesystem::is_regular_file(LibraryPath(), ec), !IntelLibraryPath().empty());
+}
+
+F5Low::Status F5Low::QueryStatus()
+{
+    Status status;
+    const HMODULE module = GetModuleHandleW(kLibraryFile);
+    if (module == nullptr)
+        return status;
+
+    using PFN_f5lowGetStatus = int(__cdecl*)(char*, int);
+    const auto getStatus = (PFN_f5lowGetStatus) GetProcAddress(module, "f5lowGetStatus");
+    if (getStatus == nullptr)
+        return status;
+
+    char reason[256] {};
+    status.state = RunStateFromCode(getStatus(reason, (int) sizeof(reason)));
+    reason[sizeof(reason) - 1] = 0;
+    status.reason = reason;
+    return status;
+}
+
+void F5Low::LogStatus()
+{
+    static std::atomic<int> last { -2 };
+    const auto status = QueryStatus();
+    if (last.exchange((int) status.state) == (int) status.state)
+        return;
+
+    LOG_INFO("F5Low: f5low.dll reports: {}{}{}", RunStateLabel(status.state), status.reason.empty() ? "" : " - ",
+             status.reason);
+}
+
+void F5Low::ReportFailure(const char* what)
+{
+    static std::atomic<bool> shown { false };
+    LOG_ERROR("F5Low: {}", what);
+    if (shown.exchange(true))
+        return;
+
+    ImGuiToast notification({ ImGuiToastType::Warning, 15000,
+                              "F5Low could not start its frame generation, so no frames are generated.\nSwitch FG "
+                              "Output to XeFG (or None) and restart the game; the OptiScaler log says why." });
+    notification.setTitle("F5Low frame generation is off");
+    ImGui::InsertNotification(notification);
 }
 
 std::wstring F5Low::IntelLibraryPath()
@@ -43,6 +89,9 @@ std::wstring F5Low::IntelLibraryPath()
     }
 
     candidates.push_back(std::filesystem::path(Config::Instance()->MainDllPath.value_or(L"")) / L"libxess_fg.dll");
+
+    // f5low.dll also looks next to itself, so a copy in the plugins folder counts
+    candidates.push_back(std::filesystem::path(LibraryPath()).parent_path() / L"libxess_fg.dll");
 
     for (const auto& candidate : candidates)
     {
@@ -70,6 +119,11 @@ HMODULE F5Low::LoadLibraryForOutput()
     {
         SetEnvironmentVariableW(kIntelLibraryEnv, intel.c_str());
         LOG_INFO("F5Low: Intel's XeFG library for f5low.dll: {}", wstring_to_string(intel));
+        version_t version {};
+        if (Util::GetFileVersion(intel, &version))
+            LOG_INFO("F5Low: that libxess_fg.dll is {}.{}.{}.{} (f5low.dll builds its own generator from 1.3.4.95 or "
+                     "1.3.1.78, once, in about half a second; otherwise it hands over to Intel's XeFG)",
+                     version.major, version.minor, version.patch, version.reserved);
     }
     else
     {

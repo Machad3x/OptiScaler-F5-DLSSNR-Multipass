@@ -5,12 +5,19 @@
 ## What you need
 
 - An NVIDIA GPU. On other GPUs F5Low is greyed out in the menu.
-- `f5low.dll` (with its `f5low.ini`) in the `plugins` folder inside OptiScaler's folder
+- `f5low.dll` in the `plugins` folder inside OptiScaler's folder
   (`<game>\OptiScaler\plugins\`, or `<game>\plugins\` without an OptiScaler subfolder; `[Plugins] Path` changes it).
-  It is **not part of the release zip yet**: without it F5Low is greyed out. Nothing to set once it is there: F5Low
-  finds it, and hands it the Intel `libxess_fg.dll` OptiScaler already uses (from `OptiScaler\`, or `XeFGPath` if
-  you set one), so no second copy is needed. It used to be called `xefg_cuda.dll`: rename an old copy to
-  `f5low.dll`. Its old `xefg_cuda.ini` keeps working until you put an `f5low.ini` next to it.
+  It is part of the release zip; without it F5Low is greyed out. An `f5low.ini` next to it is optional (the defaults
+  are fine). It used to be called `xefg_cuda.dll`: rename an old copy to `f5low.dll`; an old `xefg_cuda.ini` keeps
+  working until you put an `f5low.ini` next to it.
+- Intel's `libxess_fg.dll`, version **1.3.4.95** or **1.3.1.78**, in OptiScaler's folder (or `XeFGPath`, or next to
+  `f5low.dll`). The zip ships 1.3.4.95. f5low.dll contains none of Intel's code: **the first time F5Low runs, it
+  builds its frame generator from your `libxess_fg.dll`** (about half a second, once) and keeps the result in
+  `f5low_cache` next to `f5low.dll` (in `%LOCALAPPDATA%\f5low\f5low_cache` when the plugins folder is not writable;
+  its log goes to `%LOCALAPPDATA%\f5low\f5low.log` then too). Later starts load it from there; deleting the folder
+  only makes it build again. With another `libxess_fg.dll` version, or if the build fails, f5low.dll hands over to
+  Intel's own XeFG (up to 4x, as with FG Output XeFG). The Frame Generation page shows which one runs: "own frame
+  generator running", "running on Intel's XeFG" or "unavailable", with the reason on hover. Needs a D3D12 game.
 
 ## Turning it on
 
@@ -37,5 +44,8 @@ F5Low: loaded ...\plugins\f5low.dll
 F5Low: Frame Generator XeFG Tensor (XEFG_CUDA_GENERATOR=own)
 Max supported interpolations: 5 (F5Low library reports 5, MaxInterpolations 5)
 ```
+
+If it cannot start at all, a notice appears and no frames are generated: set FG Output to XeFG and restart.
+With `LogToFile=true` the log then says why (`F5Low: ...`).
 
 `f5low.ini` in the plugins folder has its own settings (pacing, logging); the defaults are fine.

@@ -19,7 +19,7 @@ on:
         default: false
         type: boolean
       f5low_kit_url:
-        description: 'f5low kit zip (https URL, e.g. an Optional-f5low-*.zip release asset); goes into plugins\. Empty = none'
+        description: 'f5low kit zip (https URL: the f5low-kit-*.zip release asset of f5low-fg). Required unless no_f5low is ticked'
         required: false
         default: ''
         type: string
@@ -28,6 +28,11 @@ on:
         required: false
         default: ''
         type: string
+      no_f5low:
+        description: 'Package without F5Low (no f5low.dll, libxess_fg stays 1.3.1.78)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -76,7 +81,10 @@ jobs:
         $params = @{
             Version = $env:PACKAGE_VERSION
         }
-        if ($env:F5LOW_KIT) {
+        if ("${{ inputs.no_f5low }}" -eq "true") {
+            $params["NoF5Low"] = $true
+        }
+        elseif ($env:F5LOW_KIT) {
             $params["F5LowKit"] = $env:F5LOW_KIT
         }
         if ("${{ inputs.include_dlss_fg }}" -eq "true") {

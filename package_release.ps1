@@ -13,10 +13,15 @@
 # works on AMD/Intel). This script does not build it. Supplying the path is what opts it in; it never
 # replaces the default forwarder at the package root, only adds it under Optional\.
 #
-# -F5LowKit is the folder of a built f5low kit (f5low.dll + f5low.ini, built from the private
-# libxess-weights repo, not here). Both go into plugins\, where FG Output F5Low loads f5low.dll by itself; it hands
-# over to the Intel libxess_fg.dll the package already ships in OptiScaler\ (a kit's own copy is not staged). Without
-# it F5Low is greyed out in the menu.
+# -F5LowKit is the f5low kit: a folder or a zip (then -F5LowKitSha256 is required), made by the f5low-fg repo
+# (tools/make_kit.ps1, f5low-kit-<ver>.zip, also a release asset there). It holds f5low.dll, Intel's libxess_fg.dll
+# 1.3.4.95, LICENSE, XeSS_LICENSE.txt, README-KIT.txt and kit_hashes.txt (lines "<sha256>  <file>"; f5low.dll and
+# libxess_fg.dll must be listed and match). Default: the git-ignored folder external\f5low. F5Low ships by default: a
+# release without a kit FAILS unless -NoF5Low is given. f5low.dll goes into plugins\, where FG Output F5Low loads it
+# by itself; it carries no Intel content and builds its frame generator on first use from the player's
+# libxess_fg.dll (1.3.4.95 or 1.3.1.78). The package therefore ships the kit's libxess_fg.dll 1.3.4.95 as
+# OptiScaler\libxess_fg.dll, replacing the 1.3.1.78 that a local MSBuild output still copies from external\xess\bin.
+# No DLL of the kit is ever committed to this repository.
 
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
@@ -28,7 +33,9 @@ param(
     [string]$StreamlineArchive,
     [string]$PortBackendDll,
     [string]$PortBackendIni,
-    [string]$F5LowKit
+    [string]$F5LowKit,
+    [string]$F5LowKitSha256,
+    [switch]$NoF5Low
 )
 
 $ErrorActionPreference = "Stop"
@@ -335,13 +342,50 @@ Not validated on real AMD or Intel hardware.
     Write-Host "vendor-neutral port backend: staged under Optional\ (not the default)"
 }
 
+if (-not $F5LowKit -and -not $NoF5Low) { $F5LowKit = "$root\external\f5low" }
+if ($NoF5Low -and $F5LowKit) { throw '-NoF5Low and -F5LowKit contradict each other' }
 if ($F5LowKit) {
-    $kitFiles = @('f5low.dll', 'f5low.ini')
-    foreach ($f in $kitFiles) {
+    $kitTemp = $null
+    if (-not (Test-Path -LiteralPath $F5LowKit)) {
+        throw "REFUSING: no f5low kit at $F5LowKit. Put the kit (f5low-kit-<ver>.zip from f5low-fg, unpacked) there, pass -F5LowKit, or pass -NoF5Low to package without F5Low."
+    }
+    if (Test-Path -LiteralPath $F5LowKit -PathType Leaf) {
+        if ($F5LowKitSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'A kit zip needs -F5LowKitSha256 (64 hex digits)' }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $F5LowKit).Hash -ne $F5LowKitSha256.ToUpperInvariant()) {
+            throw 'REFUSING: the f5low kit zip does not match -F5LowKitSha256'
+        }
+        $kitTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("f5lowkit_" + [guid]::NewGuid().ToString('N'))
+        Expand-Archive -LiteralPath $F5LowKit -DestinationPath $kitTemp
+        $dll = @(Get-ChildItem -LiteralPath $kitTemp -Recurse -File -Filter 'f5low.dll')
+        if ($dll.Count -ne 1) { throw "expected one f5low.dll in the kit zip, found $($dll.Count)" }
+        $F5LowKit = $dll[0].DirectoryName
+    }
+
+    foreach ($f in @('f5low.dll', 'libxess_fg.dll', 'LICENSE', 'XeSS_LICENSE.txt', 'kit_hashes.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $F5LowKit $f) -PathType Leaf)) {
-            throw "F5LowKit is missing ${f}: $F5LowKit"
+            throw "REFUSING: the f5low kit is missing ${f}: $F5LowKit"
         }
     }
+
+    # Every file the kit lists must match; f5low.dll and libxess_fg.dll must be listed
+    $listed = @{}
+    foreach ($line in Get-Content -LiteralPath (Join-Path $F5LowKit 'kit_hashes.txt')) {
+        if ($line -match '^\s*([0-9A-Fa-f]{64})\s+\*?(\S+)\s*$') { $listed[$Matches[2]] = $Matches[1].ToUpperInvariant() }
+    }
+    foreach ($f in @('f5low.dll', 'libxess_fg.dll')) {
+        if (-not $listed.ContainsKey($f)) { throw "REFUSING: kit_hashes.txt does not list $f" }
+    }
+    foreach ($f in $listed.Keys) {
+        $path = Join-Path $F5LowKit $f
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "REFUSING: kit_hashes.txt lists $f, which is not in the kit" }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $listed[$f]) {
+            throw "REFUSING: $f does not match kit_hashes.txt"
+        }
+    }
+
+    # f5low.ini and the kit's README are optional
+    $kitFiles = @('f5low.dll')
+    if (Test-Path -LiteralPath (Join-Path $F5LowKit 'f5low.ini') -PathType Leaf) { $kitFiles += 'f5low.ini' }
 
     # XeFG's API plus our own export, so Intel's library or an unrelated file under the wrong name is caught.
     $cudaText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes((Join-Path $F5LowKit 'f5low.dll')))
@@ -356,12 +400,11 @@ if ($F5LowKit) {
         throw "REFUSING: f5low.dll appears to contain a local path or identifying string ($($cudaLeaks -join ', '))."
     }
 
-    # f5low.dll hands over to the package's own Intel library (OptiScaler\libxess_fg.dll, passed in by F5Low): it must
-    # be there, and Intel's own file, unmodified: its signature says so.
+    # The kit's libxess_fg.dll (1.3.4.95, hash-checked above) replaces the package's: f5low.dll builds its frame
+    # generator from it and hands over to it where it cannot run. It must be Intel's own file, unmodified: its
+    # signature says so.
     $intelLibrary = "$stage\OptiScaler\libxess_fg.dll"
-    if (-not (Test-Path -LiteralPath $intelLibrary -PathType Leaf)) {
-        throw "REFUSING: f5low.dll needs OptiScaler\libxess_fg.dll in the package, and it is missing"
-    }
+    Copy-Item -LiteralPath (Join-Path $F5LowKit 'libxess_fg.dll') -Destination $intelLibrary -Force
     $intelSignature = Get-AuthenticodeSignature -LiteralPath $intelLibrary
     if ($intelSignature.Status -ne 'Valid' -or $intelSignature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Intel Corporation(,|$)') {
         throw "REFUSING: OptiScaler\libxess_fg.dll is not validly signed by Intel ($($intelSignature.Status))"
@@ -372,8 +415,13 @@ if ($F5LowKit) {
     foreach ($f in $kitFiles) {
         Copy-Item -LiteralPath (Join-Path $F5LowKit $f) -Destination "$pluginsDir\$f" -Force
     }
-    Copy-Item -LiteralPath "$root\external\xess\LICENSE.txt" -Destination "$stage\Licenses\XeSS_LICENSE.txt" -Force
-    Write-Host "f5low.dll: staged in plugins\ (f5low.dll, f5low.ini; Intel library: OptiScaler\libxess_fg.dll)"
+    Copy-Item -LiteralPath (Join-Path $F5LowKit 'LICENSE') -Destination "$stage\Licenses\f5low_LICENSE.txt" -Force
+    Copy-Item -LiteralPath (Join-Path $F5LowKit 'XeSS_LICENSE.txt') -Destination "$stage\Licenses\XeSS_LICENSE.txt" -Force
+    if (Test-Path -LiteralPath (Join-Path $F5LowKit 'README-KIT.txt') -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $F5LowKit 'README-KIT.txt') -Destination "$stage\Licenses\f5low_README-KIT.txt" -Force
+    }
+    if ($kitTemp) { Remove-Item -LiteralPath $kitTemp -Recurse -Force }
+    Write-Host "f5low kit: plugins\ ($($kitFiles -join ', ')), Licenses\f5low_LICENSE.txt, Intel library OptiScaler\libxess_fg.dll (kit's, signature valid)"
 }
 
 # Frame generation ships off and F5Low on its default generator: plugins\f5low.dll is only loaded when a player

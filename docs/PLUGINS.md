@@ -14,8 +14,8 @@ game. A changed row says "restart to apply" until then.
   `[Plugins] LateAsiPluginsDelay` seconds and show "waiting" until then.
 - **Loaders**: Special K, ReShade and the custom amdxc64 for RDNA 2, with whether they really loaded.
 
-FG Output F5Low loads `f5low.dll` (with `f5low.ini`) from the plugins folder. They are
-not ASI plugins and are not listed here; they are not in the release zip yet (see
+FG Output F5Low loads `f5low.dll` (with `f5low.ini`, if present) from the plugins folder. It is
+not an ASI plugin and is not listed here; it is in the release zip (see
 [F5LOW-FRAME-GENERATION.md](F5LOW-FRAME-GENERATION.md)).
 
 `Load ASI plugins` (`[Plugins] LoadAsiPlugins`) is the master switch at the top. With it off the folder is still

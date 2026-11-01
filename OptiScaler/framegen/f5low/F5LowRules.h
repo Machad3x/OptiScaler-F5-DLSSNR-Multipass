@@ -9,8 +9,10 @@
 //
 // In plugins: f5low.dll and f5low.ini. Intel's libxess_fg.dll (what f5low.dll hands over to where it cannot
 // run, and the "libxess" generator later) is the one in OptiScaler's folder, passed in XEFG_CUDA_INTEL_LIBRARY. It was
-// built as xefg_cuda.dll before 1.0.0; F5Low loads only f5low.dll. Not in the release zip yet (package_release.ps1
-// -F5LowKit can stage them); without f5low.dll F5Low is not available.
+// built as xefg_cuda.dll before 1.0.0; F5Low loads only f5low.dll. The release zip carries f5low.dll
+// (package_release.ps1 -F5LowKit) and libxess_fg.dll 1.3.4.95; f5low.dll builds its frame generator from the player's
+// libxess_fg.dll on first use (about half a second, once), keeping the result in f5low_cache next to itself (in
+// %LOCALAPPDATA%\f5low when the plugins folder is not writable). Without f5low.dll F5Low is not available.
 namespace F5Low
 {
 inline constexpr wchar_t kLibraryFile[] = L"f5low.dll";
@@ -107,12 +109,50 @@ struct Availability
     const char* reason = "";
 };
 
-inline Availability CheckAvailable(bool nvidia, bool libraryFound)
+// intelLibraryFound: libxess_fg.dll next to OptiScaler.dll, at XeFGPath or next to f5low.dll. f5low.dll builds its
+// frame generator from it on first use and hands over to it where its own generator cannot run, so without it F5Low has
+// nothing to run on.
+inline Availability CheckAvailable(bool nvidia, bool libraryFound, bool intelLibraryFound = true)
 {
     if (!nvidia)
         return { false, "F5Low frame generation needs an NVIDIA GPU (XeFG Tensor runs on CUDA)" };
     if (!libraryFound)
         return { false, "f5low.dll is not in the plugins folder" };
+    if (!intelLibraryFound)
+        return { false, "libxess_fg.dll is missing (F5Low builds its frame generator from it)" };
     return { true, "" };
+}
+
+// What f5low.dll says it is doing (its export f5lowGetStatus, optional in older builds).
+enum class RunState
+{
+    Unknown = -1,   // no such export (an older f5low.dll), or f5low.dll not loaded
+    Undecided = 0,  // no context made yet
+    Own = 1,        // its own generator runs
+    HandedOver = 2, // Intel's libxess_fg.dll runs (up to 4x)
+    Unavailable = 3 // nothing runs
+};
+
+inline RunState RunStateFromCode(int code)
+{
+    return code >= 0 && code <= 3 ? static_cast<RunState>(code) : RunState::Unknown;
+}
+
+// The FG page line for a state.
+inline const char* RunStateLabel(RunState state)
+{
+    switch (state)
+    {
+    case RunState::Undecided:
+        return "starting";
+    case RunState::Own:
+        return "own frame generator running";
+    case RunState::HandedOver:
+        return "running on Intel's XeFG (up to 4x)";
+    case RunState::Unavailable:
+        return "unavailable, no frames generated";
+    default:
+        return "state unknown (older f5low.dll)";
+    }
 }
 } // namespace F5Low
