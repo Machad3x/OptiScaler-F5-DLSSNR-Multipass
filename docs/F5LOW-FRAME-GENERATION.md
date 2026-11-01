@@ -5,8 +5,9 @@
 ## What you need
 
 - An NVIDIA GPU. On other GPUs F5Low is greyed out in the menu.
-- The `plugins` folder from the release zip next to OptiScaler.dll, with `xefg_cuda.dll`, `xefg_cuda.ini` and
-  `libxess_fg.dll` in it. Nothing to set: F5Low finds them there. (`XeFGPath` is for the XeFG output only.)
+- `xefg_cuda.dll` (with its `xefg_cuda.ini` and Intel's `libxess_fg.dll`) in the `plugins` folder next to
+  OptiScaler.dll. It is **not part of the release zip yet**: without it F5Low is greyed out. Nothing to set once it
+  is there: F5Low finds it. (`XeFGPath` is for the XeFG output only.)
 
 ## Turning it on
 

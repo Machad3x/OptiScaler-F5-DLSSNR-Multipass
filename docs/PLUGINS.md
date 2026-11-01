@@ -14,8 +14,9 @@ game. A changed row says "restart to apply" until then.
   `[Plugins] LateAsiPluginsDelay` seconds and show "waiting" until then.
 - **Loaders**: Special K, ReShade and the custom amdxc64 for RDNA 2, with whether they really loaded.
 
-The release also puts `xefg_cuda.dll`, `xefg_cuda.ini` and `libxess_fg.dll` in the plugins folder. They are not ASI
-plugins and are not listed here: FG Output F5Low loads them (see [F5LOW-FRAME-GENERATION.md](F5LOW-FRAME-GENERATION.md)).
+FG Output F5Low loads `xefg_cuda.dll` (with `xefg_cuda.ini` and `libxess_fg.dll`) from the plugins folder. They are
+not ASI plugins and are not listed here; they are not in the release zip yet (see
+[F5LOW-FRAME-GENERATION.md](F5LOW-FRAME-GENERATION.md)).
 
 `Load ASI plugins` (`[Plugins] LoadAsiPlugins`) is the master switch at the top. With it off the folder is still
 listed (greyed) so you can see what would load; turn it on to tick or untick files.
