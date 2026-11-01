@@ -79,7 +79,10 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
 {
     if (XeFGProxy::Module() == nullptr && !XeFGProxy::InitXeFG())
     {
-        LOG_ERROR("XeFG proxy can't find libxess_fg.dll!");
+        if (State::Instance().activeFgOutput == FGOutput::F5Low)
+            F5Low::ReportFailure("OptiScaler\\plugins\\f5low.dll could not be loaded");
+        else
+            LOG_ERROR("XeFG proxy can't find libxess_fg.dll!");
         return false;
     }
 
@@ -107,10 +110,15 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
         if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
         {
             LOG_ERROR("D3D12CreateContext error: {} ({})", magic_enum::enum_name(result), (UINT) result);
+
+            if (f5low)
+                F5Low::ReportFailure("f5low.dll could not create its frame generation context");
             return false;
         }
 
         LOG_INFO("XeFG context created");
+        if (f5low)
+            F5Low::LogStatus();
         result = XeFGProxy::SetLoggingCallback()(_swapChainContext, XEFG_SWAPCHAIN_LOGGING_LEVEL_DEBUG, xefgLogCallback,
                                                  nullptr);
 
@@ -158,6 +166,7 @@ void XeFG_Dx12::ApplyMaxInterpolations(uint32_t reported)
         _maxInterpolationCount = F5Low::MaxInterpolations(reported, configured);
         LOG_INFO("Max supported interpolations: {} (F5Low library reports {}, MaxInterpolations {})",
                  _maxInterpolationCount, reported, configured);
+        F5Low::LogStatus();
         return;
     }
 

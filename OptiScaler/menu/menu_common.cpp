@@ -3697,7 +3697,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         XeFGProxy::InitXeFG();
         inputOptions[optiFgIndex].set_disabled(XeFGProxy::Module() == nullptr,
                                                state.activeFgOutput == FGOutput::F5Low
-                                                   ? "plugins\\f5low.dll could not be loaded"
+                                                   ? "OptiScaler\\plugins\\f5low.dll could not be loaded"
                                                    : "libxess_fg.dll is missing");
     }
 
@@ -4958,7 +4958,24 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                             config->F5LowGenerator.value_or_default(); // need to have a value before combo
 
                     PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
-                    ShowTooltip("What makes the generated frames in F5Low\nDLSS-G and libxess will follow");
+                    ShowTooltip(
+                        "What makes the generated frames in F5Low\nDLSS-G and libxess will follow\n\n"
+                        "On every start f5low.dll builds this generator from libxess_fg.dll in memory, in the "
+                        "background (about half a second); it starts by itself when ready. Nothing is written to "
+                        "disk.\nIf it can't, it hands over to Intel's XeFG (up to 4x).");
+
+                    const auto f5lowStatus = F5Low::QueryStatus();
+                    ImGui::TextColored(toneMapColor(f5lowStatus.state == F5Low::RunState::Own
+                                                        ? ImVec4(0.2f, 1.0f, 0.2f, 1.0f)
+                                                    : f5lowStatus.state == F5Low::RunState::Unavailable
+                                                        ? ImVec4(1.0f, 0.2f, 0.2f, 1.0f)
+                                                        : ImVec4(1.0f, 0.8f, 0.0f, 1.0f)),
+                                       "%s",
+                                       f5lowStatus.state == F5Low::RunState::Undecided && !f5lowStatus.reason.empty()
+                                           ? ("starting: " + f5lowStatus.reason).c_str()
+                                           : F5Low::RunStateLabel(f5lowStatus.state));
+                    if (!f5lowStatus.reason.empty())
+                        ShowTooltip(f5lowStatus.reason.c_str());
                 }
 
                 ImGui::TableNextColumn();
@@ -5570,7 +5587,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             ImGui::TextColored(toneMapColor({ 1.0f, 0.0f, 0.0f, 1.0f }),
                                state.activeFgOutput == FGOutput::F5Low
-                                   ? "plugins\\f5low.dll is missing!"
+                                   ? "OptiScaler\\plugins\\f5low.dll is missing!"
                                    : "libxess_fg.dll is missing!"); // Probably never will be visible
         }
     }

@@ -69,6 +69,20 @@ int main()
     CHECK(!F5Low::CheckAvailable(false, false).available);
     CHECK(strstr(F5Low::CheckAvailable(false, true).reason, "NVIDIA") != nullptr);
     CHECK(strstr(F5Low::CheckAvailable(true, false).reason, "plugins") != nullptr);
+    CHECK(!F5Low::CheckAvailable(true, true, false).available);
+    CHECK(strstr(F5Low::CheckAvailable(true, true, false).reason, "libxess_fg.dll") != nullptr);
+    CHECK(F5Low::CheckAvailable(true, true, true).available);
+
+    // f5low.dll's status export
+    CHECK(F5Low::RunStateFromCode(0) == F5Low::RunState::Undecided);
+    CHECK(F5Low::RunStateFromCode(1) == F5Low::RunState::Own);
+    CHECK(F5Low::RunStateFromCode(2) == F5Low::RunState::HandedOver);
+    CHECK(F5Low::RunStateFromCode(3) == F5Low::RunState::Unavailable);
+    CHECK(F5Low::RunStateFromCode(4) == F5Low::RunState::Unknown);
+    CHECK(F5Low::RunStateFromCode(-1) == F5Low::RunState::Unknown);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unknown), "older") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::NotLoaded), "not loaded") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::HandedOver), "Intel") != nullptr);
 
     if (fails == 0)
         printf("f5low_output_smoke: PASS\n");
