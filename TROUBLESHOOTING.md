@@ -265,8 +265,8 @@ The port is a separate optional download (`Optional-Vendor-Neutral-DLSS5-Forward
 ### F5Low is greyed out, or falls back to no frame generation
 - Log signs: `F5Low: F5Low frame generation needs an NVIDIA GPU ...; FG Output set to None for this session` or
   `F5Low: f5low.dll is not in the plugins folder; FG Output set to None for this session`.
-- Cause: F5Low's XeFG Tensor generator runs on NVIDIA tensor cores, and its library must be in the plugins folder
-  next to OptiScaler.dll (`[Plugins] Path`). f5low.dll is in the release zip; if you removed it, put it back.
+- Cause: F5Low's XeFG Tensor generator runs on NVIDIA tensor cores, and its library must be at
+  `OptiScaler\plugins\f5low.dll` (the plugins folder of OptiScaler's folder; `[Plugins] Path` moves it). f5low.dll is in the release zip; if you removed it, put it back.
 - `F5Low: libxess_fg.dll is missing`: F5Low builds its frame generator from Intel's libxess_fg.dll. The zip ships
   version 1.3.4.95 in OptiScaler's folder; keep it there.
 - The Frame Generation page says "running on Intel's XeFG (up to 4x)": f5low.dll could not build its own generator

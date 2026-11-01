@@ -8,7 +8,7 @@ janblade/f5low-fg). Unpack it here. It holds:
 
 | File | What |
 | --- | --- |
-| `f5low.dll` | F5Low frame generation (GPL-3.0). Contains no Intel code; builds its frame generator from the player's `libxess_fg.dll` on every start, in memory (nothing written to disk) |
+| `f5low.dll` | F5Low frame generation (GPL-3.0). Staged as `OptiScaler\plugins\f5low.dll`. Contains no Intel code; builds its frame generator from the player's `libxess_fg.dll` on every start, in memory (nothing written to disk) |
 | `libxess_fg.dll` | Intel XeSS-FG 1.3.4.95, unmodified, Intel-signed. Replaces the 1.3.1.78 in `OptiScaler\` |
 | `LICENSE`, `XeSS_LICENSE.txt`, `README-KIT.txt` | licences and the source URL; staged under `Licenses\` |
 | `kit_hashes.txt` | lines `<sha256>  <file>`; `f5low.dll` and `libxess_fg.dll` must be listed and are checked before packaging |

@@ -3697,7 +3697,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         XeFGProxy::InitXeFG();
         inputOptions[optiFgIndex].set_disabled(XeFGProxy::Module() == nullptr,
                                                state.activeFgOutput == FGOutput::F5Low
-                                                   ? "plugins\\f5low.dll could not be loaded"
+                                                   ? "OptiScaler\\plugins\\f5low.dll could not be loaded"
                                                    : "libxess_fg.dll is missing");
     }
 
@@ -5587,7 +5587,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             ImGui::TextColored(toneMapColor({ 1.0f, 0.0f, 0.0f, 1.0f }),
                                state.activeFgOutput == FGOutput::F5Low
-                                   ? "plugins\\f5low.dll is missing!"
+                                   ? "OptiScaler\\plugins\\f5low.dll is missing!"
                                    : "libxess_fg.dll is missing!"); // Probably never will be visible
         }
     }

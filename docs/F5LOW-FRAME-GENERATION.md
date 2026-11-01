@@ -5,9 +5,8 @@
 ## What you need
 
 - An NVIDIA GPU. On other GPUs F5Low is greyed out in the menu.
-- `f5low.dll` in the `plugins` folder inside OptiScaler's folder
-  (`<game>\OptiScaler\plugins\`, or `<game>\plugins\` without an OptiScaler subfolder; `[Plugins] Path` changes it).
-  It is part of the release zip; without it F5Low is greyed out. An `f5low.ini` next to it is optional (the defaults
+- `f5low.dll` in `OptiScaler\plugins\` (`<game>\OptiScaler\plugins\f5low.dll`; a different `[Plugins] Path` moves
+  it, and `<game>\plugins\` applies without an OptiScaler subfolder). It is part of the release zip, already there; without it F5Low is greyed out. An `f5low.ini` next to it is optional (the defaults
   are fine). It used to be called `xefg_cuda.dll`: rename an old copy to `f5low.dll`; an old `xefg_cuda.ini` keeps
   working until you put an `f5low.ini` next to it.
 - Intel's `libxess_fg.dll`, version **1.3.4.95** or **1.3.1.78**, in OptiScaler's folder (or `XeFGPath`, or next to

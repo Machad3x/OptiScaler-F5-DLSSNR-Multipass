@@ -17,7 +17,7 @@
 # (tools/make_kit.ps1, f5low-kit-<ver>.zip, also a release asset there). It holds f5low.dll, Intel's libxess_fg.dll
 # 1.3.4.95, LICENSE, XeSS_LICENSE.txt, README-KIT.txt and kit_hashes.txt (lines "<sha256>  <file>"; f5low.dll and
 # libxess_fg.dll must be listed and match). Default: the git-ignored folder external\f5low. F5Low ships by default: a
-# release without a kit FAILS unless -NoF5Low is given. f5low.dll goes into plugins\, where FG Output F5Low loads it
+# release without a kit FAILS unless -NoF5Low is given. f5low.dll goes into OptiScaler\plugins\ (OptiScaler's default [Plugins] Path), where FG Output F5Low loads it
 # by itself; it carries no Intel content and builds its frame generator on first use from the player's
 # libxess_fg.dll (1.3.4.95 or 1.3.1.78). The package therefore ships the kit's libxess_fg.dll 1.3.4.95 as
 # OptiScaler\libxess_fg.dll, replacing the 1.3.1.78 that a local MSBuild output still copies from external\xess\bin.
@@ -453,7 +453,7 @@ Not validated on real AMD or Intel hardware.
 
 if ($kitData) {
     # Kit checks ran at the top, before anything was built or staged; only the copying is left
-    $pluginsDir = "$stage\plugins"
+    $pluginsDir = "$stage\OptiScaler\plugins"
     New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
     foreach ($f in $kitPlugins) {
         [System.IO.File]::WriteAllBytes("$pluginsDir\$f", $kitData[$f])
@@ -462,10 +462,15 @@ if ($kitData) {
     foreach ($entry in $kitLicenses.GetEnumerator()) {
         [System.IO.File]::WriteAllBytes("$stage\Licenses\$($entry.Key)", $kitData[$entry.Value])
     }
-    Write-Host "f5low kit: plugins\ ($($kitPlugins -join ', ')), Intel library OptiScaler\libxess_fg.dll $kitIntelVersion, licences: $($kitLicenses.Keys -join ', ')"
+    # Self-check: OptiScaler loads f5low.dll from <OptiScaler folder>\plugins, never from a plugins folder at the zip root
+    if (-not (Test-Path -LiteralPath "$stage\OptiScaler\plugins\f5low.dll" -PathType Leaf) -or
+        (Test-Path -LiteralPath "$stage\plugins")) {
+        throw 'REFUSING: f5low.dll must be staged as OptiScaler\plugins\f5low.dll (and no plugins folder at the package root)'
+    }
+    Write-Host "f5low kit: OptiScaler\plugins\ ($($kitPlugins -join ', ')), Intel library OptiScaler\libxess_fg.dll $kitIntelVersion, licences: $($kitLicenses.Keys -join ', ')"
 }
 
-# Frame generation ships off and F5Low on its default generator: plugins\f5low.dll is only loaded when a player
+# Frame generation ships off and F5Low on its default generator: OptiScaler\plugins\f5low.dll is only loaded when a player
 # picks FG Output F5Low.
 $packagedIni = Get-Content -LiteralPath "$stage\OptiScaler.ini" -Raw
 foreach ($key in @('FGOutput', 'FrameGenerator')) {

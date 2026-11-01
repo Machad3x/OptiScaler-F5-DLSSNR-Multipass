@@ -80,7 +80,7 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
     if (XeFGProxy::Module() == nullptr && !XeFGProxy::InitXeFG())
     {
         if (State::Instance().activeFgOutput == FGOutput::F5Low)
-            F5Low::ReportFailure("plugins\\f5low.dll could not be loaded");
+            F5Low::ReportFailure("OptiScaler\\plugins\\f5low.dll could not be loaded");
         else
             LOG_ERROR("XeFG proxy can't find libxess_fg.dll!");
         return false;
