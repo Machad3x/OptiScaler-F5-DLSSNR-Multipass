@@ -232,7 +232,24 @@ bool IFeature_Vk::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter* InP
 
                              // Dispatch
                              [&](const VkImageInfo& input, const VkImageInfo& output) -> bool
-                             { return F5Lut->Dispatch(InCmdBuffer, input, output, IsHdr()); } });
+                             {
+                                 // The game's exposure sets the white point of a linear HDR frame (none with auto
+                                 // exposure)
+                                 VkImageView exposure = VK_NULL_HANDLE;
+                                 float preExposure = 1.0f;
+                                 NVSDK_NGX_Resource_VK* paramExposure = nullptr;
+                                 if (IsHdr() && !AutoExposure() &&
+                                     InParameters->Get(NVSDK_NGX_Parameter_ExposureTexture, (void**) &paramExposure) ==
+                                         NVSDK_NGX_Result_Success &&
+                                     paramExposure != nullptr &&
+                                     paramExposure->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW)
+                                 {
+                                     exposure = paramExposure->Resource.ImageViewInfo.ImageView;
+                                     InParameters->Get(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, &preExposure);
+                                 }
+
+                                 return F5Lut->Dispatch(InCmdBuffer, input, output, IsHdr(), exposure, preExposure);
+                             } });
     }
 
     if (Magnifier->ShouldRun())

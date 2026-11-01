@@ -53,7 +53,7 @@ VkImageInfo F5Lut_Vk::Setup(VkCommandBuffer InCmdBuffer, const VkImageInfo& InNe
 }
 
 bool F5Lut_Vk::Dispatch(VkCommandBuffer InCmdBuffer, const VkImageInfo& InResource, const VkImageInfo& OutResource,
-                        bool InLinearHdr)
+                        bool InLinearHdr, VkImageView InExposure, float InPreExposure)
 {
     if (!_init || !_pass || InCmdBuffer == VK_NULL_HANDLE)
         return false;
@@ -61,10 +61,20 @@ bool F5Lut_Vk::Dispatch(VkCommandBuffer InCmdBuffer, const VkImageInfo& InResour
     SetImageLayout(InCmdBuffer, InResource.Image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                    InResource.SubresourceRange);
 
+    // The game's exposure is read as an upscaler input, in SHADER_READ_ONLY_OPTIMAL (as RCAS reads the game's motion
+    // and NR's Vulkan LUT its exposure); an implausible texel leaves the white point at 1.0 (dlssnr_whitepoint.hlsli).
+    const bool exposure = InLinearHdr && InExposure != VK_NULL_HANDLE;
+    if (!_saidInputs)
+    {
+        _saidInputs = true;
+        LOG_INFO("[{}] Vulkan: HDR {}, game exposure {}, PreExposure {}", _name, InLinearHdr,
+                 exposure ? "read" : "none (white point 1.0)", InPreExposure);
+    }
     const DlssNrLutConstants constants =
-        ChainConstants(OutResource.Width, OutResource.Height, InLinearHdr, false, 1.0f);
+        ChainConstants(OutResource.Width, OutResource.Height, InLinearHdr, exposure, InPreExposure);
     const bool graded = _pass->Dispatch(InCmdBuffer, InResource.ImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                        OutResource.ImageView, constants);
+                                        OutResource.ImageView, constants, exposure ? InExposure : VK_NULL_HANDLE,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     Report(graded);
     return graded;
 }
