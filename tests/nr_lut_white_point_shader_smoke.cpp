@@ -3,7 +3,8 @@
 //
 //   1. Tone-mapped sRGB and gamma 2.2 frames get the exact grade (full float interpolation since 2026-11-01), PQ the
 //      shader before the white point became shared (dlssnr_lut.hlsl at 7364a7f8) within its 8-bit filter weights,
-//      with no live exposure. Linear HDR grades in the sRGB
+//      with no live exposure. Linear HDR matches GradeLinearHdr (the CPU model: below the knee the inverse of the
+//      handed display, above it the look's display-linear ratio on the input light, capped). It grades in the sRGB
 //      display domain a .cube is made for (sRGB of Neutwo of light / white; fixed 2026-10-31, the reference graded
 //      the Neutwo values as they were), checked against a CPU model of that grade at several white points, and
 //      linear mid grey 0.18 lands on display 0.46.
@@ -195,6 +196,46 @@ static void ToDisplay(const float in[3], float white, float out[3])
         out[c] = SrgbOf(v[c] * scale);
 }
 
+static float LinearOf(float v)
+{
+    v = std::clamp(v, 0.0f, 1.0f);
+    return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+
+// The pass's whole Linear HDR grade on the CPU: handed display, the look, back to light through Neutwo's inverse below
+// the knee and as a display-linear ratio of the input light above it, then the cap at max(input peak, white).
+template <typename Look>
+static void GradeLinearHdr(const float in[3], float white, const Look& look, float out[3])
+{
+    float d[3], g[3], y[3];
+    ToDisplay(in, white, d);
+    look(d, g);
+    float m = 0.0f, dPeak = 0.0f, inPeak = 0.0f;
+    for (int c = 0; c < 3; ++c)
+    {
+        y[c] = LinearOf(g[c]);
+        m = std::max(m, y[c]);
+        dPeak = std::max(dPeak, d[c]);
+        inPeak = std::max(inPeak, std::max(in[c], 0.0f));
+    }
+    m = std::min(m, 0.999999f);
+    const float x = m / std::sqrt(std::max(1.0f - m * m, 1e-8f));
+    const float t = std::clamp((dPeak - 0.80f) / 0.15f, 0.0f, 1.0f);
+    const float knee = t * t * (3.0f - 2.0f * t);
+    float peak = 0.0f;
+    for (int c = 0; c < 3; ++c)
+    {
+        const float inverse = (m > 1e-6f ? y[c] * (x / m) : y[c]) * white;
+        const float ratio = (y[c] + 1e-3f) / (LinearOf(d[c]) + 1e-3f);
+        out[c] = inverse + (std::max(in[c], 0.0f) * ratio - inverse) * knee;
+        peak = std::max(peak, out[c]);
+    }
+    const float cap = std::max(inPeak, white);
+    if (peak > cap)
+        for (int c = 0; c < 3; ++c)
+            out[c] *= cap / peak;
+}
+
 static DlssNrLutConstants Base(uint32_t encoding, bool linearHdr, float white)
 {
     DlssNrLutConstants c {};
@@ -232,21 +273,25 @@ try
     for (float white : { 0.01f, 1.0f, 2.5375f, 1700.0f })
     {
         const auto got = gpu.Run(shader.Get(), linear, Base(0, true, white), 0.0f);
+        const auto lift = [](const float d[3], float g[3])
+        {
+            g[0] = 0.9f * d[1] + 0.05f;
+            g[1] = 0.9f * d[2] + 0.05f;
+            g[2] = 0.9f * d[0] + 0.05f;
+        };
         float off = 0.0f;
         for (int i = 0; i < N; ++i)
         {
             const float in[3] = { linear[i].r, linear[i].g, linear[i].b };
-            const float out[3] = { got[i].r, got[i].g, got[i].b };
-            float d[3], back[3];
-            ToDisplay(in, white, d);
-            ToDisplay(out, white, back);
-            const float want[3] = { 0.9f * d[1] + 0.05f, 0.9f * d[2] + 0.05f, 0.9f * d[0] + 0.05f };
-            for (int c = 0; c < 3; ++c)
-                off = std::max(off, std::abs(back[c] - want[c]));
+            float want[3];
+            GradeLinearHdr(in, white, lift, want);
+            const float scale = std::max({ want[0], want[1], want[2], 1e-3f * white });
+            off = std::max({ off, std::abs(got[i].r - want[0]) / scale, std::abs(got[i].g - want[1]) / scale,
+                             std::abs(got[i].b - want[2]) / scale });
             expect(got[i].a == linear[i].a, "linear HDR alpha changed");
         }
-        std::printf("linear HDR at white %g: worst display error %.2e\n", white, off);
-        expect(off < 5e-3f, "linear HDR does not grade in the sRGB display domain at white " + std::to_string(white));
+        std::printf("linear HDR at white %g: worst error vs the CPU grade %.2e\n", white, off);
+        expect(off < 1e-3f, "linear HDR does not grade as the CPU model at white " + std::to_string(white));
     }
     {
         // mid grey: the cube's red is 0.9 x the display green + 0.05, so display = (red - 0.05) / 0.9
@@ -264,23 +309,27 @@ try
         auto c = Base(0, true, 2.0f);
         c.LatticeCoord = 1u;
         const auto got = gpu.Run(shader.Get(), linear, c, 0.0f);
+        const auto logLift = [](const float d[3], float g[3])
+        {
+            float u[3];
+            for (int ch = 0; ch < 3; ++ch)
+                u[ch] = DlssNr::LatticeFromDisplay(d[ch]);
+            g[0] = 0.9f * u[1] + 0.05f;
+            g[1] = 0.9f * u[2] + 0.05f;
+            g[2] = 0.9f * u[0] + 0.05f;
+        };
         float off = 0.0f;
         for (int i = 0; i < N; ++i)
         {
             const float in[3] = { linear[i].r, linear[i].g, linear[i].b };
-            const float out[3] = { got[i].r, got[i].g, got[i].b };
-            float d[3], back[3];
-            ToDisplay(in, 2.0f, d);
-            ToDisplay(out, 2.0f, back);
-            float u[3];
-            for (int ch = 0; ch < 3; ++ch)
-                u[ch] = DlssNr::LatticeFromDisplay(d[ch]);
-            const float want[3] = { 0.9f * u[1] + 0.05f, 0.9f * u[2] + 0.05f, 0.9f * u[0] + 0.05f };
-            for (int ch = 0; ch < 3; ++ch)
-                off = std::max(off, std::abs(back[ch] - want[ch]));
+            float want[3];
+            GradeLinearHdr(in, 2.0f, logLift, want);
+            const float scale = std::max({ want[0], want[1], want[2], 2e-3f });
+            off = std::max({ off, std::abs(got[i].r - want[0]) / scale, std::abs(got[i].g - want[1]) / scale,
+                             std::abs(got[i].b - want[2]) / scale });
         }
-        std::printf("log-spaced lattice (LatticeCoord 1): worst display error %.2e\n", off);
-        expect(off < 5e-3f, "the shader's LatticeFromDisplay does not match the CPU's");
+        std::printf("log-spaced lattice (LatticeCoord 1): worst error vs the CPU grade %.2e\n", off);
+        expect(off < 1e-2f, "the shader's LatticeFromDisplay does not match the CPU's");
     }
     // Display-referred frames: the exact grade (the cube is linear, so trilinear is exact), at full float precision since
     // the shader interpolates itself (2026-11-01; the sampler's 8-bit weights were ~1e-3 off). PQ against the reference

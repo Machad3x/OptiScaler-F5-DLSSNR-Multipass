@@ -220,13 +220,20 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float3 result = lerp(display, graded, saturate(strength));
     float3 encoded = EncodeFromDisplay01(result, white);
 
-    // Linear HDR: Neutwo's inverse is unbounded near display 1, so a look that sends a highlight to white (AgX and other
-    // view transforms do, on purpose) would hand back up to ~700x the white point -- flat silver patches once the game
-    // tonemaps them (RDR2 skin by a window, 2026-11-01). A grade may darken anything and brighten up to the white point,
-    // but never make a pixel brighter than it came in above that; the hue the look chose is kept.
+    // Linear HDR: Neutwo's inverse is unbounded and very steep near display 1, so a look that rolls a highlight off
+    // toward white (AgX and other view transforms do, on purpose) came back first squeezed, then surging (3x over half a
+    // stop), then up to ~700x the white point: contour bands and flat silver patches once the game tonemaps them (RDR2
+    // faces in a dark room, 2026-11-01). Above a knee on the handed value (display 0.80-0.95, about 0.75-2.4x white) the
+    // look's change is applied instead as a per-channel ratio of display-linear values to the game's own light: smooth,
+    // the look's colour kept, the highlight roll-off left to the game's tonemapper. Then a grade may darken anything and
+    // brighten up to the white point, but never make a pixel brighter than it came in above that.
     if (inputEncoding != kInputPq && colourIsLinearHdr != 0)
     {
         const float3 light = max(raw.rgb, 0.0);
+        const float knee = smoothstep(0.80, 0.95, max(display.r, max(display.g, display.b)));
+        const float3 ratio = (SrgbToLinear(result) + 1e-3) / (SrgbToLinear(display) + 1e-3);
+        encoded = lerp(encoded, light * ratio, knee);
+
         const float cap = max(max(light.r, max(light.g, light.b)), white);
         const float peak = max(encoded.r, max(encoded.g, encoded.b));
         if (peak > cap)
