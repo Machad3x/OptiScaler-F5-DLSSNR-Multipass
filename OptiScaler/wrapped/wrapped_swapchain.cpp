@@ -989,6 +989,8 @@ bool WrappedIDXGISwapChain4::PassesThrough() const
     return _otherWindow && State::Instance().currentFGSwapchain != nullptr;
 }
 
+bool WrappedIDXGISwapChain4::OwnsMenuCleanup() const { return !_otherWindow || (_presentedAsMain && !PassesThrough()); }
+
 //
 HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::QueryInterface(REFIID riid, void** ppvObject)
 {
@@ -1119,7 +1121,7 @@ ULONG STDMETHODCALLTYPE WrappedIDXGISwapChain4::Release()
         if (_libraryWindowed)
             FGHooks::ReleaseBorderless(this);
 
-        if (!bridgeOwns)
+        if (!bridgeOwns && OwnsMenuCleanup())
             MenuOverlayDx::CleanupRenderTarget(true, _handle);
 
         if (State::Instance().currentSwapchain == this)
@@ -1222,6 +1224,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
 
     if (PassesThrough())
         return _real->Present(SyncInterval, Flags);
+
+    _presentedAsMain = true;
 
     HRESULT result;
 
@@ -1369,13 +1373,10 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::GetDesc(DXGI_SWAP_CHAIN_DESC* 
 HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height,
                                                                 DXGI_FORMAT NewFormat, UINT SwapChainFlags)
 {
-    // Another window's chain (MarkOtherWindow): no HDR proxy, no frame generation or State work. The menu's buffers go
-    // in case it drew here while frame generation was away
+    // Another window's chain (MarkOtherWindow): no HDR proxy, no frame generation, menu or State work (the menu's
+    // cleanup is global, see OwnsMenuCleanup)
     if (PassesThrough())
-    {
-        MenuOverlayDx::CleanupRenderTarget(true, _handle);
         return _real->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
-    }
 
     // HDR output: a resize inside a resize on this thread (a window message the game answers with its own ResizeBuffers) is
     // refused; one from another thread waits for the running one (SdrToHdr::ProxyChainBase::Resize)
@@ -1650,6 +1651,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
     if (PassesThrough())
         return _real1->Present1(SyncInterval, Flags, pPresentParameters);
 
+    _presentedAsMain = true;
+
     HRESULT result;
 
     // A flip model chain refuses dirty rectangles (FLIP_DISCARD) and a scroll rectangle (both flip effects) with
@@ -1867,11 +1870,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
 {
     // As in ResizeBuffers
     if (PassesThrough())
-    {
-        MenuOverlayDx::CleanupRenderTarget(true, _handle);
         return _real3->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask,
                                       ppPresentQueue);
-    }
 
     // HDR output: a resize inside a resize on this thread (a window message the game answers with its own ResizeBuffers) is
     // refused; one from another thread waits for the running one (SdrToHdr::ProxyChainBase::Resize)

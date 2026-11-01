@@ -20,6 +20,7 @@
 
 #include "Hook_Utils.h"
 #include "FG_Hooks.h"
+#include "DxgiFactory_Hooks.h"
 #include "SwapchainCreateRule.h"
 
 #pragma intrinsic(_ReturnAddress)
@@ -469,7 +470,7 @@ static HRESULT hkD3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVE
 
     _skipDx11Create = false;
 
-    if (SUCCEEDED(result) && ppDevice != nullptr && *ppDevice != nullptr &&
+    if (SUCCEEDED(result) && !otherWindow && ppDevice != nullptr && *ppDevice != nullptr &&
         State::Instance().currentD3D12Device == nullptr)
     {
         LOG_INFO("Device captured");
@@ -527,6 +528,7 @@ static HRESULT hkD3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVE
             {
                 State::Instance().currentSwapchain = *ppSwapChain;
                 State::Instance().currentWrappedSwapchain = *ppSwapChain;
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
             }
 
             LOG_DEBUG("Created new WrappedIDXGISwapChain4: {0:X}, pDevice: {1:X}", (UINT64) *ppSwapChain,

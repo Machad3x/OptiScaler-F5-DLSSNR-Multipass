@@ -192,6 +192,8 @@ static FgWindow::Window DescribeWindow(HWND hwnd)
     if (!GetClientRect(hwnd, &client))
         client = {};
 
+    // The restored size is the window's rect (frame included), a little more than its client area: errs towards
+    // keeping frame generation where it is
     WINDOWPLACEMENT placement { sizeof(WINDOWPLACEMENT) };
     RECT restored {};
     if (minimized && GetWindowPlacement(hwnd, &placement))

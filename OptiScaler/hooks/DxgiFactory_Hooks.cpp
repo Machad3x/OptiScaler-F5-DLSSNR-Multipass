@@ -401,9 +401,7 @@ void DxgiFactoryHooks::NoteCreateStatus(HRESULT result, IDXGISwapChain* swapChai
     if (FAILED(swapChain->GetFullscreenState(&fullscreen, nullptr)))
         fullscreen = FALSE;
 
-    auto& state = State::Instance();
-    state.realExclusiveFullscreen = fullscreen != FALSE;
-    state.currentSwapchainDesc.Windowed = fullscreen == FALSE;
+    State::Instance().realExclusiveFullscreen = fullscreen != FALSE;
 
     LOG_INFO("Swapchain made with status {:X}, exclusive full screen: {}", (UINT) result, fullscreen != FALSE);
 }
@@ -903,7 +901,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
             }
 
             if (!otherWindow)
-                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) localDesc.OutputWindow);
@@ -1366,7 +1364,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
                 State::Instance().currentSwapchainDesc.BufferDesc.Format = hdrPlan.gameFormat; // the game's, not the HDR one
 
             if (!otherWindow)
-                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (uintptr_t) *ppSwapChain, (uintptr_t) hWnd);
 
@@ -1863,7 +1861,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnkno
             }
 
             if (!otherWindow)
-                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) localDesc.OutputWindow);
@@ -2196,7 +2194,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
                 realSC->GetDesc(&State::Instance().currentSwapchainDesc);
 
             if (!otherWindow)
-                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (uintptr_t) *ppSwapChain, (uintptr_t) hWnd);
 

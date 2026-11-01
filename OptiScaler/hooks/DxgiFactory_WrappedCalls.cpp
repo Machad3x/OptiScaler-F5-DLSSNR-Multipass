@@ -443,7 +443,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
             }
 
             if (!otherWindow)
-                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) localDesc.OutputWindow);
@@ -900,7 +900,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
                 State::Instance().currentSwapchainDesc.BufferDesc.Format = hdrPlan.gameFormat; // the game's, not the HDR one
 
             if (!otherWindow)
-                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+                DxgiFactoryHooks::NoteCreateStatus(result, realSC);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (uintptr_t) *ppSwapChain, (uintptr_t) hWnd);
 

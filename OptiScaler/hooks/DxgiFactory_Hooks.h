@@ -13,8 +13,8 @@ class DxgiFactoryHooks
     static void HookToDLSSGFactory(IDXGIFactory* pFactory);
 
     // After a swapchain was made with a success status other than S_OK (hooks/SwapchainCreateRule.h): a full-screen
-    // chain made while its window was not in front (DXGI_STATUS_OCCLUDED) is windowed. State's full-screen flag and the
-    // desc take what the chain really is. Nothing for S_OK.
+    // chain made while its window was not in front (DXGI_STATUS_OCCLUDED) is windowed. State's full-screen flag takes
+    // what the real chain (not a proxy or our wrapper) really is. Nothing for S_OK.
     static void NoteCreateStatus(HRESULT result, IDXGISwapChain* swapChain);
 
     // The D3D12 swapchain a bridged game presents through (the Vulkan present bridge, native/VkPresentBridge.cpp), made as a
