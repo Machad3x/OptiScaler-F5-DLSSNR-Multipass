@@ -1708,10 +1708,10 @@ static std::string ProfileLut(Config& c, const std::string& key, std::string& lu
         // the LUTs folder's own path cannot be held as text here: LUT off, as for a missing file
     }
 
-    // Which LUT it was: the Input LUT, or one layer of the post-NR stack (the other layers still apply).
+    // Which LUT it was: the Input LUT, or one layer of the F5LUT stack (the other layers still apply).
     std::string which = "Input LUT";
     if (!DlssNrProfiles::EqualNoCase(key, "LutFile") && !key.empty())
-        which = "Post-NR LUT " + key.substr(key.size() - 1);
+        which = "F5LUT " + key.substr(key.size() - 1);
 
     lut.clear();
     return which + " " + shown + " is not in OptiScaler\\LUTs: that LUT is off.";

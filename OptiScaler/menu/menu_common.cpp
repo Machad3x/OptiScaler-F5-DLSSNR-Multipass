@@ -6308,6 +6308,9 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     PopulateCombo("Force Reflex", config->FN_ForceReflex, reflex_modes);
 }
 
+// The F5LUT page. Its code lives with NR's menu (it also grades after NR); it runs on any upscaler's output.
+void MenuCommon::RenderF5LutSettings(RenderMenuContext& ctx) { DlssNr::RenderF5LutCard(ctx.config, ctx.menuResScale); }
+
 // HDR output for SDR games (output/SdrToHdr_*). Always shown, with or without an upscaler.
 void MenuCommon::RenderHdrOutputSettings(RenderMenuContext& ctx)
 {
@@ -8309,6 +8312,7 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
             ImGui::TreePop();
         }
 
+        navItem(Page::F5Lut);
         navItem(Page::Image);
         navItem(Page::OverlayLook);
         navItem(Page::Input);
@@ -8354,6 +8358,9 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
         case Page::Image:
             section(RenderActiveImageSettings);
             section(RenderHdrOutputSettings);
+            break;
+        case Page::F5Lut:
+            section(RenderF5LutSettings);
             break;
         case Page::Framerate:
             section(RenderFramerateLowLatency);

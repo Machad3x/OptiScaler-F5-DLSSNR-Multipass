@@ -92,7 +92,7 @@ Texture3D<float4> gLut : register(t1);
 #ifdef VK_MODE
 [[vk::binding(3, 0)]]
 #endif
-SamplerState gLutSampler : register(s0);
+SamplerState gLutSampler : register(s0); // unused since LutTrilinear; kept so every backend's binding layout stays
 #ifdef VK_MODE
 // LUT_ANY_FORMAT_TARGET: the post-NR stack grades the game's own image in place, whatever its format, so that
 // variant declares the format unknown (the device must allow storage writes without one). Left out, dxc would declare
@@ -167,6 +167,34 @@ float3 LatticeFromDisplay(float3 d)
     return saturate((log2(light + kLatticeFloor) - lo) / (log2(kLatticeMaxLight + kLatticeFloor) - lo));
 }
 
+// Trilinear between the 8 lattice points around uvw (0..1 over the lattice), with full float weights. The sampler's own
+// filtering weighs with 8-bit fractions on most GPUs (and the lattice used to be half floats): fine for a display
+// result, but on Linear HDR the result goes back through Neutwo's inverse, which near display 1 turns those steps into
+// visible bands in bright gradients (RDR2 skin, 2026-11-01). Same result as DlssNr_LutFile.h SampleLut.
+float3 LutTrilinear(float3 uvw)
+{
+    const int last = (int) max(lutSize, 2u) - 1;
+    const float3 p = saturate(uvw) * (float) last;
+    const int3 i0 = min((int3) floor(p), last - 1);
+    const int3 i1 = i0 + 1;
+    const float3 f = p - (float3) i0;
+
+    const float3 c000 = gLut.Load(int4(i0.x, i0.y, i0.z, 0)).rgb;
+    const float3 c100 = gLut.Load(int4(i1.x, i0.y, i0.z, 0)).rgb;
+    const float3 c010 = gLut.Load(int4(i0.x, i1.y, i0.z, 0)).rgb;
+    const float3 c110 = gLut.Load(int4(i1.x, i1.y, i0.z, 0)).rgb;
+    const float3 c001 = gLut.Load(int4(i0.x, i0.y, i1.z, 0)).rgb;
+    const float3 c101 = gLut.Load(int4(i1.x, i0.y, i1.z, 0)).rgb;
+    const float3 c011 = gLut.Load(int4(i0.x, i1.y, i1.z, 0)).rgb;
+    const float3 c111 = gLut.Load(int4(i1.x, i1.y, i1.z, 0)).rgb;
+
+    const float3 c00 = lerp(c000, c100, f.x);
+    const float3 c10 = lerp(c010, c110, f.x);
+    const float3 c01 = lerp(c001, c101, f.x);
+    const float3 c11 = lerp(c011, c111, f.x);
+    return lerp(lerp(c00, c10, f.y), lerp(c01, c11, f.y), f.z);
+}
+
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
@@ -187,12 +215,29 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float3 even = (clamped - domainMin) / span;
     const float3 uvw = latticeCoord == 1u ? LatticeFromDisplay(even) : even;
 
-    // Half-texel inset: texel i's centre sits at (i + 0.5) / lutSize, so the lattice's own corners land
-    // exactly on the texture's edge texels instead of bleeding into the clamp border.
-    const float lutSpan = max((float) lutSize, 2.0) - 1.0;
-    const float3 texCoord = (uvw * lutSpan + 0.5) / (float) lutSize;
-    const float3 graded = gLut.SampleLevel(gLutSampler, texCoord, 0).rgb;
+    const float3 graded = LutTrilinear(uvw);
 
     const float3 result = lerp(display, graded, saturate(strength));
-    gTarget[id.xy] = float4(EncodeFromDisplay01(result, white), raw.a);
+    float3 encoded = EncodeFromDisplay01(result, white);
+
+    // Linear HDR: Neutwo's inverse is unbounded and very steep near display 1, so a look that rolls a highlight off
+    // toward white (AgX and other view transforms do, on purpose) came back first squeezed, then surging (3x over half a
+    // stop), then up to ~700x the white point: contour bands and flat silver patches (RDR2 faces in a dark room,
+    // 2026-11-01). Where the handed value or the look's result is near white (peak display 0.80-0.95, blended in), the
+    // result goes back to light with the INPUT's own Neutwo scalar instead of its own: the encode's one scalar for all
+    // channels, so the look's colour holds (a black-and-white look greys a red highlight) and the light stays bounded --
+    // about the input's for a bright pixel, about the white point for a dark one -- with no clip. Exactly the input at
+    // strength 0; midtones and shadows go through the inverse as before. The same holds for NR's Finished Picture stage
+    // on an scRGB swapchain, where the picture is already tonemapped: the light handed back stays near the input's, so
+    // nothing there is pushed past what the game showed.
+    if (inputEncoding != kInputPq && colourIsLinearHdr != 0)
+    {
+        const float3 light = max(raw.rgb, 0.0) / white;
+        const float m = max(light.r, max(light.g, light.b));
+        const float back = m > 1e-6 ? m / Neutwo(m) : 1.0;
+        const float nearWhite = max(max(display.r, max(display.g, display.b)), max(result.r, max(result.g, result.b)));
+        encoded = lerp(encoded, SrgbToLinear(result) * (back * white), smoothstep(0.80, 0.95, nearWhite));
+    }
+
+    gTarget[id.xy] = float4(encoded, raw.a);
 }
