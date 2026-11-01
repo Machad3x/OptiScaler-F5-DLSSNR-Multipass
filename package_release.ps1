@@ -13,9 +13,10 @@
 # works on AMD/Intel). This script does not build it. Supplying the path is what opts it in; it never
 # replaces the default forwarder at the package root, only adds it under Optional\.
 #
-# -XefgCudaKit is the folder of a built xefg_cuda kit (xefg_cuda.dll, xefg_cuda.ini and Intel's signed
-# libxess_fg.dll; built from the private libxess-weights repo, not here). Its three files go into plugins\,
-# where FG Output F5Low loads xefg_cuda.dll by itself. Without it F5Low is greyed out in the menu.
+# -XefgCudaKit is the folder of a built xefg_cuda kit (xefg_cuda.dll + xefg_cuda.ini, built from the private
+# libxess-weights repo, not here). Both go into plugins\, where FG Output F5Low loads xefg_cuda.dll by itself; it hands
+# over to the Intel libxess_fg.dll the package already ships in OptiScaler\ (a kit's own copy is not staged). Without
+# it F5Low is greyed out in the menu.
 
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
@@ -335,7 +336,7 @@ Not validated on real AMD or Intel hardware.
 }
 
 if ($XefgCudaKit) {
-    $kitFiles = @('xefg_cuda.dll', 'xefg_cuda.ini', 'libxess_fg.dll')
+    $kitFiles = @('xefg_cuda.dll', 'xefg_cuda.ini')
     foreach ($f in $kitFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $XefgCudaKit $f) -PathType Leaf)) {
             throw "XefgCudaKit is missing ${f}: $XefgCudaKit"
@@ -355,10 +356,15 @@ if ($XefgCudaKit) {
         throw "REFUSING: xefg_cuda.dll appears to contain a local path or identifying string ($($cudaLeaks -join ', '))."
     }
 
-    # The fallback must be Intel's own file, unmodified: its signature says so.
-    $intelSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $XefgCudaKit 'libxess_fg.dll')
+    # xefg_cuda hands over to the package's own Intel library (OptiScaler\libxess_fg.dll, passed in by F5Low): it must
+    # be there, and Intel's own file, unmodified: its signature says so.
+    $intelLibrary = "$stage\OptiScaler\libxess_fg.dll"
+    if (-not (Test-Path -LiteralPath $intelLibrary -PathType Leaf)) {
+        throw "REFUSING: xefg_cuda needs OptiScaler\libxess_fg.dll in the package, and it is missing"
+    }
+    $intelSignature = Get-AuthenticodeSignature -LiteralPath $intelLibrary
     if ($intelSignature.Status -ne 'Valid' -or $intelSignature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Intel Corporation(,|$)') {
-        throw "REFUSING: libxess_fg.dll in the kit is not validly signed by Intel ($($intelSignature.Status))"
+        throw "REFUSING: OptiScaler\libxess_fg.dll is not validly signed by Intel ($($intelSignature.Status))"
     }
 
     $pluginsDir = "$stage\plugins"
@@ -367,7 +373,7 @@ if ($XefgCudaKit) {
         Copy-Item -LiteralPath (Join-Path $XefgCudaKit $f) -Destination "$pluginsDir\$f" -Force
     }
     Copy-Item -LiteralPath "$root\external\xess\LICENSE.txt" -Destination "$stage\Licenses\XeSS_LICENSE.txt" -Force
-    Write-Host "xefg_cuda: staged in plugins\ (xefg_cuda.dll, xefg_cuda.ini, libxess_fg.dll signed by Intel)"
+    Write-Host "xefg_cuda: staged in plugins\ (xefg_cuda.dll, xefg_cuda.ini; Intel library: OptiScaler\libxess_fg.dll)"
 }
 
 # Frame generation ships off and F5Low on its default generator: plugins\xefg_cuda.dll is only loaded when a player

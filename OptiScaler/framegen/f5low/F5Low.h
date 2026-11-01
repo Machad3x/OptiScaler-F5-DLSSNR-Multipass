@@ -15,6 +15,10 @@ void SetStartupNvidia(bool nvidia);
 // <plugins folder>\xefg_cuda.dll
 std::wstring LibraryPath();
 
+// The Intel libxess_fg.dll OptiScaler's XeFG output would use (XeFGPath, else OptiScaler's folder), for xefg_cuda;
+// empty when there is none
+std::wstring IntelLibraryPath();
+
 // Whether F5Low can run on this PC (NVIDIA GPU, library present), with the reason when not.
 Availability Available();
 
