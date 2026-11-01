@@ -3,6 +3,7 @@
 #include "SwapchainCreateRule.h"
 
 #include "FG_Hooks.h"
+#include "DxgiFactory_Hooks.h"
 #include "D3D11_Hooks.h"
 #include "D3D12_Hooks.h"
 
@@ -436,6 +437,9 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
                 State::Instance().screenWidth = static_cast<float>(localDesc.BufferDesc.Width);
                 State::Instance().screenHeight = static_cast<float>(localDesc.BufferDesc.Height);
             }
+
+            if (!otherWindow)
+                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) localDesc.OutputWindow);
@@ -884,6 +888,9 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
 
             if (!otherWindow && hdrPlan.proxied)
                 State::Instance().currentSwapchainDesc.BufferDesc.Format = hdrPlan.gameFormat; // the game's, not the HDR one
+
+            if (!otherWindow)
+                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (uintptr_t) *ppSwapChain, (uintptr_t) hWnd);
 

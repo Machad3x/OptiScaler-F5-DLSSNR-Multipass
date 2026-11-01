@@ -8,8 +8,6 @@
 
 #include "../OptiScaler/misc/Fsr4AsicRule.h"
 
-#include <cstdio>
-
 using namespace Fsr4Asic;
 using device_info::AsicType;
 

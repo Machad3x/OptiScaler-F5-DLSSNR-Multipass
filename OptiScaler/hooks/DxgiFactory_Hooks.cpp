@@ -391,6 +391,23 @@ void DxgiFactoryHooks::HookToFactory(IDXGIFactory* pFactory)
     }
 }
 
+void DxgiFactoryHooks::NoteCreateStatus(HRESULT result, IDXGISwapChain* swapChain)
+{
+    if (result == S_OK || swapChain == nullptr)
+        return;
+
+    BOOL fullscreen = FALSE;
+
+    if (FAILED(swapChain->GetFullscreenState(&fullscreen, nullptr)))
+        fullscreen = FALSE;
+
+    auto& state = State::Instance();
+    state.realExclusiveFullscreen = fullscreen != FALSE;
+    state.currentSwapchainDesc.Windowed = fullscreen == FALSE;
+
+    LOG_INFO("Swapchain made with status {:X}, exclusive full screen: {}", (UINT) result, fullscreen != FALSE);
+}
+
 HRESULT DxgiFactoryHooks::CreateDx12BridgeSwapChain(IDXGIFactory* factory, ID3D12CommandQueue* queue,
                                                     DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain4** out, bool* realFG,
                                                     bool systemFactory)
@@ -880,6 +897,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
                 State::Instance().screenHeight = static_cast<float>(localDesc.BufferDesc.Height);
             }
 
+            if (!otherWindow)
+                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) localDesc.OutputWindow);
 
@@ -1333,6 +1353,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
             if (!otherWindow && hdrPlan.proxied)
                 State::Instance().currentSwapchainDesc.BufferDesc.Format = hdrPlan.gameFormat; // the game's, not the HDR one
+
+            if (!otherWindow)
+                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (uintptr_t) *ppSwapChain, (uintptr_t) hWnd);
 
@@ -1825,6 +1848,9 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnkno
                 State::Instance().screenHeight = static_cast<float>(localDesc.BufferDesc.Height);
             }
 
+            if (!otherWindow)
+                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
+
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) localDesc.OutputWindow);
 
@@ -2151,6 +2177,9 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
 
             if (!otherWindow)
                 realSC->GetDesc(&State::Instance().currentSwapchainDesc);
+
+            if (!otherWindow)
+                DxgiFactoryHooks::NoteCreateStatus(result, *ppSwapChain);
 
             LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (uintptr_t) *ppSwapChain, (uintptr_t) hWnd);
 

@@ -19,6 +19,7 @@
 #include <dxgi1_6.h>
 
 #include "Hook_Utils.h"
+#include "SwapchainCreateRule.h"
 
 #pragma intrinsic(_ReturnAddress)
 
@@ -463,14 +464,15 @@ static HRESULT hkD3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVE
 
     _skipDx11Create = false;
 
-    if (result == S_OK && *ppDevice != nullptr && State::Instance().currentD3D12Device == nullptr)
+    if (SUCCEEDED(result) && ppDevice != nullptr && *ppDevice != nullptr &&
+        State::Instance().currentD3D12Device == nullptr)
     {
         LOG_INFO("Device captured");
         HookToDeviceLocal(*ppDevice);
     }
 
-    if (result == S_OK && pSwapChainDesc != nullptr && ppSwapChain != nullptr && *ppSwapChain != nullptr &&
-        ppDevice != nullptr && *ppDevice != nullptr)
+    if (SwapchainCreate::Created(result, ppSwapChain) && pSwapChainDesc != nullptr && ppDevice != nullptr &&
+        *ppDevice != nullptr)
     {
         // check for SL proxy
         IDXGISwapChain* realSC = nullptr;
@@ -515,7 +517,7 @@ static HRESULT hkD3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVE
         }
     }
 
-    if (result == S_OK && ppDevice != nullptr && *ppDevice != nullptr)
+    if (SUCCEEDED(result) && ppDevice != nullptr && *ppDevice != nullptr)
         State::Instance().d3d11Devices.push_back(*ppDevice);
 
     LOG_FUNC_RESULT(result);

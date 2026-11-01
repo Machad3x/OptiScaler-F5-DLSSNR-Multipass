@@ -23,7 +23,7 @@ struct Asic
     uint32_t family, min, max;
 };
 
-constexpr Asic navi10 { familyNv, 0x01, 0x0A };
+// Navi 10 (0x01-0x0A) is in no list: no hardware INT8 (Rdna1HasInt8)
 constexpr Asic navi12 { familyNv, 0x0A, 0x14 };
 constexpr Asic navi14 { familyNv, 0x14, 0x28 };
 constexpr Asic navi21 { familyNv, 0x28, 0x32 };
