@@ -126,7 +126,8 @@ inline Availability CheckAvailable(bool nvidia, bool libraryFound, bool intelLib
 // What f5low.dll says it is doing (its export f5lowGetStatus, optional in older builds).
 enum class RunState
 {
-    Unknown = -1,   // no such export (an older f5low.dll), or f5low.dll not loaded
+    NotLoaded = -2, // f5low.dll is not loaded (yet)
+    Unknown = -1,   // loaded, but without the export (an older f5low.dll)
     Undecided = 0,  // no context made yet
     Own = 1,        // its own generator runs
     HandedOver = 2, // Intel's libxess_fg.dll runs (up to 4x)
@@ -143,6 +144,8 @@ inline const char* RunStateLabel(RunState state)
 {
     switch (state)
     {
+    case RunState::NotLoaded:
+        return "f5low.dll not loaded yet";
     case RunState::Undecided:
         return "starting";
     case RunState::Own:

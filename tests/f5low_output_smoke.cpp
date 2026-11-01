@@ -81,6 +81,7 @@ int main()
     CHECK(F5Low::RunStateFromCode(4) == F5Low::RunState::Unknown);
     CHECK(F5Low::RunStateFromCode(-1) == F5Low::RunState::Unknown);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unknown), "older") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::NotLoaded), "not loaded") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::HandedOver), "Intel") != nullptr);
 
     if (fails == 0)

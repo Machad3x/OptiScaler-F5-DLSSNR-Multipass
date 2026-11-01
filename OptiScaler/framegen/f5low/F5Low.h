@@ -19,11 +19,11 @@ std::wstring LibraryPath();
 // empty when there is none
 std::wstring IntelLibraryPath();
 
-// What f5low.dll reports (f5lowGetStatus) with its one-line reason; Unknown when it is not loaded or has no such
-// export.
+// What f5low.dll reports (f5lowGetStatus) with its one-line reason. Asks the module LoadLibraryForOutput loaded;
+// NotLoaded before that, Unknown when that f5low.dll has no such export.
 struct Status
 {
-    RunState state = RunState::Unknown;
+    RunState state = RunState::NotLoaded;
     std::string reason;
 };
 Status QueryStatus();

@@ -14,6 +14,7 @@
 namespace
 {
 std::atomic<bool> startupNvidia { false };
+std::atomic<HMODULE> loadedModule { nullptr }; // the f5low.dll LoadLibraryForOutput loaded
 }
 
 void F5Low::SetStartupNvidia(bool nvidia) { startupNvidia.store(nvidia, std::memory_order_release); }
@@ -34,9 +35,10 @@ F5Low::Availability F5Low::Available()
 F5Low::Status F5Low::QueryStatus()
 {
     Status status;
-    const HMODULE module = GetModuleHandleW(kLibraryFile);
+    const HMODULE module = loadedModule.load(std::memory_order_acquire);
     if (module == nullptr)
         return status;
+    status.state = RunState::Unknown;
 
     using PFN_f5lowGetStatus = int(__cdecl*)(char*, int);
     const auto getStatus = (PFN_f5lowGetStatus) GetProcAddress(module, "f5lowGetStatus");
@@ -64,9 +66,9 @@ void F5Low::LogStatus()
 void F5Low::ReportFailure(const char* what)
 {
     static std::atomic<bool> shown { false };
-    LOG_ERROR("F5Low: {}", what);
     if (shown.exchange(true))
         return;
+    LOG_ERROR("F5Low: {}", what);
 
     ImGuiToast notification({ ImGuiToastType::Warning, 15000,
                               "F5Low could not start its frame generation, so no frames are generated.\nSwitch FG "
@@ -135,7 +137,10 @@ HMODULE F5Low::LoadLibraryForOutput()
     if (module == nullptr)
         LOG_ERROR("F5Low: could not load {} (Win32 {})", wstring_to_string(path), GetLastError());
     else
+    {
+        loadedModule.store(module, std::memory_order_release);
         LOG_INFO("F5Low: loaded {}", wstring_to_string(path));
+    }
     return module;
 }
 
