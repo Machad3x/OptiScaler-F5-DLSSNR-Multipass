@@ -46,6 +46,55 @@ int main()
     check(!SurfacesStale(was, now, was, now), "the swap 27 -> 90: kept");
     check(SurfacesStale(was, kRgba16f, was, kRgba16f), "27 -> RGBA16F: rebuilt");
 
+    // Neverness to Everness flips its pre-SR colour RGBA16F <-> R11G11B10F (10 <-> 26) during its loading splash.
+    using DlssNr::IsFloatFlip;
+    check(IsFloatFlip(kRgba16f, kR11g11b10) && IsFloatFlip(kR11g11b10, kRgba16f), "10 <-> 26 is a float flip");
+    check(!IsFloatFlip(kR11g11b10, kR11g11b10), "no change is no flip");
+    check(!IsFloatFlip(0, kR11g11b10), "the first frame is no flip");
+    check(!IsFloatFlip(kRgba8, kRgba16f) && !IsFloatFlip(kRgb10a2, kR11g11b10), "other pairs are not");
+    check(CanonicalColourFormat(kR11g11b10) == kR11g11b10, "before a flip R11G11B10F keeps its surfaces");
+    check(CanonicalColourFormat(kR11g11b10, true) == kRgba16f, "after a flip R11G11B10F gets RGBA16F surfaces");
+    check(CanonicalColourFormat(kRgba16f, true) == kRgba16f, "after a flip RGBA16F stays");
+    check(CanonicalColourFormat(kBgra8, true) == kRgba8 && CanonicalColourFormat(kRgb10a2, true) == kRgb10a2,
+          "the flag moves nothing else");
+    {
+        const int a = CanonicalColourFormat(kRgba16f, true), b = CanonicalColourFormat(kR11g11b10, true);
+        check(!SurfacesStale(a, b, a, b) && !SurfacesStale(b, a, b, a), "after the flip, 10 <-> 26 keeps the model");
+    }
+
+    // RebuildGuard: three rebuilds within the window stand NR down; it runs again once one set-up held kSettle calls.
+    using DlssNr::RebuildGuard;
+    {
+        RebuildGuard g;
+        int ran = 0;
+        // An alternating game: every call asks for the other set-up, so each would rebuild.
+        for (int i = 0; i < 200; ++i)
+            ran += g.Allow(i & 1 ? 2 : 1, true) ? 1 : 0;
+        check(ran == (int) RebuildGuard::kLimit - 1, "alternating: two rebuilds run, then NR stands down");
+        check(g.standing, "alternating: still standing");
+        // The game settles on set-up 1: the first kSettle calls still wait, then it runs (and builds once).
+        int waited = 0;
+        while (!g.Allow(1, true) && waited < 100)
+            ++waited;
+        check(waited == (int) RebuildGuard::kSettle, "settled: runs after kSettle steady calls");
+        check(!g.standing, "settled: no longer standing");
+        check(g.Allow(1, false), "settled: steady frames run");
+    }
+    {
+        RebuildGuard g;
+        bool allRan = true;
+        // A game that changes resolution now and then (one rebuild every 100 calls) is never stood down.
+        for (int i = 0; i < 1000; ++i)
+            allRan = g.Allow(i / 100, i % 100 == 0 && i > 0) && allRan;
+        check(allRan && !g.standing, "occasional rebuilds: never stood down");
+    }
+    {
+        RebuildGuard g;
+        for (int i = 0; i < 500; ++i)
+            g.Allow(7, false);
+        check(!g.standing, "steady game: never stood down");
+    }
+
     // The reviewer's probe: the ordinary size moved 960x544 -> 976x544 while the packed one did not.
     check(DlssNr::SizeStale(960, 544, 976, 544), "ordinary size moved, packed size did not");
     check(DlssNr::SizeStale(976, 544, 976, 560), "height moved");

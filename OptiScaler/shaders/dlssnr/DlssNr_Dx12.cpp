@@ -559,6 +559,11 @@ struct NrState
     // The game's last output format, to say once that it swaps RGBA8 and BGRA8 (the surfaces and model are kept)
     DXGI_FORMAT lastGameFormat = DXGI_FORMAT_UNKNOWN;
     bool saidFormatSwap = false;
+    // The game has flipped between RGBA16F and R11G11B10F: our surfaces stay RGBA16F for both (DlssNr_SurfaceFormats.h)
+    bool floatFlipSeen = false;
+
+    // Stands NR down while the game's frames would rebuild the model on every call (DlssNr_SurfaceFormats.h)
+    DlssNr::RebuildGuard rebuildGuard;
 };
 
 NrState g_nr;
@@ -566,7 +571,8 @@ NrState g_nr;
 // DlssNr_SurfaceFormats.h takes no Windows headers and spells these formats as numbers
 static_assert(DXGI_FORMAT_R8G8B8A8_TYPELESS == 27 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&
               DXGI_FORMAT_R8G8B8A8_UNORM_SRGB == 29 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
-              DXGI_FORMAT_B8G8R8A8_TYPELESS == 90 && DXGI_FORMAT_B8G8R8A8_UNORM_SRGB == 91);
+              DXGI_FORMAT_B8G8R8A8_TYPELESS == 90 && DXGI_FORMAT_B8G8R8A8_UNORM_SRGB == 91 &&
+              DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R11G11B10_FLOAT == 26);
 
 // Automatic's own base white point (PreExposure / its metered exposure, never the followed game's), from the CPU
 // readbacks a few frames behind the shader's live value. 0 when there is no reading yet.
@@ -2453,6 +2459,8 @@ void SwapView(ViewState& v)
     NR_VIEW_SWAP(builtAutoMask);
     NR_VIEW_SWAP(settledAt);
     NR_VIEW_SWAP(lastGameFormat);
+    NR_VIEW_SWAP(floatFlipSeen);
+    NR_VIEW_SWAP(rebuildGuard);
 #undef NR_VIEW_SWAP
 
     namespace ec = EdgeCompression;
@@ -3676,10 +3684,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     }
 
     const D3D12_RESOURCE_DESC desc = target->GetDesc();
-    // Our surfaces' colour format: the game's, with BGRA8 made RGBA8 (DlssNr_SurfaceFormats.h). A game that swaps the
-    // two keeps one set of surfaces, one model feature and its history. Only the surfaces copied straight to or from
-    // `target` use desc.Format and check it themselves (activeColor, lutScratch, heldColor, hdrCopy without a UAV).
-    const auto colourFormat = (DXGI_FORMAT) DlssNr::CanonicalColourFormat((int) desc.Format);
+    // Our surfaces' colour format: the game's, with BGRA8 made RGBA8, and R11G11B10F made RGBA16F once the game flipped
+    // between the two (DlssNr_SurfaceFormats.h). A game that swaps them keeps one set of surfaces, one model feature
+    // and its history. Only the surfaces copied straight to or from `target` use desc.Format and check it themselves
+    // (activeColor, lutScratch, heldColor, hdrCopy without a UAV).
     {
         auto& lastGameFormat = g_nr.lastGameFormat;
 
@@ -3692,8 +3700,17 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                      (int) lastGameFormat, (int) desc.Format);
         }
 
+        if (!g_nr.floatFlipSeen && DlssNr::IsFloatFlip((int) lastGameFormat, (int) desc.Format))
+        {
+            g_nr.floatFlipSeen = true;
+            LOG_INFO("DLSS-NR: the game's colour changes between format {} and {} (RGBA16F/R11G11B10F); NR's surfaces "
+                     "stay RGBA16F for both, the model is built once more and then kept",
+                     (int) lastGameFormat, (int) desc.Format);
+        }
+
         lastGameFormat = desc.Format;
     }
+    const auto colourFormat = (DXGI_FORMAT) DlssNr::CanonicalColourFormat((int) desc.Format, g_nr.floatFlipSeen);
     const auto active =
         frame.BeforeUpscale
             ? DlssNr::PreSrColorExtent(desc, frame.RenderSubrectWidth, frame.RenderSubrectHeight,
@@ -3943,6 +3960,50 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // uncompressed path would have shown the model (mode 103), which is built below the way that path builds it.
     const bool replaceCorrection =
         spatial && !superiorPacked && DlssNrProxyCurve::IsReplace(cfg.DlssNrReversibleMode.value_or_default());
+
+    // A game whose frames ask for a different model on every call (two formats or sizes alternating) would have it
+    // rebuilt each time, a long stall per frame: NR stands down until the game settles on one
+    // (DlssNr_SurfaceFormats.h).
+    {
+        const DXGI_FORMAT haveModel = g_nr.output != nullptr ? g_nr.output->GetDesc().Format : DXGI_FORMAT_UNKNOWN;
+        const DXGI_FORMAT haveColour =
+            g_nr.colorCopy != nullptr ? g_nr.colorCopy->GetDesc().Format : DXGI_FORMAT_UNKNOWN;
+        const bool wouldRebuild =
+            DlssNr::SurfacesStale((int) haveModel, (int) modelFormat, (int) haveColour, (int) colourFormat) ||
+            (g_nr.feature != nullptr && (g_nr.width != width || g_nr.height != height || g_nr.workWidth != modelWidth ||
+                                         g_nr.workHeight != modelHeight || g_nr.beforeUpscale != frame.BeforeUpscale ||
+                                         g_nr.rayReconstruction != frame.RayReconstruction));
+
+        unsigned long long setup = 1469598103934665603ull;
+        for (const unsigned long long part :
+             { (unsigned long long) modelFormat, (unsigned long long) colourFormat, (unsigned long long) width,
+               (unsigned long long) height, (unsigned long long) modelWidth, (unsigned long long) modelHeight,
+               (unsigned long long) frame.BeforeUpscale, (unsigned long long) frame.RayReconstruction })
+            setup = (setup ^ part) * 1099511628211ull;
+
+        auto& guard = g_nr.rebuildGuard;
+        const bool wasStanding = guard.standing;
+        const bool run = guard.Allow(setup, wouldRebuild);
+
+        if (guard.standing != wasStanding)
+        {
+            if (guard.standing)
+                LOG_WARN("DLSS-NR: the game asked for a different model {} times within {} calls (format, size or "
+                         "placement); NR stands down until it settles",
+                         DlssNr::RebuildGuard::kLimit, DlssNr::RebuildGuard::kWindow);
+            else
+                LOG_INFO("DLSS-NR: the game settled, NR runs again");
+        }
+
+        if (!run)
+        {
+            // The frames passed untouched break the history
+            g_nr.reset = true;
+            ReportSkipOnce("the game kept changing the model it needs (format, size or placement)");
+            device->Release();
+            return;
+        }
+    }
 
     ReleaseSurfacesIfFormatChanged(modelFormat, colourFormat);
 
