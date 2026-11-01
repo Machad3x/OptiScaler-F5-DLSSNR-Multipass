@@ -56,6 +56,19 @@ int main()
     CHECK(!IsOtherWindow(true, game, { nullptr, true, splash }));
     CHECK(!IsOtherWindow(true, { nullptr, true, fullHd }, { otherHwnd, true, splash }));
 
+    // A minimized window counts its restored size, not its empty client area
+    CHECK(FgWindow::WindowArea(false, 1920, 1080, 0, 0) == fullHd);
+    CHECK(FgWindow::WindowArea(true, 0, 0, 1920, 1080) == fullHd);
+    CHECK(FgWindow::WindowArea(true, 1920, 1080, 0, 0) == 0); // no restored size known
+    CHECK(FgWindow::WindowArea(false, -5, 1080, 0, 0) == 0);  // never negative
+
+    // Game minimized by Alt+Tab (still shown): a crash reporter or overlay popup does not take frame generation
+    const Window minimizedGame { gameHwnd, true, FgWindow::WindowArea(true, 0, 0, 1920, 1080) };
+    CHECK(IsOtherWindow(true, minimizedGame, { otherHwnd, true, splash }));
+    // ... with its client area alone it would have (the bug this guards)
+    CHECK(!IsOtherWindow(true, { gameHwnd, true, FgWindow::WindowArea(false, 0, 0, 1920, 1080) },
+                         { otherHwnd, true, splash }));
+
     // Compile-time too
     static_assert(IsOtherWindow(true, Window { &a, true, 100 }, Window { &b, true, 50 }));
     static_assert(!IsOtherWindow(true, Window { &a, false, 100 }, Window { &b, true, 50 }));

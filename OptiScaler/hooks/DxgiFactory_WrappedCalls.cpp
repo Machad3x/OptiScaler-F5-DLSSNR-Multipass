@@ -246,7 +246,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
         if (pDevice->QueryInterface(IID_PPV_ARGS(&device)) == S_OK)
         {
             D3D11Hooks::HookToDevice(device);
-            State::Instance().currentD3D11Device = device;
+            if (!otherWindow)
+                State::Instance().currentD3D11Device = device;
 
             if (!_skipFGSwapChainCreation && !otherWindow && ShouldCreateDx11wDx12Swapchain())
             {
@@ -308,7 +309,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
                         State::Instance().currentSwapchainDesc = fgDesc;
                         State::Instance().currentRealSwapchain = realDx11SwapChain;
                         State::Instance().currentFGSwapchain = fgSwapChain4;
-                        State::Instance().currentD3D11Device = device;
+                        if (!otherWindow)
+                            State::Instance().currentD3D11Device = device;
                         State::Instance().currentD3D12Device = WithDx12::GetD3D12Device();
                         State::Instance().currentCommandQueue = WithDx12::GetD3D12CommandQueue();
                         State::Instance().swapchainInteropApi = SwapchainInteropApi::Dx11wDx12;
@@ -371,7 +373,9 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
                                localDesc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         hdrRequest.hwnd = localDesc.OutputWindow;
         hdrRequest.factory = realFactory;
-        SdrToHdr::Plan hdrPlan = SdrToHdr::PrepareCreate(hdrRequest, localDesc.BufferDesc.Format);
+        // Another window: HDR output leaves its chain alone
+        SdrToHdr::Plan hdrPlan =
+            otherWindow ? SdrToHdr::Plan {} : SdrToHdr::PrepareCreate(hdrRequest, localDesc.BufferDesc.Format);
         SdrToHdr::ScopedProxiedCreate hdrScope(hdrPlan.proxied);
         // The frame generation library asked for exclusive full screen: its HDR chain is made windowed
         const BOOL hdrGameWindowed = localDesc.Windowed;
@@ -432,7 +436,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
             if (!Util::CheckForRealObject(__FUNCTION__, pDevice, (IUnknown**) &realDevice))
                 realDevice = pDevice;
 
-            if (Util::GetProcessWindow() == localDesc.OutputWindow)
+            if (!otherWindow && Util::GetProcessWindow() == localDesc.OutputWindow)
             {
                 State::Instance().screenWidth = static_cast<float>(localDesc.BufferDesc.Width);
                 State::Instance().screenHeight = static_cast<float>(localDesc.BufferDesc.Height);
@@ -450,6 +454,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
                 *ppSwapChain =
                     new WrappedIDXGISwapChain4(realSC, realDevice, localDesc.OutputWindow, localDesc.Flags, false, false,
                                            &hdrPlan);
+                if (otherWindow)
+                    static_cast<WrappedIDXGISwapChain4*>(*ppSwapChain)->MarkOtherWindow();
 
                 // Set as currentSwapchain is FG is disabled
                 if (!_skipFGSwapChainCreation && !otherWindow)
@@ -687,7 +693,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
         if (pDevice->QueryInterface(IID_PPV_ARGS(&device)) == S_OK)
         {
             D3D11Hooks::HookToDevice(device);
-            State::Instance().currentD3D11Device = device;
+            if (!otherWindow)
+                State::Instance().currentD3D11Device = device;
 
             if (!_skipFGSwapChainCreation && !otherWindow && ShouldCreateDx11wDx12Swapchain())
             {
@@ -753,7 +760,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
                         State::Instance().currentSwapchainDesc.OutputWindow = hWnd;
                         State::Instance().currentRealSwapchain = realDx11SwapChain1;
                         State::Instance().currentFGSwapchain = fgSwapChain4;
-                        State::Instance().currentD3D11Device = device;
+                        if (!otherWindow)
+                            State::Instance().currentD3D11Device = device;
                         State::Instance().currentD3D12Device = WithDx12::GetD3D12Device();
                         State::Instance().currentCommandQueue = WithDx12::GetD3D12CommandQueue();
                         State::Instance().swapchainInteropApi = SwapchainInteropApi::Dx11wDx12;
@@ -820,7 +828,9 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
                                localDesc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         hdrRequest.hwnd = hWnd;
         hdrRequest.factory = realFactory;
-        SdrToHdr::Plan hdrPlan = SdrToHdr::PrepareCreate(hdrRequest, localDesc.Format);
+        // Another window: HDR output leaves its chain alone
+        SdrToHdr::Plan hdrPlan =
+            otherWindow ? SdrToHdr::Plan {} : SdrToHdr::PrepareCreate(hdrRequest, localDesc.Format);
         SdrToHdr::ScopedProxiedCreate hdrScope(hdrPlan.proxied);
         // An older (bitblt) chain is made flip model for HDR (the wrapper keeps telling the game what it asked for)
         SdrToHdr::ApplySwapDesc(hdrPlan, localDesc.SwapEffect, localDesc.BufferCount, localDesc.Flags);
@@ -877,7 +887,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
             if (!Util::CheckForRealObject(__FUNCTION__, pDevice, (IUnknown**) &readDevice))
                 readDevice = pDevice;
 
-            if (Util::GetProcessWindow() == hWnd)
+            if (!otherWindow && Util::GetProcessWindow() == hWnd)
             {
                 State::Instance().screenWidth = static_cast<float>(localDesc.Width);
                 State::Instance().screenHeight = static_cast<float>(localDesc.Height);
@@ -899,6 +909,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
             {
                 *ppSwapChain =
                     new WrappedIDXGISwapChain4(realSC, readDevice, hWnd, localDesc.Flags, false, false, &hdrPlan);
+                if (otherWindow)
+                    static_cast<WrappedIDXGISwapChain4*>(*ppSwapChain)->MarkOtherWindow();
 
                 LOG_DEBUG("Created new WrappedIDXGISwapChain4: {0:X}, pDevice: {1:X}", (uintptr_t) *ppSwapChain,
                           (uintptr_t) pDevice);

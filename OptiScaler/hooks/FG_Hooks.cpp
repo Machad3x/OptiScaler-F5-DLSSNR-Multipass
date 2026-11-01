@@ -186,29 +186,56 @@ static FgWindow::Window DescribeWindow(HWND hwnd)
 
     window.shown = IsWindowVisible(hwnd) != FALSE;
 
-    RECT rect {};
-    if (GetClientRect(hwnd, &rect))
-        window.area = (int64_t) (rect.right - rect.left) * (rect.bottom - rect.top);
+    const bool minimized = IsIconic(hwnd) != FALSE;
+
+    RECT client {};
+    if (!GetClientRect(hwnd, &client))
+        client = {};
+
+    WINDOWPLACEMENT placement { sizeof(WINDOWPLACEMENT) };
+    RECT restored {};
+    if (minimized && GetWindowPlacement(hwnd, &placement))
+        restored = placement.rcNormalPosition;
+
+    window.area = FgWindow::WindowArea(minimized, client.right - client.left, client.bottom - client.top,
+                                       restored.right - restored.left, restored.bottom - restored.top);
 
     return window;
 }
 
+// The window frame generation's live swapchain is on: SetFGSwapchain's, or the window of the D3D11 interop's plain
+// D3D12 chain (SetDx12InteropPresentSC) when that one stands in as currentFGSwapchain. Null without one.
+static HWND LiveFgWindow(HWND fgHwnd, IDXGISwapChain* interopSC, HWND interopHwnd)
+{
+    auto* live = State::Instance().currentFGSwapchain;
+
+    if (live == nullptr)
+        return nullptr;
+
+    return interopSC != nullptr && live == interopSC ? interopHwnd : fgHwnd;
+}
+
 bool FGHooks::IsOtherWindowThanFG(HWND hwnd)
 {
-    const bool live = State::Instance().currentFGSwapchain != nullptr;
-
-    if (!live || hwnd == nullptr || hwnd == _hwnd)
+    // The Vulkan bridge's chain: its own call is not guarded, and the library's inner creates for it come through the
+    // guarded hooks inside ScopedBridgeCreate
+    if (_bridgeCreateDepth > 0)
         return false;
 
-    const auto fg = DescribeWindow(_hwnd);
+    const HWND fgHwnd = LiveFgWindow(_hwnd, _dx12InteropPresentSC, _dx12InteropPresentHwnd);
+
+    if (fgHwnd == nullptr || hwnd == nullptr || hwnd == fgHwnd)
+        return false;
+
+    const auto fg = DescribeWindow(fgHwnd);
     const auto requested = DescribeWindow(hwnd);
 
-    if (!FgWindow::IsOtherWindow(live, fg, requested))
+    if (!FgWindow::IsOtherWindow(true, fg, requested))
         return false;
 
     LOG_WARN("Frame generation's swapchain lives on window {:X} ({} px), window {:X} ({} px) gets a plain swapchain "
              "and leaves frame generation's state alone",
-             (size_t) _hwnd, fg.area, (size_t) hwnd, requested.area);
+             (size_t) fgHwnd, fg.area, (size_t) hwnd, requested.area);
 
     return true;
 }

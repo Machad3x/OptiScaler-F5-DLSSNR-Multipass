@@ -19,6 +19,7 @@
 #include <dxgi1_6.h>
 
 #include "Hook_Utils.h"
+#include "FG_Hooks.h"
 #include "SwapchainCreateRule.h"
 
 #pragma intrinsic(_ReturnAddress)
@@ -421,7 +422,11 @@ static HRESULT hkD3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVE
     // either: the display is found on a plain one by the window.
     SdrToHdr::Plan hdrPlan;
 
-    if (pSwapChainDesc != nullptr)
+    // Another window while frame generation's swapchain lives (FGHooks::IsOtherWindowThanFG): a plain chain, no HDR
+    // output, State left alone
+    const bool otherWindow = pSwapChainDesc != nullptr && FGHooks::IsOtherWindowThanFG(pSwapChainDesc->OutputWindow);
+
+    if (pSwapChainDesc != nullptr && !otherWindow)
     {
         SdrToHdr::CreateRequest hdrRequest;
         hdrRequest.format = localDesc.BufferDesc.Format;
@@ -479,38 +484,50 @@ static HRESULT hkD3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVE
         if (!Util::CheckForRealObject(__FUNCTION__, *ppSwapChain, (IUnknown**) &realSC))
             realSC = *ppSwapChain;
 
-        State::Instance().currentRealSwapchain = realSC;
+        if (!otherWindow)
+            State::Instance().currentRealSwapchain = realSC;
 
         IUnknown* realDevice = nullptr;
         if (!Util::CheckForRealObject(__FUNCTION__, *ppDevice, (IUnknown**) &realDevice))
             realDevice = *ppDevice;
 
-        State::Instance().screenWidth = static_cast<float>(pSwapChainDesc->BufferDesc.Width);
-        State::Instance().screenHeight = static_cast<float>(pSwapChainDesc->BufferDesc.Height);
+        if (!otherWindow)
+        {
+            State::Instance().screenWidth = static_cast<float>(pSwapChainDesc->BufferDesc.Width);
+            State::Instance().screenHeight = static_cast<float>(pSwapChainDesc->BufferDesc.Height);
+        }
 
         LOG_DEBUG("Created new swapchain: {0:X}, hWnd: {1:X}", (UINT64) *ppSwapChain,
                   (UINT64) pSwapChainDesc->OutputWindow);
 
-        if (State::Instance().currentWrappedSwapchain == *ppSwapChain)
+        // A nested hook (the DXGI factory's) wrapped it first. Asked of the chain itself: for another window that hook
+        // leaves currentWrappedSwapchain alone, so comparing with it would wrap the wrapper again
+        WrappedIDXGISwapChain4* nested = nullptr;
+
+        if ((*ppSwapChain)->QueryInterface(IID_PPV_ARGS(&nested)) == S_OK)
         {
-            LOG_DEBUG("Same as current wrapped swapchain, skipping wrapping");
+            LOG_DEBUG("Already wrapped by a nested hook, skipping wrapping");
 
-            // A nested hook wrapped it first, without the plan: give it the plan
-            WrappedIDXGISwapChain4* wrapped = nullptr;
+            // ... without the plan: give it the plan
+            if (hdrPlan.proxied)
+                nested->AdoptHdrPlan(hdrPlan, localDesc.Flags);
 
-            if (hdrPlan.proxied && (*ppSwapChain)->QueryInterface(IID_PPV_ARGS(&wrapped)) == S_OK)
-            {
-                wrapped->AdoptHdrPlan(hdrPlan, localDesc.Flags);
-                wrapped->Release();
-            }
+            nested->Release();
         }
         else
         {
             *ppSwapChain = new WrappedIDXGISwapChain4(realSC, realDevice, pSwapChainDesc->OutputWindow,
                                                       localDesc.Flags, false, false, &hdrPlan);
 
-            State::Instance().currentSwapchain = *ppSwapChain;
-            State::Instance().currentWrappedSwapchain = *ppSwapChain;
+            if (otherWindow)
+            {
+                static_cast<WrappedIDXGISwapChain4*>(*ppSwapChain)->MarkOtherWindow();
+            }
+            else
+            {
+                State::Instance().currentSwapchain = *ppSwapChain;
+                State::Instance().currentWrappedSwapchain = *ppSwapChain;
+            }
 
             LOG_DEBUG("Created new WrappedIDXGISwapChain4: {0:X}, pDevice: {1:X}", (UINT64) *ppSwapChain,
                       (UINT64) *ppDevice);

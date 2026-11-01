@@ -11,6 +11,17 @@
 
 namespace FgWindow
 {
+// A window's area for the rule. A minimized window has an empty client area: its restored size counts (an exclusive
+// full-screen game minimized by Alt+Tab is still frame generation's window, not one any helper may outgrow).
+constexpr int64_t WindowArea(bool minimized, int64_t clientWidth, int64_t clientHeight, int64_t restoredWidth,
+                             int64_t restoredHeight)
+{
+    const int64_t width = minimized ? restoredWidth : clientWidth;
+    const int64_t height = minimized ? restoredHeight : clientHeight;
+
+    return width > 0 && height > 0 ? width * height : 0;
+}
+
 struct Window
 {
     const void* handle = nullptr; // HWND

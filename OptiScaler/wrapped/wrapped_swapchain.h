@@ -29,6 +29,11 @@ class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChai
                           bool isComposition = false, const SdrToHdr::Plan* plan = nullptr);
     virtual ~WrappedIDXGISwapChain4();
 
+    // Made on another window while frame generation's swapchain lived (FGHooks::IsOtherWindowThanFG): while that one
+    // lives, this chain only presents, resizes and switches full screen (no State, frame generation, low latency or
+    // menu work), and its release never tears frame generation down
+    void MarkOtherWindow() { _otherWindow = true; }
+
     // implement IUnknown
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override;
     ULONG STDMETHODCALLTYPE AddRef() override;
@@ -114,6 +119,9 @@ class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChai
     IUnknown* _device = nullptr;
 
     HWND _handle = nullptr;
+
+    bool _otherWindow = false;
+    bool PassesThrough() const;
 
     // HDR output (output/SdrToHdr_*): null until the chain is first proxied, then set once and never reset or replaced
     // (GetBuffer / GetDesc read it on any thread). While it is Active the game's GetBuffer returns the proxies and the real
