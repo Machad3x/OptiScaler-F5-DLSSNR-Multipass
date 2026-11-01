@@ -758,9 +758,15 @@ float3 CubeScaleResidual(float3 P, float3 T)
 // The three are blended between the four nearest texels of the model's own grid (edges clamped) with the
 // bilinear weights, each multiplied by how close that texel's proxy is to the frame's own proxy at this pixel
 // (joint bilateral upsampling, with the range weight of Superior Scaling's guided reconstruction), so an edit
-// made on one side of an edge stays there instead of being smeared across it, and flat areas get exactly the
-// bilinear blend. Where no texel is close enough to carry weight (a detail thinner than a model texel), it falls
-// back to the plain bilinear blend. The result is applied to the frame's full-resolution proxy: L' = saturate(L * exp(ratio)),
+// made on one side of an edge stays there instead of being smeared across it, and where the taps match the frame
+// (flat areas) it is the bilinear blend. NVIDIA's kernel enlarges bilinearly; this guiding is ours. Where every
+// texel is far off (RMS above ~0.08, a detail thinner than a model texel) it comes back to plain bilinear; between
+// ~0.03 and ~0.08 the closest tap takes most of the weight. The range applies to the stored signal, so it is looser
+// in the shadows of the Linear curve and tighter in the highlights of PQ than of the knee. Only the Bilinear up-leg
+// gets it: after SGSR1 the answer is already at the frame's size and the taps are neighbouring frame pixels of a
+// bilinear proxy, which the sharp frame cannot guide, so that path stays plain bilinear (and unchanged).
+//
+// The result is applied to the frame's full-resolution proxy: L' = saturate(L * exp(ratio)),
 // a' = a + da, b' = b + db, back to RGB and saturated. The 0.1 floor belongs to the ratio only. NVIDIA's
 // kernel has it on the pixel too (max(L, 0.1) * exp(ratio)), which lifts everything below L 0.1 to 0.1 with
 // an unchanged answer, a grey veil over near-black (and 1% of white on the linear curve); left out here
@@ -780,20 +786,24 @@ float3 NvOkLab(float3 rgb)
     return mul(lms_to_lab, pow(max(mul(rgb_to_lms, saturate(rgb)), 1e-12), 1.0 / 3.0));
 }
 
-// SuperiorGuidedEdit's range sigma, on the stored (sRGB-encoded) proxy. Its spatial Gaussian (sigma 3 texels over
-// 3x3) was measured here too (tests/nr_residual_compare_shader_smoke.cpp): without Superior's private DLSS after it,
-// it spreads the edit into flat areas (about 2x the bilinear flat error at 65%); the bilinear tent keeps them exact.
+// Superior's range sigma at 50% and below (GuidedRange in DlssNr_SuperiorScaling.h narrows it above), on the stored
+// (sRGB-encoded) proxy. Its spatial Gaussian (sigma 3 texels over 3x3) was measured here too
+// (tests/nr_residual_compare_shader_smoke.cpp): without Superior's private DLSS after it, it spreads the edit into
+// flat areas (about 2x the bilinear flat error at 65%); the bilinear tent keeps them.
 static const float kNvGuideRangeSigma = 0.015;
 
 float3 NvidiaResidualModel(float3 fullProxy, float2 uv)
 {
-    uint gridW, gridH;
+    uint gridW, gridH, srcW, srcH;
     gModel.GetDimensions(gridW, gridH);
+    gSource.GetDimensions(srcW, srcH);
 
     const float2 grid = float2(gridW, gridH);
     const float2 p = uv * grid - 0.5;
     const int2 i0 = (int2) floor(p);
     const float2 f = p - (float2) i0;
+    // Bilinear up-leg only: the model's answer on the proxy's own grid (see above for SGSR1).
+    const bool guided = gridW == srcW && gridH == srcH;
     // The frame's own proxy, stored the way the taps are, to compare against.
     const float3 guide = gPassthrough != 0 ? fullProxy : LinearToSrgb(fullProxy);
     const float invRange2 = 1.0 / (kNvGuideRangeSigma * kNvGuideRangeSigma);
@@ -811,15 +821,17 @@ float3 NvidiaResidualModel(float3 fullProxy, float2 uv)
         const float3 lb = NvOkLab(gPassthrough != 0 ? b4.rgb : SrgbToLinear(b4.rgb));
         const float ratio = clamp(log(max(lb.x, 0.1)) - log(max(la.x, 0.1)), -2.0, 2.0) * saturate(10.0 * la.x);
         // The bilinear weight times the range weight. The 1e-6 floor turns it back into the plain bilinear blend
-        // where no texel is close (all range weights below it), without a second accumulator.
-        const float3 colourDelta = a4.rgb - guide;
-        const float weight = (tap.x != 0 ? f.x : 1.0 - f.x) * (tap.y != 0 ? f.y : 1.0 - f.y) *
-                             (exp(-0.5 * dot(colourDelta, colourDelta) * (1.0 / 3.0) * invRange2) + 1e-6);
+        // where no texel is close (all range weights below it), without a second accumulator. Compared saturated,
+        // as NvOkLab reads both (a passthrough frame can be stored above 1); a non-finite tap gets no range weight.
+        const float3 colourDelta = all(isfinite(a4.rgb)) ? saturate(a4.rgb) - guide : 1e4;
+        const float range = guided ? exp(-0.5 * dot(colourDelta, colourDelta) * (1.0 / 3.0) * invRange2) + 1e-6 : 1.0;
+        const float weight = (tap.x != 0 ? f.x : 1.0 - f.x) * (tap.y != 0 ? f.y : 1.0 - f.y) * range;
         residual += weight * float3(ratio, lb.y - la.y, lb.z - la.z);
         weightSum += weight;
     }
 
-    residual /= weightSum;
+    if (guided)
+        residual /= weightSum;
     const float3 lab = NvOkLab(fullProxy);
     const float L = saturate(lab.x * exp(residual.x));
     return saturate(FromOkLab(float3(L, lab.y + residual.y, lab.z + residual.z)));
