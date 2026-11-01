@@ -17,6 +17,8 @@
 //   6. The precompiled D3D11 shader F5LUT's D3D11 chain step ships (dlssnr_lut_Shader_Dx11.h) grades bit-identically to
 //      this compile of dlssnr_lut.hlsl, with the chain step's constants (F5Lut_Common.h: no encoding, the HDR flag,
 //      white 1.0 or PreExposure / the game's exposure), so a stale header shows here.
+//   7. Linear HDR highlights a look sends to display white (AgX does) come back no brighter than they came in, or the
+//      white point (2026-11-01, RDR2's silver faces: Neutwo's inverse at display 1 gave ~700x white).
 //
 // Build: cl /nologo /std:c++20 /EHsc /W3 tests\nr_lut_white_point_shader_smoke.cpp d3d11.lib d3dcompiler.lib
 // Reference: git show 7364a7f8:OptiScaler/shaders/dlssnr/precompile/dlssnr_lut.hlsl > precompile\dlssnr_lut_ref.hlsl
@@ -60,7 +62,7 @@ struct Gpu
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<ID3D11Texture2D> sourceTex, exposureTex, target, readback;
-    ComPtr<ID3D11ShaderResourceView> sourceSrv, lutSrv, exposureSrv;
+    ComPtr<ID3D11ShaderResourceView> sourceSrv, lutSrv, whiteLutSrv, exposureSrv;
     ComPtr<ID3D11UnorderedAccessView> targetUav;
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11SamplerState> sampler;
@@ -105,6 +107,13 @@ struct Gpu
         check(device->CreateTexture3D(&cube, &cubeData, &cubeTex));
         check(device->CreateShaderResourceView(cubeTex.Get(), nullptr, &lutSrv));
 
+        // A look that sends every colour to display white, as a view transform does with a bright enough highlight.
+        std::vector<float> white(lattice.size(), 1.0f);
+        D3D11_SUBRESOURCE_DATA whiteData { white.data(), kLut * 16, kLut * kLut * 16 };
+        ComPtr<ID3D11Texture3D> whiteTex;
+        check(device->CreateTexture3D(&cube, &whiteData, &whiteTex));
+        check(device->CreateShaderResourceView(whiteTex.Get(), nullptr, &whiteLutSrv));
+
         D3D11_BUFFER_DESC buffer {};
         buffer.ByteWidth = sizeof(DlssNrLutConstants);
         buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
@@ -129,12 +138,12 @@ struct Gpu
     }
 
     std::array<Pixel, N> Run(ID3D11ComputeShader* shader, const std::array<Pixel, N>& in, const DlssNrLutConstants& c,
-                             float exposureTexel)
+                             float exposureTexel, ID3D11ShaderResourceView* lut = nullptr)
     {
         ctx->UpdateSubresource(sourceTex.Get(), 0, nullptr, in.data(), sizeof(in), 0);
         ctx->UpdateSubresource(exposureTex.Get(), 0, nullptr, &exposureTexel, sizeof(float), 0);
         ctx->UpdateSubresource(constants.Get(), 0, nullptr, &c, 0, 0);
-        ID3D11ShaderResourceView* srvs[] = { sourceSrv.Get(), lutSrv.Get(), exposureSrv.Get() };
+        ID3D11ShaderResourceView* srvs[] = { sourceSrv.Get(), lut != nullptr ? lut : lutSrv.Get(), exposureSrv.Get() };
         ctx->CSSetShader(shader, nullptr, 0);
         ctx->CSSetShaderResources(0, 3, srvs);
         ctx->CSSetUnorderedAccessViews(0, 1, targetUav.GetAddressOf(), nullptr);
@@ -347,6 +356,29 @@ try
         for (int i = 0; i < N; ++i)
             expect(std::isfinite(atTwo[i].r) && std::isfinite(atTwo[i].g) && std::isfinite(atTwo[i].b),
                    "forced PQ at paper white 2 is not finite");
+    }
+
+    // 7. A look that sends everything to display white, on Linear HDR: no pixel comes back brighter than it came in or
+    // than the white point, whichever is more (Neutwo's inverse at display 1 alone gives ~700x white), and the old
+    // shader shows the blow-up the cap removes.
+    for (float white : { 0.06f, 1.0f, 18.5f })
+    {
+        const auto got = gpu.Run(shader.Get(), linear, Base(0, true, white), 0.0f, gpu.whiteLutSrv.Get());
+        const auto old = gpu.Run(reference.Get(), linear, Base(0, true, white), 0.0f, gpu.whiteLutSrv.Get());
+        float worstGain = 0.0f, oldWorst = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            const float in = std::max({ linear[i].r, linear[i].g, linear[i].b });
+            const float cap = std::max(in, white);
+            worstGain = std::max(worstGain, std::max({ got[i].r, got[i].g, got[i].b }) / cap);
+            oldWorst = std::max(oldWorst, std::max({ old[i].r, old[i].g, old[i].b }) / cap);
+            expect(std::isfinite(got[i].r) && std::isfinite(got[i].g) && std::isfinite(got[i].b),
+                   "a look to white is not finite");
+        }
+        std::printf("look to white at white %g: worst light / max(in, white) %.4f (reference shader %.1f)\n", white,
+                    worstGain, oldWorst);
+        expect(worstGain <= 1.0001f, "a look to white hands back more light than came in at white " +
+                                         std::to_string(white));
     }
 
     // 6. The shipped D3D11 bytecode against this compile, with the chain step's constants.

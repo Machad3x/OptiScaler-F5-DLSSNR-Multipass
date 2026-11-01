@@ -194,5 +194,20 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float3 graded = gLut.SampleLevel(gLutSampler, texCoord, 0).rgb;
 
     const float3 result = lerp(display, graded, saturate(strength));
-    gTarget[id.xy] = float4(EncodeFromDisplay01(result, white), raw.a);
+    float3 encoded = EncodeFromDisplay01(result, white);
+
+    // Linear HDR: Neutwo's inverse is unbounded near display 1, so a look that sends a highlight to white (AgX and other
+    // view transforms do, on purpose) would hand back up to ~700x the white point -- flat silver patches once the game
+    // tonemaps them (RDR2 skin by a window, 2026-11-01). A grade may darken anything and brighten up to the white point,
+    // but never make a pixel brighter than it came in above that; the hue the look chose is kept.
+    if (inputEncoding != kInputPq && colourIsLinearHdr != 0)
+    {
+        const float3 light = max(raw.rgb, 0.0);
+        const float cap = max(max(light.r, max(light.g, light.b)), white);
+        const float peak = max(encoded.r, max(encoded.g, encoded.b));
+        if (peak > cap)
+            encoded *= cap / peak;
+    }
+
+    gTarget[id.xy] = float4(encoded, raw.a);
 }
