@@ -14,6 +14,7 @@
 #include <Util.h>
 #include <menu/menu_common.h>
 #include <menu/MenuPages.h>
+#include <menu/MenuCard.h>
 #include <resource_tracking/GenericDepth_Dx12.h>
 #include <resource_tracking/GenericDepth_Dx11.h>
 #include <native/NativeDriverDx12.h>
@@ -515,27 +516,8 @@ static void HelpMarker(const char* tip)
     }
 }
 
-// A section of a Neural Rendering page as a card (ScopedCollapsingHeader: border, padding, themed header), with the
-// page's control width inside it: a card is a child window, which starts with its own default item width.
-class NrCard
-{
-  public:
-    NrCard(const char* label, float menuResScale, bool open = true)
-        : _header(label, open ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None)
-    {
-        ImGui::PushItemWidth(220.0f * menuResScale);
-    }
-
-    NrCard(const NrCard&) = delete;
-    NrCard& operator=(const NrCard&) = delete;
-
-    ~NrCard() { ImGui::PopItemWidth(); }
-
-    bool IsOpen() const { return _header.IsHeaderOpen(); }
-
-  private:
-    ScopedCollapsingHeader _header;
-};
+// The Neural Rendering pages' cards are the shared menu cards (menu/MenuCard.h).
+using NrCard = MenuCard;
 
 // A slider that only writes its value when the handle is released.
 //

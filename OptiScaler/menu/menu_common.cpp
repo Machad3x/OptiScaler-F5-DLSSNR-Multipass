@@ -61,6 +61,8 @@
 #include <hooks/Xell_Hooks.h>
 #include <hooks/Amdxc64_Hooks.h>
 #include <low_latency/input/input_common.h>
+#include <menu/MenuCard.h>
+#include <menu/FgStatusRule.h>
 
 enum class UiTargetMode
 {
@@ -3622,31 +3624,6 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     auto& state = ctx.state;
     auto config = ctx.config;
     DlssNr::RenderF5LowFrameGenHint(config, ctx.currentFeature == nullptr || !ctx.currentFeature->IsInited());
-    bool external = config->ExternalFrameGeneration.value_or_default();
-    if (ImGui::Checkbox("External frame generation / MFG unlocker", &external))
-        config->ExternalFrameGeneration = external;
-    ShowHelpMarker("Leaves Streamline, Reflex and FG control to the game/external mod."
-                   "\nNR and NGX upscaling remain available. Save Settings and restart."
-                   "\nDoes not install an unlocker or enable FG in unsupported games.");
-    if (external != state.externalFrameGeneration)
-        ImGui::TextWrapped("Save Settings and restart to change frame-generation ownership.");
-
-    ImGui::SeparatorText("Built-in MFG unlock");
-    const std::array unlockModes = { config->MfgUnlockXeFG.value_or_default(),
-                                     config->MfgUnlockRTX40.value_or_default(),
-                                     config->MfgUnlockRTX2030.value_or_default() };
-    for (size_t index = 0; index < unlockModes.size(); ++index)
-    {
-        const auto family = static_cast<MfgUnlock::Family>(index);
-        const auto status = MfgUnlock::StatusRegistry::Get(family);
-        const std::string text = unlockModes[index] == MfgUnlockMode::Off      ? "off"
-                                 : status.state == MfgUnlock::FamilyState::Off ? "waiting for a provider"
-                                                                               : MfgUnlock::FormatStatus(status);
-        const auto name = MfgUnlock::kFamilyNames[index];
-        ImGui::Text("%.*s: %s", static_cast<int>(name.size()), name.data(), text.c_str());
-    }
-    if (ImGui::SmallButton("Change on the Plugins page"))
-        MenuPages::RequestPage(MenuPages::Page::Plugins);
 
     auto& menuResScale = ctx.menuResScale;
     auto& primaryGpu = *ctx.primaryGpu;
@@ -3666,7 +3643,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     /// FG INPUTS
     if (state.externalFrameGeneration)
     {
-        ImGui::TextWrapped("External FG is active. Set the multiplier in the game or unlocker, not OptiScaler.");
+        ImGui::TextWrapped("External FG is active. Set the multiplier in the game or unlocker, not OptiScaler.\n"
+                           "Switch it off under Unlock & external FG at the end of this page.");
         return;
     }
 
@@ -3885,9 +3863,12 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
     if (state.activeFgInput != FGInput::ForceXeLL)
     {
-        ImGui::SeparatorText("Frame Generation");
+        // The setup card: where the frames come from and what makes them, what that is doing now, and the options
+        // that belong to the input whatever the output. The game's DLSS-G and the unlock/external cards come at the
+        // end of the page (RenderFrameGenerationFooter).
+        MenuCard setupCard("Frame Generation", menuResScale);
 
-        if (ImGui::BeginTable("fgSelection", 2, ImGuiTableFlags_SizingStretchSame))
+        if (setupCard.IsOpen() && ImGui::BeginTable("fgSelection", 2, ImGuiTableFlags_SizingStretchSame))
         {
             ImGui::TableNextColumn();
 
@@ -3913,7 +3894,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         }
 
         // Should be on a new line
-        if (showNvngxFgDowndown)
+        if (setupCard.IsOpen() && showNvngxFgDowndown)
         {
             PopulateCombo("FG Nvngx Replacement", config->FGNvngxReplacement, nvngxOptions);
             ShowTooltip("What backend to use instead of the real DLSSG");
@@ -3938,155 +3919,71 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         state.fgSettingsChanged = state.activeFgOutput != config->FGOutput.value_or_default() ||
                                   state.activeFgInput != config->FGInput.value_or_default() || nvngxFgChanged;
 
+        if (!setupCard.IsOpen())
+            return;
+
+        RenderFgStatusLine(ctx);
+
         if (state.fgSettingsChanged)
         {
-            ImGui::Spacing();
-            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.0f, 1.f)),
-                               "Save Settings and restart to apply the changes");
-            ImGui::Spacing();
-        }
-
-        const bool dlssgInputOrOutput =
-            state.activeFgOutput == FGOutput::DLSSG || state.activeFgInput == FGInput::DLSSG;
-
-        ImGui::BeginDisabled(state.dlssgGameDMFGSupported && config->FGDLSSGOverrideForceDMFG.value_or_default());
-        if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1 && !dlssgInputOrOutput)
-        {
-            auto maxInterpolationCount = state.dlssgMfgMax.value();
-
-            if (maxInterpolationCount >= 1)
-            {
-                // Map config value to UI index
-                int currentSet = 0;
-                if (config->FGDLSSGOverrideInterpolationCount.has_value())
-                {
-                    currentSet = config->FGDLSSGOverrideInterpolationCount.value() + 1;
-                }
-
-                std::string currentIntCountStr;
-                if (currentSet == 0)
-                    currentIntCountStr = "Default";
-                else if (currentSet == 1)
-                    currentIntCountStr = "Off";
-                else
-                    currentIntCountStr = std::to_string(currentSet) + "X";
-
-                ImGui::PushItemWidth(95.0f * menuResScale);
-
-                if (ImGui::BeginCombo("Override DLSSG Ratio", currentIntCountStr.c_str()))
-                {
-                    for (int i = 0; i <= maxInterpolationCount + 1; i++)
-                    {
-                        std::string modeStr;
-                        if (i == 0)
-                            modeStr = "Default";
-                        else if (i == 1)
-                            modeStr = "Off";
-                        else
-                            modeStr = std::to_string(i) + "X";
-
-                        if (ImGui::Selectable(modeStr.c_str(), (currentSet == i)))
-                        {
-                            if (i == 0)
-                            {
-                                // Default, no override
-                                config->FGDLSSGOverrideInterpolationCount.reset();
-                            }
-                            else
-                            {
-                                // UI index, store value
-                                int framesToGenerate = i - 1;
-
-                                LOG_DEBUG("DLSSG Interpolation Count set to: {}", framesToGenerate);
-                                config->FGDLSSGOverrideInterpolationCount = framesToGenerate;
-                            }
-
-                            StreamlineHooks::updateDlssgOptions();
-                        }
-                    }
-
-                    ImGui::EndCombo();
-                }
-
-                ImGui::PopItemWidth();
-            }
-        }
-
-        ImGui::EndDisabled();
-
-        if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1 && !dlssgInputOrOutput)
-            RenderDlssgTelemetry();
-
-        if (state.dlssgGameDMFGSupported && !dlssgInputOrOutput)
-        {
-            ImGui::SameLine(0.0f, 16.0f);
-
-            if (bool dynamicMFG = config->FGDLSSGOverrideForceDMFG.value_or_default();
-                ImGui::Checkbox("Force Dynamic MFG", &dynamicMFG))
-            {
-                config->FGDLSSGOverrideForceDMFG = dynamicMFG;
-                StreamlineHooks::updateDlssgOptions();
-            }
-
-            ImGui::BeginDisabled(state.dlssgLastSetMode != sl::DLSSGMode::eDynamic);
-            static float fpsTarget = config->FGDLSSGFramerateTargetDMFG.value_or_default();
-            ImGui::SliderFloat("DMFG FPS Target", &fpsTarget, 0, 200, "%.0f");
-
-            ShowHelpMarker("An active limit of 0 means auto-detect the display refresh rate");
-
-            if (ImGui::Button("Apply Target"))
-            {
-                config->FGDLSSGFramerateTargetDMFG = fpsTarget;
-                StreamlineHooks::updateDlssgOptions();
-            }
-
-            ImGui::SameLine(0.0f, 16.0f);
-
-            if (ImGui::Button("Reset Target"))
-            {
-                fpsTarget = 0.0f;
-                config->FGDLSSGFramerateTargetDMFG.reset();
-            }
-
-            ImGui::EndDisabled();
+            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.35f, 0.25f, 1.f)), "Restart the game to apply the change");
+            ImGui::SameLine(0.0f, 12.0f);
+            if (ImGui::SmallButton("Save Settings##fgRestart"))
+                config->SaveIni();
+            ShowTooltip("Saves OptiScaler.ini now (same as Save Settings at the bottom of the menu)");
         }
 
         auto fgOutput = state.CurrentFG();
-        if (((state.activeFgOutput == FGOutput::FSRFG || UsesXeFGApi(state.activeFgOutput) ||
-              state.activeFgOutput == FGOutput::DLSSG) &&
-             state.activeFgInput != FGInput::NoFG && state.activeFgInput != FGInput::NvngxFG) &&
-            fgOutput)
+        const bool hudApplies = fgOutput != nullptr &&
+                                (state.activeFgOutput == FGOutput::FSRFG || UsesXeFGApi(state.activeFgOutput) ||
+                                 state.activeFgOutput == FGOutput::DLSSG) &&
+                                state.activeFgInput != FGInput::NoFG && state.activeFgInput != FGInput::NvngxFG;
+
+        // The input's UI and HUDless use, whatever the output
+        if (hudApplies)
         {
-            ImGui::Checkbox("Show Detected UI", &state.fgHudlessCompare);
-            ShowHelpMarker("Needs HUDless texture to compare with final image.\n"
-                           "UI elements and ONLY UI elements should have a pink tint!");
-
-            const auto isUsingUIAny = fgOutput->IsUsingUIAny();
-
-            ImGui::BeginDisabled(!isUsingUIAny);
-
-            if (bool drawUIOverFG = config->FGDrawUIOverFG.value_or_default();
-                ImGui::Checkbox("Draw UI over", &drawUIOverFG))
+            if (auto hudGroup = ScopedCollapsingHeader("HUD & UI"); hudGroup.IsHeaderOpen())
             {
-                config->FGDrawUIOverFG = drawUIOverFG;
+                const auto isUsingUIAny = fgOutput->IsUsingUIAny();
+
+                if (ImGui::BeginTable("fgHudUi", 2, ImGuiTableFlags_SizingStretchSame))
+                {
+                    ImGui::TableNextColumn();
+                    ImGui::Checkbox("Show Detected UI", &state.fgHudlessCompare);
+                    ShowHelpMarker("Needs HUDless texture to compare with final image.\n"
+                                   "UI elements and ONLY UI elements should have a pink tint!");
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::BeginDisabled(!isUsingUIAny);
+
+                    if (bool drawUIOverFG = config->FGDrawUIOverFG.value_or_default();
+                        ImGui::Checkbox("Draw UI over", &drawUIOverFG))
+                    {
+                        config->FGDrawUIOverFG = drawUIOverFG;
+                    }
+                    ShowHelpMarker("Draws UI resource over the final image\n"
+                                   "If no UI visible, enable this!");
+
+                    ImGui::EndDisabled();
+
+                    ImGui::TableNextColumn();
+                    ImGui::BeginDisabled(!isUsingUIAny || !config->FGDrawUIOverFG.value_or_default());
+
+                    if (bool uiPremultipliedAlpha = config->FGUIPremultipliedAlpha.value_or_default();
+                        ImGui::Checkbox("UI premultiplied alpha", &uiPremultipliedAlpha))
+                    {
+                        config->FGUIPremultipliedAlpha = uiPremultipliedAlpha;
+                    }
+                    ShowHelpMarker("Only with Draw UI over. If the UI looks too faint, turn this off");
+
+                    ImGui::EndDisabled();
+                    ImGui::EndTable();
+                }
+
+                if (!isUsingUIAny)
+                    ImGui::TextDisabled("Draw UI over: the FG input sends no UI texture in this game");
             }
-            ShowHelpMarker("Draws UI resource over the final image\n"
-                           "If no UI visible, enable this!");
-
-            ImGui::EndDisabled();
-
-            ImGui::SameLine(0.0f, 16.0f);
-
-            ImGui::BeginDisabled(!isUsingUIAny || !config->FGDrawUIOverFG.value_or_default());
-
-            if (bool uiPremultipliedAlpha = config->FGUIPremultipliedAlpha.value_or_default();
-                ImGui::Checkbox("UI Premult. alpha", &uiPremultipliedAlpha))
-            {
-                config->FGUIPremultipliedAlpha = uiPremultipliedAlpha;
-            }
-            ShowHelpMarker("If UI is too faint, disable this option");
-
-            ImGui::EndDisabled();
         }
 
         const bool showOutputSpecificFGSettings = state.activeFgInput == FGInput::DLSSG ||
@@ -4099,7 +3996,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         {
             ImGui::Spacing();
 
-            if (auto ch = ScopedCollapsingHeader("Advanced FG Settings"); ch.IsHeaderOpen())
+            if (auto ch = ScopedCollapsingHeader("Advanced (FG Input)"); ch.IsHeaderOpen())
             {
                 ScopedIndent indent {};
                 ImGui::Spacing();
@@ -4242,6 +4139,216 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
                 }
             }
         }
+    }
+}
+
+// The page's one-line answer to "what is frame generation doing right now" (menu/FgStatusRule.h).
+void MenuCommon::RenderFgStatusLine(RenderMenuContext& ctx)
+{
+    auto& state = ctx.state;
+
+    fgstatus::Input in;
+    in.output = state.activeFgOutput;
+    in.inputSelected = state.activeFgInput != FGInput::NoFG;
+    switch (state.activeFgOutput)
+    {
+    case FGOutput::F5Low:
+        in.outputLabel = "F5Low";
+        break;
+    case FGOutput::XeFG:
+        in.outputLabel = "XeFG";
+        break;
+    case FGOutput::FSRFG:
+        in.outputLabel = "FSR FG";
+        break;
+    case FGOutput::DLSSG:
+        in.outputLabel = "DLSSG";
+        break;
+    default:
+        break;
+    }
+
+    if (auto fg = state.CurrentFG(); fg != nullptr)
+    {
+        in.hasFeature = true;
+        in.active = fg->IsActive();
+        in.paused = fg->IsPaused();
+        in.generationOff = fg->GenerationOff();
+        in.generating = fg->IsGenerating();
+        in.interpolated = static_cast<int>(fg->GetInterpolatedFrameCount());
+    }
+    in.shownFps = ctx.frameRate;
+
+    const auto status = fgstatus::Describe(in);
+    switch (status.tone)
+    {
+    case fgstatus::Tone::Good:
+        ImGui::TextColored(toneMapColor({ 0.45f, 0.9f, 0.45f, 1.0f }), "%s", status.text.c_str());
+        break;
+    case fgstatus::Tone::Waiting:
+        ImGui::TextColored(toneMapColor({ 1.0f, 0.75f, 0.25f, 1.0f }), "%s", status.text.c_str());
+        break;
+    default:
+        ImGui::TextDisabled("%s", status.text.c_str());
+        break;
+    }
+}
+
+// The end of the Frame Generation page: the game's own DLSS-G and the unlock/external switches, both collapsed
+// (set once, rarely touched). The unlock card opens by itself while external frame generation is on, since that
+// is where it is switched off.
+void MenuCommon::RenderFrameGenerationFooter(RenderMenuContext& ctx)
+{
+    auto& state = ctx.state;
+    auto config = ctx.config;
+    auto& menuResScale = ctx.menuResScale;
+
+    const bool gameDlssgShown =
+        !state.externalFrameGeneration && state.activeFgInput != FGInput::ForceXeLL &&
+        ((state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1) || state.dlssgGameDMFGSupported) &&
+        state.activeFgOutput != FGOutput::DLSSG && state.activeFgInput != FGInput::DLSSG;
+
+    if (gameDlssgShown)
+    {
+        if (MenuCard card("Game's own DLSS FG", menuResScale, false); card.IsOpen())
+        {
+            ImGui::TextDisabled("What OptiScaler tells the game's DLSS-G (Streamline), not the FG Output above");
+
+            const bool dlssgInputOrOutput =
+                state.activeFgOutput == FGOutput::DLSSG || state.activeFgInput == FGInput::DLSSG;
+
+            ImGui::BeginDisabled(state.dlssgGameDMFGSupported && config->FGDLSSGOverrideForceDMFG.value_or_default());
+            if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1 && !dlssgInputOrOutput)
+            {
+                auto maxInterpolationCount = state.dlssgMfgMax.value();
+
+                if (maxInterpolationCount >= 1)
+                {
+                    // Map config value to UI index
+                    int currentSet = 0;
+                    if (config->FGDLSSGOverrideInterpolationCount.has_value())
+                    {
+                        currentSet = config->FGDLSSGOverrideInterpolationCount.value() + 1;
+                    }
+
+                    std::string currentIntCountStr;
+                    if (currentSet == 0)
+                        currentIntCountStr = "Default";
+                    else if (currentSet == 1)
+                        currentIntCountStr = "Off";
+                    else
+                        currentIntCountStr = std::to_string(currentSet) + "X";
+
+                    ImGui::PushItemWidth(95.0f * menuResScale);
+
+                    if (ImGui::BeginCombo("Game DLSS-G ratio", currentIntCountStr.c_str()))
+                    {
+                        for (int i = 0; i <= maxInterpolationCount + 1; i++)
+                        {
+                            std::string modeStr;
+                            if (i == 0)
+                                modeStr = "Default";
+                            else if (i == 1)
+                                modeStr = "Off";
+                            else
+                                modeStr = std::to_string(i) + "X";
+
+                            if (ImGui::Selectable(modeStr.c_str(), (currentSet == i)))
+                            {
+                                if (i == 0)
+                                {
+                                    // Default, no override
+                                    config->FGDLSSGOverrideInterpolationCount.reset();
+                                }
+                                else
+                                {
+                                    // UI index, store value
+                                    int framesToGenerate = i - 1;
+
+                                    LOG_DEBUG("DLSSG Interpolation Count set to: {}", framesToGenerate);
+                                    config->FGDLSSGOverrideInterpolationCount = framesToGenerate;
+                                }
+
+                                StreamlineHooks::updateDlssgOptions();
+                            }
+                        }
+
+                        ImGui::EndCombo();
+                    }
+
+                    ImGui::PopItemWidth();
+                }
+            }
+
+            ImGui::EndDisabled();
+
+            if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() >= 1 && !dlssgInputOrOutput)
+                RenderDlssgTelemetry();
+
+            if (state.dlssgGameDMFGSupported && !dlssgInputOrOutput)
+            {
+                ImGui::SameLine(0.0f, 16.0f);
+
+                if (bool dynamicMFG = config->FGDLSSGOverrideForceDMFG.value_or_default();
+                    ImGui::Checkbox("Game DLSS-G dynamic", &dynamicMFG))
+                {
+                    config->FGDLSSGOverrideForceDMFG = dynamicMFG;
+                    StreamlineHooks::updateDlssgOptions();
+                }
+
+                ImGui::BeginDisabled(state.dlssgLastSetMode != sl::DLSSGMode::eDynamic);
+                static float fpsTarget = config->FGDLSSGFramerateTargetDMFG.value_or_default();
+                ImGui::SliderFloat("Game DLSS-G target fps", &fpsTarget, 0, 200, "%.0f");
+
+                ShowHelpMarker("The frame rate the game's dynamic DLSS-G aims for; 0 = the display refresh rate.\n"
+                               "Press Apply to send it to the game.");
+
+                if (ImGui::SmallButton("Apply##gameDlssg"))
+                {
+                    config->FGDLSSGFramerateTargetDMFG = fpsTarget;
+                    StreamlineHooks::updateDlssgOptions();
+                }
+
+                ImGui::SameLine(0.0f, 16.0f);
+
+                if (ImGui::SmallButton("Reset##gameDlssg"))
+                {
+                    fpsTarget = 0.0f;
+                    config->FGDLSSGFramerateTargetDMFG.reset();
+                }
+
+                ImGui::EndDisabled();
+            }
+        }
+    }
+
+    if (MenuCard card("Unlock & external FG", menuResScale, state.externalFrameGeneration); card.IsOpen())
+    {
+        bool external = config->ExternalFrameGeneration.value_or_default();
+        if (ImGui::Checkbox("External frame generation / MFG unlocker", &external))
+            config->ExternalFrameGeneration = external;
+        ShowHelpMarker("Leaves Streamline, Reflex and FG control to the game/external mod."
+                       "\nNR and NGX upscaling remain available. Save Settings and restart."
+                       "\nDoes not install an unlocker or enable FG in unsupported games.");
+        if (external != state.externalFrameGeneration)
+            ImGui::TextWrapped("Save Settings and restart to change frame-generation ownership.");
+
+        ImGui::SeparatorText("Built-in MFG unlock");
+        const std::array unlockModes = { config->MfgUnlockXeFG.value_or_default(),
+                                         config->MfgUnlockRTX40.value_or_default(),
+                                         config->MfgUnlockRTX2030.value_or_default() };
+        for (size_t index = 0; index < unlockModes.size(); ++index)
+        {
+            const auto family = static_cast<MfgUnlock::Family>(index);
+            const auto status = MfgUnlock::StatusRegistry::Get(family);
+            const std::string text = unlockModes[index] == MfgUnlockMode::Off      ? "off"
+                                     : status.state == MfgUnlock::FamilyState::Off ? "waiting for a provider"
+                                                                                   : MfgUnlock::FormatStatus(status);
+            const auto name = MfgUnlock::kFamilyNames[index];
+            ImGui::Text("%.*s: %s", static_cast<int>(name.size()), name.data(), text.c_str());
+        }
+        if (ImGui::SmallButton("Change on the Plugins page"))
+            MenuPages::RequestPage(MenuPages::Page::Plugins);
     }
 }
 
@@ -4711,39 +4818,14 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         }
     }
 
-    // XeFG controls
+    // XeFG controls (also F5Low, which runs our xefg_cuda behind XeFG's API): one card. The checks below run whether
+    // the card is open or not, since they turn frame generation off when it cannot run; only the drawing waits for it.
     if (UsesXeFGApi(state.activeFgOutput) && state.activeFgInput != FGInput::NoFG &&
         state.activeFgInput != FGInput::ForceXeLL && state.currentFGSwapchain != nullptr && XeFGProxy::InitXeFG() &&
         fgOutput)
     {
-        ImGui::SeparatorText(state.activeFgOutput == FGOutput::F5Low ? "Frame Generation (F5Low)"
-                                                                     : "Frame Generation (XeFG)");
-
-        // Which files are in use (worked out in the background at start, see XeModuleInfo)
-        ImGui::PushTextWrapPos(0.0f);
-
-        for (const auto& line : { XeModuleInfo::XeFGLine(), XeModuleInfo::XeLLLine() })
-        {
-            if (!line.empty())
-                ImGui::TextDisabled("%s", line.c_str());
-        }
-
-        ImGui::PopTextWrapPos();
-
-        // F5Low: what makes the frames inside it (read each time F5Low creates its context)
-        if (state.activeFgOutput == FGOutput::F5Low)
-        {
-            static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
-                { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
-                  "Our XeFG frame generation on the NVIDIA tensor cores (xefg_cuda)" },
-            };
-
-            if (!config->F5LowGenerator.has_value())
-                config->F5LowGenerator = config->F5LowGenerator.value_or_default(); // need to have a value before combo
-
-            PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
-            ShowTooltip("What makes the generated frames in F5Low\nDLSS-G and libxess will follow");
-        }
+        const bool f5low = state.activeFgOutput == FGOutput::F5Low;
+        MenuCard xefgCard(f5low ? "F5Low" : "XeFG", menuResScale);
 
         bool ignoreChecks = config->FGXeFGIgnoreInitChecks.value_or_default();
 
@@ -4769,202 +4851,258 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                                    config->FGXeFGJitteredMV.value_or_default() != fgOutput->IsJitteredMVs() ||
                                    config->FGXeFGHighResMV.value_or_default() == fgOutput->IsLowResMV();
 
-        bool cantActivate = false;
-        if (restartNeeded)
-        {
-            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                               "Restart the game to apply correct XeFG settings!");
-        }
-        else
-        {
-            if (!correctMVs)
-                ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)),
-                                   "Requires disabling dilated motion vectors");
+        const bool borderlessMissing = !restartNeeded && !ignoreChecks && state.realExclusiveFullscreen;
+        const bool hdrUnsupported = !restartNeeded && !ignoreChecks && outputIsHdr &&
+                                    state.currentSwapchainDesc.BufferDesc.Format >= DXGI_FORMAT_R32G32B32A32_TYPELESS &&
+                                    state.currentSwapchainDesc.BufferDesc.Format <= DXGI_FORMAT_R16G16B16A16_SINT;
+        const bool cantActivate = borderlessMissing || hdrUnsupported;
 
-            if (!ignoreChecks && state.realExclusiveFullscreen)
+        if (xefgCard.IsOpen())
+        {
+            // What stops it, first
+            if (restartNeeded)
             {
-                cantActivate = true;
-                ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)), "Borderless display mode required!");
+                ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                                   "Restart the game to apply correct XeFG settings!");
             }
-
-            if (!ignoreChecks && outputIsHdr)
+            else
             {
-                if (state.currentSwapchainDesc.BufferDesc.Format >= DXGI_FORMAT_R32G32B32A32_TYPELESS &&
-                    state.currentSwapchainDesc.BufferDesc.Format <= DXGI_FORMAT_R16G16B16A16_SINT)
-                {
-                    cantActivate = true;
+                if (!correctMVs)
+                    ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)),
+                                       "Requires disabling dilated motion vectors");
+
+                if (borderlessMissing)
+                    ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)), "Borderless display mode required!");
+
+                if (hdrUnsupported)
                     ImGui::TextColored(toneMapColor(ImVec4(1.0f, 0.0f, 0.0f, 1.f)), "XeFG only supports HDR10");
-                }
             }
-        }
 
-        if (!correctMVs || cantActivate || ignoreChecks)
-        {
-            if (ImGui::Checkbox("Ignore Init Checks", &ignoreChecks))
-                config->FGXeFGIgnoreInitChecks = ignoreChecks;
-
-            ShowHelpMarker("Ignores all prechecks for XeFG\n"
-                           "Don't use this option to skip MV size warning for UE games!\n"
-                           "It might cause crashes and bad IQ!");
-        }
-
-        ImGui::BeginDisabled(!correctMVs || cantActivate);
-
-        RenderFGFollowGame();
-
-        // While following, the game's DLSS FG setting drives these two
-        const bool followsGame = config->FGFollowsGame();
-
-        ImGui::BeginDisabled(followsGame);
-        bool fgActive = config->IsFGEnabled();
-        if (ImGui::Checkbox("Active##3", &fgActive))
-        {
-            config->FGEnabled = fgActive;
-            LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
-
-            if (config->IsFGEnabled())
-                state.fgChanged = true;
-        }
-        ImGui::EndDisabled();
-
-        ShowHelpMarker("Enable Frame Generation");
-
-        auto maxInterpolationCount = fgOutput->GetMaxInterpolationCount();
-
-        // Dynamic MFG picks the count: the combo is the most it may use
-        const bool dynamicMFG = config->FGXeFGDynamicMFG.value_or_default() && !followsGame;
-
-        if (maxInterpolationCount > 1)
-        {
-            ImGui::SameLine(0.0f, 16.0f);
-            ImGui::BeginDisabled(followsGame);
-
-            auto currentSet =
-                dynamicMFG
-                    ? std::clamp(config->FGXeFGInterpolationCount.value_or_default(), 1, maxInterpolationCount) - 1
-                    : (int) fgOutput->GetInterpolatedFrameCount() - 1;
-
-            std::string currentIntCountStr = std::to_string(currentSet + 2) + "X";
-
-            ImGui::PushItemWidth(95.0f * menuResScale);
-
-            if (ImGui::BeginCombo(dynamicMFG ? "Max MFG" : "MFG", currentIntCountStr.c_str()))
+            if (!correctMVs || cantActivate || ignoreChecks)
             {
-                for (int i = 0; i < maxInterpolationCount; i++)
-                {
-                    std::string modeStr = std::to_string(i + 2) + "X";
+                if (ImGui::Checkbox("Ignore Init Checks", &ignoreChecks))
+                    config->FGXeFGIgnoreInitChecks = ignoreChecks;
 
-                    if (ImGui::Selectable(modeStr.c_str(), (currentSet == i)))
-                    {
-                        LOG_DEBUG("XeFG Interpolation Count set to: {}", i + 1);
-                        config->FGXeFGInterpolationCount = i + 1;
-
-                        // Dynamic MFG takes a new most at the next frame, without restarting frame generation
-                        if (!dynamicMFG)
-                            state.fgChanged = true;
-                    }
-                }
-
-                ImGui::EndCombo();
+                ShowHelpMarker("Ignores all prechecks for XeFG\n"
+                               "Don't use this option to skip MV size warning for UE games!\n"
+                               "It might cause crashes and bad IQ!");
             }
 
-            ImGui::PopItemWidth();
+            ImGui::BeginDisabled(!correctMVs || cantActivate);
+
+            RenderFGFollowGame();
+
+            // While following, the game's DLSS FG setting drives these two
+            const bool followsGame = config->FGFollowsGame();
+
+            auto maxInterpolationCount = fgOutput->GetMaxInterpolationCount();
+
+            // Dynamic MFG picks the count: the combo is the most it may use
+            const bool dynamicMFG = config->FGXeFGDynamicMFG.value_or_default() && !followsGame;
+
+            if (ImGui::BeginTable("xefgMain", 2, ImGuiTableFlags_SizingStretchSame))
+            {
+                // F5Low: what makes the frames inside it (read each time F5Low creates its context)
+                if (f5low)
+                {
+                    ImGui::TableNextColumn();
+
+                    static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
+                        { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
+                          "Our XeFG frame generation on the NVIDIA tensor cores (xefg_cuda)" },
+                    };
+
+                    if (!config->F5LowGenerator.has_value())
+                        config->F5LowGenerator =
+                            config->F5LowGenerator.value_or_default(); // need to have a value before combo
+
+                    PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
+                    ShowTooltip("What makes the generated frames in F5Low\nDLSS-G and libxess will follow");
+                }
+
+                ImGui::TableNextColumn();
+
+                ImGui::BeginDisabled(followsGame);
+                bool fgActive = config->IsFGEnabled();
+                if (ImGui::Checkbox("Active##3", &fgActive))
+                {
+                    config->FGEnabled = fgActive;
+                    LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
+
+                    if (config->IsFGEnabled())
+                        state.fgChanged = true;
+                }
+                ImGui::EndDisabled();
+
+                ShowHelpMarker(followsGame ? "Follows the game's DLSS FG setting" : "Turns frame generation on or off");
+
+                if (maxInterpolationCount > 1)
+                {
+                    ImGui::TableNextColumn();
+                    ImGui::BeginDisabled(followsGame);
+
+                    auto currentSet = dynamicMFG ? std::clamp(config->FGXeFGInterpolationCount.value_or_default(), 1,
+                                                              maxInterpolationCount) -
+                                                       1
+                                                 : (int) fgOutput->GetInterpolatedFrameCount() - 1;
+
+                    std::string currentIntCountStr = std::to_string(currentSet + 2) + "X";
+
+                    ImGui::PushItemWidth(95.0f * menuResScale);
+
+                    if (ImGui::BeginCombo(dynamicMFG ? "Max multiplier" : "Multiplier", currentIntCountStr.c_str()))
+                    {
+                        for (int i = 0; i < maxInterpolationCount; i++)
+                        {
+                            std::string modeStr = std::to_string(i + 2) + "X";
+
+                            if (ImGui::Selectable(modeStr.c_str(), (currentSet == i)))
+                            {
+                                LOG_DEBUG("XeFG Interpolation Count set to: {}", i + 1);
+                                config->FGXeFGInterpolationCount = i + 1;
+
+                                // Dynamic MFG takes a new most at the next frame, without restarting frame generation
+                                if (!dynamicMFG)
+                                    state.fgChanged = true;
+                            }
+                        }
+
+                        ImGui::EndCombo();
+                    }
+
+                    ImGui::PopItemWidth();
+                    ImGui::EndDisabled();
+
+                    ShowHelpMarker(dynamicMFG ? "The highest multiplier Dynamic MFG may use"
+                                              : "Shown frames per rendered frame (2X = one generated frame)");
+                }
+
+                ImGui::EndTable();
+            }
+
+            RenderXeFGDynamicMFG(ctx, maxInterpolationCount, followsGame);
+
             ImGui::EndDisabled();
 
-            ShowHelpMarker(dynamicMFG ? "The highest multiplier Dynamic MFG may use" : "Set XeFG interpolation count");
-        }
-
-        ImGui::SameLine(0.0f, 16.0f);
-        ImGui::BeginDisabled(!fgOutput->IsUsingHudlessAny() || XeFGProxy::SetUiCompositionState() == nullptr);
-        bool fgCompositeUI = config->FGXeFGUIComposition.value_or_default();
-        if (ImGui::Checkbox("UI Composition", &fgCompositeUI))
-            config->FGXeFGUIComposition = fgCompositeUI;
-
-        ShowHelpMarker("Disable HUD/UI interpolation\n"
-                       "Reverts back to previous XeFG 2 behaviour\n\n"
-                       "Fixes artifacting transparent HUD/UI");
-        ImGui::EndDisabled();
-
-        RenderXeFGDynamicMFG(ctx, maxInterpolationCount, followsGame);
-
-        bool fgDV = config->FGXeFGDebugView.value_or_default();
-        if (ImGui::Checkbox("Debug View##2", &fgDV))
-        {
-            config->FGXeFGDebugView = fgDV;
-
-            if (config->FGXeFGDebugView.value_or_default())
-            {
-                state.fgChanged = true;
-                LOG_DEBUG("DebugView set FGChanged");
-            }
-        }
-        ShowHelpMarker("Enable XeFG Debug view");
-
-        ImGui::EndDisabled();
-
-        ImGui::SameLine(0.0f, 16.0f);
-        bool fgBorderless = config->FGXeFGForceBorderless.value_or_default();
-        if (ImGui::Checkbox("Force Borderless", &fgBorderless))
-            config->FGXeFGForceBorderless = fgBorderless;
-
-        ShowHelpMarker("Forces Borderless display mode\n\n"
-                       "For best results, set fullscreen \n"
-                       "resolution to your display resolution\n"
-                       "Might cause some instability issues.\n\n"
-                       "NEEDS GAME RESTART TO BE ACTIVE!");
-
-        // Disable this for now
-        // ImGui::SameLine(0.0f, 16.0f);
-        // ImGui::Checkbox("Only Generated##2", &state.fgOnlyGenerated);
-        // ShowHelpMarker("Display only XeFG generated frames");
-
-        ImGui::Spacing();
-        if (auto ch = ScopedCollapsingHeader("Extended XeFG Settings"); ch.IsHeaderOpen())
-        {
             ImGui::Spacing();
-            if (ImGui::TreeNode("Rectangle Settings"))
+
+            if (auto group = ScopedCollapsingHeader("HUD & UI##xefg"); group.IsHeaderOpen())
             {
-                ImGui::PushItemWidth(95.0f * menuResScale);
-                int rectLeft = config->FGRectLeft.value_or(0);
-                if (ImGui::InputInt("Rect Left##2", &rectLeft))
-                    config->FGRectLeft = rectLeft;
+                const bool canCompose = fgOutput->IsUsingHudlessAny() && XeFGProxy::SetUiCompositionState() != nullptr;
 
-                ImGui::SameLine(0.0f, 16.0f);
-                int rectTop = config->FGRectTop.value_or(0);
-                if (ImGui::InputInt("Rect Top##2", &rectTop))
-                    config->FGRectTop = rectTop;
+                ImGui::BeginDisabled(!canCompose);
+                bool fgCompositeUI = config->FGXeFGUIComposition.value_or_default();
+                if (ImGui::Checkbox("UI Composition", &fgCompositeUI))
+                    config->FGXeFGUIComposition = fgCompositeUI;
 
-                int rectWidth = config->FGRectWidth.value_or(0);
-                if (ImGui::InputInt("Rect Width##2", &rectWidth))
-                    config->FGRectWidth = rectWidth;
-
-                ImGui::SameLine(0.0f, 16.0f);
-                int rectHeight = config->FGRectHeight.value_or(0);
-                if (ImGui::InputInt("Rect Height##2", &rectHeight))
-                    config->FGRectHeight = rectHeight;
-
-                ImGui::PopItemWidth();
-                ShowHelpMarker("Frame generation rectangle, adjust for letterboxed content##2");
-
-                ImGui::BeginDisabled(!config->FGRectLeft.has_value() && !config->FGRectTop.has_value() &&
-                                     !config->FGRectWidth.has_value() && !config->FGRectHeight.has_value());
-
-                if (ImGui::Button("Reset FG Rect##2"))
-                {
-                    config->FGRectLeft.reset();
-                    config->FGRectTop.reset();
-                    config->FGRectWidth.reset();
-                    config->FGRectHeight.reset();
-                }
-
-                ShowHelpMarker("Resets Frame generation rectangle##2");
-
+                ShowHelpMarker("Disable HUD/UI interpolation\n"
+                               "Reverts back to previous XeFG 2 behaviour\n\n"
+                               "Fixes artifacting transparent HUD/UI");
                 ImGui::EndDisabled();
-                ImGui::TreePop();
+
+                if (!canCompose)
+                    ImGui::TextDisabled(!fgOutput->IsUsingHudlessAny()
+                                            ? "UI Composition: the FG input sends no HUDless image in this game"
+                                            : "UI Composition: this XeFG library does not offer it");
             }
 
-            ImGui::Spacing();
-            ImGui::Spacing();
+            if (auto group = ScopedCollapsingHeader("Display##xefg"); group.IsHeaderOpen())
+            {
+                bool fgBorderless = config->FGXeFGForceBorderless.value_or_default();
+                if (ImGui::Checkbox("Force Borderless", &fgBorderless))
+                    config->FGXeFGForceBorderless = fgBorderless;
+
+                ShowHelpMarker("Forces Borderless display mode\n\n"
+                               "For best results, set fullscreen \n"
+                               "resolution to your display resolution\n"
+                               "Might cause some instability issues.\n\n"
+                               "NEEDS GAME RESTART TO BE ACTIVE!");
+            }
+
+            if (auto group = ScopedCollapsingHeader("Advanced##xefg"); group.IsHeaderOpen())
+            {
+                if (ImGui::TreeNode("Rectangle Settings"))
+                {
+                    ImGui::PushItemWidth(95.0f * menuResScale);
+                    int rectLeft = config->FGRectLeft.value_or(0);
+                    if (ImGui::InputInt("Rect Left##2", &rectLeft))
+                        config->FGRectLeft = rectLeft;
+
+                    ImGui::SameLine(0.0f, 16.0f);
+                    int rectTop = config->FGRectTop.value_or(0);
+                    if (ImGui::InputInt("Rect Top##2", &rectTop))
+                        config->FGRectTop = rectTop;
+
+                    int rectWidth = config->FGRectWidth.value_or(0);
+                    if (ImGui::InputInt("Rect Width##2", &rectWidth))
+                        config->FGRectWidth = rectWidth;
+
+                    ImGui::SameLine(0.0f, 16.0f);
+                    int rectHeight = config->FGRectHeight.value_or(0);
+                    if (ImGui::InputInt("Rect Height##2", &rectHeight))
+                        config->FGRectHeight = rectHeight;
+
+                    ImGui::PopItemWidth();
+                    ShowHelpMarker("Frame generation rectangle, adjust for letterboxed content##2");
+
+                    ImGui::BeginDisabled(!config->FGRectLeft.has_value() && !config->FGRectTop.has_value() &&
+                                         !config->FGRectWidth.has_value() && !config->FGRectHeight.has_value());
+
+                    if (ImGui::SmallButton("Reset FG Rect##2"))
+                    {
+                        config->FGRectLeft.reset();
+                        config->FGRectTop.reset();
+                        config->FGRectWidth.reset();
+                        config->FGRectHeight.reset();
+                    }
+
+                    ShowHelpMarker("Resets Frame generation rectangle##2");
+
+                    ImGui::EndDisabled();
+                    ImGui::TreePop();
+                }
+            }
+
+            if (auto group = ScopedCollapsingHeader("Debug##xefg"); group.IsHeaderOpen())
+            {
+                ImGui::BeginDisabled(!correctMVs || cantActivate);
+                bool fgDV = config->FGXeFGDebugView.value_or_default();
+                if (ImGui::Checkbox("Debug View##2", &fgDV))
+                {
+                    config->FGXeFGDebugView = fgDV;
+
+                    if (config->FGXeFGDebugView.value_or_default())
+                    {
+                        state.fgChanged = true;
+                        LOG_DEBUG("DebugView set FGChanged");
+                    }
+                }
+                ShowHelpMarker("Enable XeFG Debug view");
+                ImGui::EndDisabled();
+
+                // Disable this for now
+                // ImGui::SameLine(0.0f, 16.0f);
+                // ImGui::Checkbox("Only Generated##2", &state.fgOnlyGenerated);
+                // ShowHelpMarker("Display only XeFG generated frames");
+            }
+
+            // Which files are in use (worked out in the background at start, see XeModuleInfo): one dim line, the
+            // full lines on hover
+            const auto xefgLine = XeModuleInfo::XeFGLine();
+            const auto xellLine = XeModuleInfo::XeLLLine();
+            const auto shortLine = [](const std::string& line)
+            {
+                const auto from = line.find(" from ");
+                return from == std::string::npos ? line : line.substr(0, from);
+            };
+
+            if (!xefgLine.empty() || !xellLine.empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextDisabled("%s   %s", shortLine(xefgLine).c_str(), shortLine(xellLine).c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s\n%s", xefgLine.c_str(), xellLine.c_str());
+            }
         }
     }
 
@@ -8384,6 +8522,7 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
             section(RenderFrameGenerationSelection);
             section(RenderFrameGenerationRuntimeSettings);
             section(RenderFsrCommonSettings);
+            section(RenderFrameGenerationFooter);
             break;
         case Page::Image:
             section(RenderActiveImageSettings);
