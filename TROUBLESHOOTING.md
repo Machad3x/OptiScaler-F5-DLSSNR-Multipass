@@ -264,9 +264,9 @@ The port is a separate optional download (`Optional-Vendor-Neutral-DLSS5-Forward
 
 ### F5Low is greyed out, or falls back to no frame generation
 - Log signs: `F5Low: F5Low frame generation needs an NVIDIA GPU ...; FG Output set to None for this session` or
-  `F5Low: xefg_cuda.dll is not in the plugins folder; FG Output set to None for this session`.
+  `F5Low: f5low.dll is not in the plugins folder; FG Output set to None for this session`.
 - Cause: F5Low's XeFG Tensor generator runs on NVIDIA tensor cores, and its library must be in the plugins folder
-  next to OptiScaler.dll (`[Plugins] Path`). xefg_cuda.dll is not in the release zip yet; use FG Output XeFG.
+  next to OptiScaler.dll (`[Plugins] Path`). f5low.dll is not in the release zip yet; use FG Output XeFG.
 
 ### "Slow motion", or the frame rate far below the cap with XeFG 3x or 4x
 - Expected: the frame cap counts all shown frames, real and generated. A cap of 120 at 4x means 30 rendered frames per

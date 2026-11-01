@@ -138,7 +138,7 @@ class XeFGProxy
 
         auto optiPath = Config::Instance()->MainDllPath.value();
 
-        // FG Output F5Low: our xefg_cuda from the plugins folder only, never Intel's library in its place
+        // FG Output F5Low: our f5low.dll from the plugins folder only, never Intel's library in its place
         if (State::Instance().activeFgOutput == FGOutput::F5Low)
         {
             // One try per session (the output does not change without a restart); a second caller waits for it

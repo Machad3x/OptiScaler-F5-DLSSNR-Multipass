@@ -46,7 +46,7 @@ std::wstring F5Low::IntelLibraryPath()
 
     for (const auto& candidate : candidates)
     {
-        // Only Intel's file: a hand-set XeFGPath to xefg_cuda.dll itself must not become its own fallback
+        // Only Intel's file: a hand-set XeFGPath to f5low.dll itself must not become its own fallback
         if (_wcsicmp(candidate.filename().c_str(), L"libxess_fg.dll") == 0 &&
             std::filesystem::is_regular_file(candidate, ec))
             return std::filesystem::absolute(candidate, ec).wstring();
@@ -64,16 +64,16 @@ HMODULE F5Low::LoadLibraryForOutput()
         return nullptr;
     }
 
-    // xefg_cuda hands over to Intel's library where it cannot run (and builds on it later): the one OptiScaler's XeFG
+    // f5low.dll hands over to Intel's library where it cannot run (and builds on it later): the one OptiScaler's XeFG
     // output uses, so a single copy serves both. It reads the variable when it first needs the library.
     if (const auto intel = IntelLibraryPath(); !intel.empty())
     {
         SetEnvironmentVariableW(kIntelLibraryEnv, intel.c_str());
-        LOG_INFO("F5Low: Intel's XeFG library for xefg_cuda: {}", wstring_to_string(intel));
+        LOG_INFO("F5Low: Intel's XeFG library for f5low.dll: {}", wstring_to_string(intel));
     }
     else
     {
-        LOG_INFO("F5Low: no libxess_fg.dll in OptiScaler's folder or XeFGPath; xefg_cuda looks next to itself");
+        LOG_INFO("F5Low: no libxess_fg.dll in OptiScaler's folder or XeFGPath; f5low.dll looks next to itself");
     }
 
     const auto path = LibraryPath();

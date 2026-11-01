@@ -3697,7 +3697,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         XeFGProxy::InitXeFG();
         inputOptions[optiFgIndex].set_disabled(XeFGProxy::Module() == nullptr,
                                                state.activeFgOutput == FGOutput::F5Low
-                                                   ? "plugins\\xefg_cuda.dll could not be loaded"
+                                                   ? "plugins\\f5low.dll could not be loaded"
                                                    : "libxess_fg.dll is missing");
     }
 
@@ -3767,7 +3767,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
                                                                 ? "Needs the bridge: Vulkan route or Optical F5Low"
                                                                 : "Unsupported API");
 
-    // F5Low output requirements: the XeFG ones, plus an NVIDIA GPU and xefg_cuda.dll in the plugins folder
+    // F5Low output requirements: the XeFG ones, plus an NVIDIA GPU and f5low.dll in the plugins folder
     auto constexpr f5lowOutputIndex = (uint32_t) FGOutput::F5Low;
     static const auto f5lowAvailability = F5Low::Available();
     if (outputOptions[xefgOutputIndex].disabled)
@@ -4866,7 +4866,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         }
     }
 
-    // XeFG controls (also F5Low, which runs our xefg_cuda behind XeFG's API): one card. The checks below run whether
+    // XeFG controls (also F5Low, which runs our f5low.dll behind XeFG's API): one card. The checks below run whether
     // the card is open or not, since they turn frame generation off when it cannot run; only the drawing waits for it.
     if (UsesXeFGApi(state.activeFgOutput) && state.activeFgInput != FGInput::NoFG &&
         state.activeFgInput != FGInput::ForceXeLL && state.currentFGSwapchain != nullptr && XeFGProxy::InitXeFG() &&
@@ -4950,7 +4950,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
                     static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
                         { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
-                          "Our XeFG frame generation on the NVIDIA tensor cores (xefg_cuda)" },
+                          "Our XeFG frame generation on the NVIDIA tensor cores (f5low.dll)" },
                     };
 
                     if (!config->F5LowGenerator.has_value())
@@ -5570,7 +5570,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             ImGui::TextColored(toneMapColor({ 1.0f, 0.0f, 0.0f, 1.0f }),
                                state.activeFgOutput == FGOutput::F5Low
-                                   ? "plugins\\xefg_cuda.dll is missing!"
+                                   ? "plugins\\f5low.dll is missing!"
                                    : "libxess_fg.dll is missing!"); // Probably never will be visible
         }
     }
