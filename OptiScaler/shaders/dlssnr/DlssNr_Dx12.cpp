@@ -30,6 +30,7 @@
 #include "DlssNr_SurfaceFormats.h"
 #include "DlssNr_ActiveColor.h"
 #include "DlssNr_Views.h"
+#include "DlssNr_Retire.h"
 #include "DlssNr_Guides.h"
 #include "DlssNr_SeamClock.h"
 #include "DlssNr_GameScale.h"
@@ -958,10 +959,10 @@ struct NrRetired
     // out the usual 32-frame delay is the same use-after-free this whole retirement list exists to
     // prevent. DlssNr_DeferredSr.inl's ~Generation tears both down together for the same reason.
     NVSDK_NGX_Parameter* parameters = nullptr;
-    int framesLeft = 32;
 };
 
-std::vector<NrRetired> g_nrRetired;
+// When they are freed: DlssNr_Retire.h.
+DlssNr::Retire::List<NrRetired> g_nrRetired;
 
 void ParkNrFeature(void*& feature, void (*releaseFn)(void*) = nullptr,
                   NVSDK_NGX_Parameter** parameters = nullptr)
@@ -980,7 +981,7 @@ void ParkNrFeature(void*& feature, void (*releaseFn)(void*) = nullptr,
         *parameters = nullptr;
     }
 
-    g_nrRetired.push_back(r);
+    g_nrRetired.Park(r);
 }
 
 void ParkNrResource(ID3D12Resource*& res)
@@ -991,7 +992,7 @@ void ParkNrResource(ID3D12Resource*& res)
     NrRetired r;
     r.resource = res;
     res = nullptr;
-    g_nrRetired.push_back(r);
+    g_nrRetired.Park(r);
 }
 
 void ReleaseNrFeature(const NrRetired& r)
@@ -1009,24 +1010,15 @@ void ReleaseNrFeature(const NrRetired& r)
         NVNGXProxy::D3D12_DestroyParameters()(r.parameters);
 }
 
-void TickNrRetired()
+void FreeNrRetired(const NrRetired& r)
 {
-    for (size_t i = 0; i < g_nrRetired.size();)
-    {
-        if (--g_nrRetired[i].framesLeft > 0)
-        {
-            ++i;
-            continue;
-        }
+    ReleaseNrFeature(r);
 
-        ReleaseNrFeature(g_nrRetired[i]);
-
-        if (g_nrRetired[i].resource != nullptr)
-            g_nrRetired[i].resource->Release();
-
-        g_nrRetired.erase(g_nrRetired.begin() + i);
-    }
+    if (r.resource != nullptr)
+        r.resource->Release();
 }
+
+void TickNrRetired(unsigned long long epoch) { g_nrRetired.Tick(epoch, FreeNrRetired); }
 
 // The inject point decides which buffer is being measured -- the upscaler's linear output or the
 // finished frame in swapchain format -- so a reading taken before a change describes a different
@@ -3519,14 +3511,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // evaluate completed, after the return for a feature just created and the one for a feature still waiting for its first
     // submission: a game that makes the model build again on every call (views of different sizes alternating) never reached
     // it, and each build's resources piled up. One tick per submission epoch, before any return.
-    {
-        static unsigned long long lastRetiredEpoch = ~0ull;
-        if (frame.SubmissionEpoch != lastRetiredEpoch)
-        {
-            lastRetiredEpoch = frame.SubmissionEpoch;
-            TickNrRetired();
-        }
-    }
+    TickNrRetired(frame.SubmissionEpoch);
 
     // Superior Scaling (superior/Pipeline.inl) runs only while selected and not given up on this session; otherwise the
     // ordinary path runs, with Matched residual in its place. Selecting it again retries.
@@ -7447,15 +7432,7 @@ void Shutdown()
     CalibrationShutdown();
     EdgeCompression::Shutdown();
 
-    for (auto& r : g_nrRetired)
-    {
-        ReleaseNrFeature(r);
-
-        if (r.resource != nullptr)
-            r.resource->Release();
-    }
-
-    g_nrRetired.clear();
+    g_nrRetired.FreeAll(FreeNrRetired);
 
     if (g_nr.feature != nullptr && g_nr.release != nullptr)
         g_nr.release(g_nr.feature);
