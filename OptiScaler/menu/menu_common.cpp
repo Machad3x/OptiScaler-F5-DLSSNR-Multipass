@@ -3916,21 +3916,6 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
             ShowTooltip("What backend to use instead of the real DLSSG");
         }
 
-        // F5Low: what makes the frames inside it (read each time F5Low starts)
-        if (config->FGOutput.value_or_default() == FGOutput::F5Low && !replaceFgOutputWithNvngx)
-        {
-            static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
-                { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
-                  "Our XeFG frame generation on the NVIDIA tensor cores (xefg_cuda)" },
-            };
-
-            if (!config->F5LowGenerator.has_value())
-                config->F5LowGenerator = config->F5LowGenerator.value_or_default(); // need to have a value before combo
-
-            PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
-            ShowTooltip("What makes the generated frames in F5Low\nDLSS-G and libxess will follow");
-        }
-
         // Try to avoid having None selected when the gpu doesn't support DLSSG + some fallbacks
         if (!supportsDlssg && (replaceFgOutputWithNvngx || showNvngxFgDowndown) &&
             config->FGNvngxReplacement.value_or_default() == FGNvngxReplacement::None)
@@ -4741,6 +4726,21 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         }
 
         ImGui::PopTextWrapPos();
+
+        // F5Low: what makes the frames inside it (read each time F5Low creates its context)
+        if (state.activeFgOutput == FGOutput::F5Low)
+        {
+            static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
+                { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
+                  "Our XeFG frame generation on the NVIDIA tensor cores (xefg_cuda)" },
+            };
+
+            if (!config->F5LowGenerator.has_value())
+                config->F5LowGenerator = config->F5LowGenerator.value_or_default(); // need to have a value before combo
+
+            PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
+            ShowTooltip("What makes the generated frames in F5Low\nDLSS-G and libxess will follow");
+        }
 
         bool ignoreChecks = config->FGXeFGIgnoreInitChecks.value_or_default();
 
