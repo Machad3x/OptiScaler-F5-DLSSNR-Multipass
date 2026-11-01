@@ -959,7 +959,9 @@ struct NrRetired
     // out the usual 32-frame delay is the same use-after-free this whole retirement list exists to
     // prevent. DlssNr_DeferredSr.inl's ~Generation tears both down together for the same reason.
     NVSDK_NGX_Parameter* parameters = nullptr;
-    // Set by g_nrLifetime once every list NR recorded before this was parked has finished on the GPU.
+    // Set by NrLifetime once every list NR recorded before this was parked has finished on the GPU. Shared by
+    // everything parked in one Dispatch; null when the command list hooks were not on (the item waits for
+    // kStuckFrames).
     std::shared_ptr<std::atomic_bool> gpuDone;
 };
 
@@ -977,35 +979,60 @@ DlssNr::GpuLifetime& NrLifetime()
     return *value;
 }
 
-// A list NR is about to record on. The submit and reset hooks go on before the first one: a list they never report
-// would hold every parked item back until kStuckFrames.
+// NrLifetime hears about every list NR records on: the submit and the reset hook are both on. Without the submit hook
+// a list that is reset would count as finished with no GPU work, so then nothing is recorded at all.
+bool g_nrListsReported = false;
+// What everything parked since the last WatchNrList shares: one Retire per Dispatch, not one per item.
+std::shared_ptr<std::atomic_bool> g_nrParkDone;
+
+// A list NR is about to record on, at the top of Dispatch, before anything can be parked. The hooks go on first (and
+// are asked again every time: HookLateNrQueue returns at once when they are on).
 void WatchNrList(ID3D12GraphicsCommandList* cmdList)
 {
-    static bool hooked = false;
+    g_nrParkDone.reset();
 
-    if (cmdList == nullptr)
+    ID3D12Device* device = nullptr;
+
+    if (cmdList == nullptr || FAILED(cmdList->GetDevice(IID_PPV_ARGS(&device))) || device == nullptr)
         return;
 
-    if (!hooked)
-    {
-        ID3D12Device* device = nullptr;
+    const bool reported = ResTrack_Dx12::HookLateNrQueue(device);
+    device->Release();
 
-        if (FAILED(cmdList->GetDevice(IID_PPV_ARGS(&device))) || device == nullptr)
-            return;
+    if (!reported && g_nrListsReported != reported)
+        LOG_WARN("DLSS-NR: the command list hooks are not on, parked models and textures are freed by time");
 
-        ResTrack_Dx12::HookLateNrQueue(device);
-        device->Release();
-        hooked = true;
-    }
+    g_nrListsReported = reported;
+
+    if (!reported)
+        return;
 
     NrLifetime().Record(cmdList);
-    DlssNrWatchedLists::Add(cmdList); // the submit/reset hooks must hear about this list
+    // The list the hooks report is the real one, not a Streamline proxy (as DlssNrGpuTime::Start and Late::Arm do).
+    DlssNrWatchedLists::Add(Util::RealObjectIdentity(cmdList));
 }
 
 void ParkNr(NrRetired& r)
 {
-    r.gpuDone = std::make_shared<std::atomic_bool>(false);
-    NrLifetime().Retire([done = r.gpuDone] { *done = true; });
+    if (g_nrListsReported)
+    {
+        if (g_nrParkDone == nullptr)
+        {
+            g_nrParkDone = std::make_shared<std::atomic_bool>(false);
+            // Owned by the flag: once every item sharing it is gone (freed by time when a list never finishes), the
+            // tracker drops this without running it.
+            NrLifetime().Retire(
+                [done = std::weak_ptr<std::atomic_bool>(g_nrParkDone)]
+                {
+                    if (auto flag = done.lock())
+                        *flag = true;
+                },
+                g_nrParkDone);
+        }
+
+        r.gpuDone = g_nrParkDone;
+    }
+
     g_nrRetired.Park(r);
 }
 
@@ -1055,6 +1082,14 @@ void ReleaseNrFeature(const NrRetired& r)
         NVNGXProxy::D3D12_DestroyParameters()(r.parameters);
 }
 
+void FreeNrRetiredNow(const NrRetired& r)
+{
+    ReleaseNrFeature(r);
+
+    if (r.resource != nullptr)
+        r.resource->Release();
+}
+
 void FreeNrRetired(const NrRetired& r, bool gpuConfirmed)
 {
     static bool said = false;
@@ -1066,17 +1101,14 @@ void FreeNrRetired(const NrRetired& r, bool gpuConfirmed)
                  r.feature != nullptr ? "model" : "texture");
     }
 
-    ReleaseNrFeature(r);
-
-    if (r.resource != nullptr)
-        r.resource->Release();
+    FreeNrRetiredNow(r);
 }
 
 void TickNrRetired(unsigned long long epoch)
 {
     NrLifetime().Collect();
     g_nrRetired.Tick(
-        epoch, [](const NrRetired& r) { return r.gpuDone == nullptr || r.gpuDone->load(); }, FreeNrRetired);
+        epoch, [](const NrRetired& r) { return r.gpuDone != nullptr && r.gpuDone->load(); }, FreeNrRetired);
 }
 
 // The inject point decides which buffer is being measured -- the upscaler's linear output or the
@@ -7494,7 +7526,7 @@ void Shutdown()
     CalibrationShutdown();
     EdgeCompression::Shutdown();
 
-    g_nrRetired.FreeAll(FreeNrRetired);
+    g_nrRetired.FreeAll(FreeNrRetiredNow);
 
     if (g_nr.feature != nullptr && g_nr.release != nullptr)
         g_nr.release(g_nr.feature);

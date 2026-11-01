@@ -10,8 +10,10 @@
 // under work still in flight (issue #271). An epoch is what the caller hands Dispatch
 // (DlssNrFrameInfo::SubmissionEpoch); the first call with a new value counts every parked item down once.
 //
-// Should the lists never be reported done (a submit or reset the hooks did not see), the item would stay forever: it is
-// freed kStuckFrames epochs after its count ran out, and `free` is told the GPU did not confirm it.
+// Should the lists never be reported done (a submit or reset the hooks did not see, or the hooks are not on), the item
+// would stay forever: it is freed kStuckFrames epochs after its count ran out, and `free` is told the GPU did not
+// confirm it. That last resort is a plain timer again, only a far longer one (632 epochs: over 150 rendered frames even
+// with four epochs each).
 
 #include <cstddef>
 #include <cstdint>
@@ -57,11 +59,11 @@ template <typename Item> class List
         }
     }
 
-    // Everything now, whatever its count (DlssNr::Shutdown).
+    // Everything now, whatever its count (DlssNr::Shutdown): `free(item)`.
     template <typename FreeFn> void FreeAll(FreeFn&& free)
     {
         for (auto& parked : _parked)
-            free(parked.item, false);
+            free(parked.item);
 
         _parked.clear();
     }
