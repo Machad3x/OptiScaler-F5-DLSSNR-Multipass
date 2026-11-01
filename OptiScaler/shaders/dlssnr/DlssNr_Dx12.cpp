@@ -2856,7 +2856,8 @@ bool DlssNr_Dx12::EnsureLutTextureFrom(ID3D12GraphicsCommandList* InCmdList, con
     texDesc.Height = (UINT) size;
     texDesc.DepthOrArraySize = (UINT16) size;
     texDesc.MipLevels = 1;
-    texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    // Full float: the shader interpolates the texels itself (dlssnr_lut.hlsl LutTrilinear), at full precision.
+    texDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
     texDesc.SampleDesc.Count = 1;
     texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
@@ -2869,8 +2870,8 @@ bool DlssNr_Dx12::EnsureLutTextureFrom(ID3D12GraphicsCommandList* InCmdList, con
     }
 
     // Pack the parsed lattice (red-fastest, matching .cube's own order, which is already x-fastest-then-y-
-    // then-z -- exactly a 3D texture's own row-major layout) into half4, honouring the destination's row
-    // pitch -- GetCopyableFootprints is the only correct source for it, rather than assuming size*8 bytes is
+    // then-z -- exactly a 3D texture's own row-major layout) into float4, honouring the destination's row
+    // pitch -- GetCopyableFootprints is the only correct source for it, rather than assuming size*16 bytes is
     // already 256-byte aligned.
     UINT64 totalBytes = 0;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};
@@ -2900,8 +2901,8 @@ bool DlssNr_Dx12::EnsureLutTextureFrom(ID3D12GraphicsCommandList* InCmdList, con
         return false;
     }
 
-    DlssNrLutPack::PackHalf4(Lut.rgb.data(), size, mapped, (size_t) footprint.Footprint.RowPitch,
-                             (size_t) footprint.Footprint.RowPitch * (size_t) size);
+    DlssNrLutPack::PackFloat4(Lut.rgb.data(), size, mapped, (size_t) footprint.Footprint.RowPitch,
+                              (size_t) footprint.Footprint.RowPitch * (size_t) size);
 
     uploadBuffer->Unmap(0, nullptr);
 

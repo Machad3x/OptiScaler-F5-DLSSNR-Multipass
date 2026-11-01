@@ -45,16 +45,16 @@ bool F5Lut_Dx11::EnsureLutTexture()
     ReleaseLutTexture();
 
     const int size = lut.size;
-    const size_t rowPitch = (size_t) size * 4u * sizeof(uint16_t);
-    std::vector<uint8_t> texels(DlssNrLutPack::TightBytes(size));
-    DlssNrLutPack::PackHalf4(lut.rgb.data(), size, texels.data(), rowPitch, rowPitch * (size_t) size);
+    const size_t rowPitch = (size_t) size * 4u * sizeof(float);
+    std::vector<uint8_t> texels(DlssNrLutPack::TightBytesFloat4(size));
+    DlssNrLutPack::PackFloat4(lut.rgb.data(), size, texels.data(), rowPitch, rowPitch * (size_t) size);
 
     D3D11_TEXTURE3D_DESC desc {};
     desc.Width = (UINT) size;
     desc.Height = (UINT) size;
     desc.Depth = (UINT) size;
     desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
     desc.Usage = D3D11_USAGE_IMMUTABLE;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 

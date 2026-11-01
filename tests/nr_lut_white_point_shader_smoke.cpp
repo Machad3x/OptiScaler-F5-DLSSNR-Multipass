@@ -1,8 +1,9 @@
 // Headless shader test: Windows D3D11 WARP runs dlssnr_lut.hlsl, the LUT grade NR's input goes through, and checks the
 // white point it grades for: the encode's own, recomputed this frame from the live exposure texture.
 //
-//   1. With no live exposure the pass is bit-identical to the shader before the white point became shared
-//      (dlssnr_lut.hlsl at 7364a7f8) for PQ, tone-mapped sRGB and gamma 2.2 frames. Linear HDR grades in the sRGB
+//   1. Tone-mapped sRGB and gamma 2.2 frames get the exact grade (full float interpolation since 2026-11-01), PQ the
+//      shader before the white point became shared (dlssnr_lut.hlsl at 7364a7f8) within its 8-bit filter weights,
+//      with no live exposure. Linear HDR grades in the sRGB
 //      display domain a .cube is made for (sRGB of Neutwo of light / white; fixed 2026-10-31, the reference graded
 //      the Neutwo values as they were), checked against a CPU model of that grade at several white points, and
 //      linear mid grey 0.18 lands on display 0.46.
@@ -281,15 +282,30 @@ try
         std::printf("log-spaced lattice (LatticeCoord 1): worst display error %.2e\n", off);
         expect(off < 5e-3f, "the shader's LatticeFromDisplay does not match the CPU's");
     }
-    expect(SameBits(gpu.Run(shader.Get(), display, Base(0, false, 1.0f), 0.0f),
-                    gpu.Run(reference.Get(), display, Base(0, false, 1.0f), 0.0f)),
-           "tone-mapped sRGB differs from the reference");
-    expect(SameBits(gpu.Run(shader.Get(), display, Base(3, false, 1.0f), 0.0f),
-                    gpu.Run(reference.Get(), display, Base(3, false, 1.0f), 0.0f)),
-           "gamma 2.2 differs from the reference");
-    expect(SameBits(gpu.Run(shader.Get(), pq, Base(4, true, 1.0f), 0.0f),
-                    gpu.Run(reference.Get(), pq, Base(4, true, 1.0f), 0.0f)),
-           "PQ at the default paper white differs from the reference");
+    // Display-referred frames: the exact grade (the cube is linear, so trilinear is exact), at full float precision since
+    // the shader interpolates itself (2026-11-01; the sampler's 8-bit weights were ~1e-3 off). PQ against the reference
+    // within those old 8-bit weights.
+    for (uint32_t encoding : { 0u, 3u })
+    {
+        const auto got = gpu.Run(shader.Get(), display, Base(encoding, false, 1.0f), 0.0f);
+        float off = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            const float want[3] = { 0.9f * display[i].g + 0.05f, 0.9f * display[i].b + 0.05f,
+                                    0.9f * display[i].r + 0.05f };
+            off = std::max({ off, std::abs(got[i].r - want[0]), std::abs(got[i].g - want[1]),
+                             std::abs(got[i].b - want[2]) });
+            expect(got[i].a == display[i].a, "display alpha changed");
+        }
+        std::printf("%s: worst error vs the exact grade %.2e\n", encoding == 3u ? "gamma 2.2" : "tone-mapped sRGB", off);
+        expect(off < 1e-5f, encoding == 3u ? "gamma 2.2 is not the exact grade" : "tone-mapped sRGB is not the exact grade");
+    }
+    {
+        const float off = Worst(gpu.Run(shader.Get(), pq, Base(4, true, 1.0f), 0.0f),
+                                gpu.Run(reference.Get(), pq, Base(4, true, 1.0f), 0.0f));
+        std::printf("PQ at the default paper white vs the reference: %.2e\n", off);
+        expect(off < 1e-2f, "PQ at the default paper white differs from the reference");
+    }
 
     // 2. Live exposure: PreExposure / exposure x Trim, following the texel; the host value is ignored.
     {

@@ -61,7 +61,7 @@ bool F5Lut_Dx12::EnsureLutTexture(ID3D12GraphicsCommandList* InCmdList)
     const int size = lut.size;
     const auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     const auto texDesc =
-        CD3DX12_RESOURCE_DESC::Tex3D(DXGI_FORMAT_R16G16B16A16_FLOAT, (UINT64) size, (UINT) size, (UINT16) size, 1);
+        CD3DX12_RESOURCE_DESC::Tex3D(DXGI_FORMAT_R32G32B32A32_FLOAT, (UINT64) size, (UINT) size, (UINT16) size, 1);
 
     if (FAILED(_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
                                                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&_lutTexture))))
@@ -93,8 +93,8 @@ bool F5Lut_Dx12::EnsureLutTexture(ID3D12GraphicsCommandList* InCmdList)
         return false;
     }
 
-    DlssNrLutPack::PackHalf4(lut.rgb.data(), size, mapped, (size_t) footprint.Footprint.RowPitch,
-                             (size_t) footprint.Footprint.RowPitch * (size_t) size);
+    DlssNrLutPack::PackFloat4(lut.rgb.data(), size, mapped, (size_t) footprint.Footprint.RowPitch,
+                              (size_t) footprint.Footprint.RowPitch * (size_t) size);
     upload->Unmap(0, nullptr);
 
     D3D12_TEXTURE_COPY_LOCATION dst {};
