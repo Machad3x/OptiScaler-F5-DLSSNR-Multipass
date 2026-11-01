@@ -755,8 +755,12 @@ float3 CubeScaleResidual(float3 P, float3 T)
 //     out below L = 0.1 by saturate(10 * L_proxy), so a shadow cannot turn a tiny edit into a big ratio;
 //   * the chroma difference in a and in b, added as is.
 //
-// The three are interpolated bilinearly between the four nearest texels of the model's own grid (edges
-// clamped) and applied to the frame's full-resolution proxy: L' = saturate(L * exp(ratio)),
+// The three are blended between the four nearest texels of the model's own grid (edges clamped) with the
+// bilinear weights, each multiplied by how close that texel's proxy is to the frame's own proxy at this pixel
+// (joint bilateral upsampling, with the range weight of Superior Scaling's guided reconstruction), so an edit
+// made on one side of an edge stays there instead of being smeared across it, and flat areas get exactly the
+// bilinear blend. Where no texel is close enough to carry weight (a detail thinner than a model texel), it falls
+// back to the plain bilinear blend. The result is applied to the frame's full-resolution proxy: L' = saturate(L * exp(ratio)),
 // a' = a + da, b' = b + db, back to RGB and saturated. The 0.1 floor belongs to the ratio only. NVIDIA's
 // kernel has it on the pixel too (max(L, 0.1) * exp(ratio)), which lifts everything below L 0.1 to 0.1 with
 // an unchanged answer, a grey veil over near-black (and 1% of white on the linear curve); left out here
@@ -776,6 +780,11 @@ float3 NvOkLab(float3 rgb)
     return mul(lms_to_lab, pow(max(mul(rgb_to_lms, saturate(rgb)), 1e-12), 1.0 / 3.0));
 }
 
+// SuperiorGuidedEdit's range sigma, on the stored (sRGB-encoded) proxy. Its spatial Gaussian (sigma 3 texels over
+// 3x3) was measured here too (tests/nr_residual_compare_shader_smoke.cpp): without Superior's private DLSS after it,
+// it spreads the edit into flat areas (about 2x the bilinear flat error at 65%); the bilinear tent keeps them exact.
+static const float kNvGuideRangeSigma = 0.015;
+
 float3 NvidiaResidualModel(float3 fullProxy, float2 uv)
 {
     uint gridW, gridH;
@@ -785,7 +794,11 @@ float3 NvidiaResidualModel(float3 fullProxy, float2 uv)
     const float2 p = uv * grid - 0.5;
     const int2 i0 = (int2) floor(p);
     const float2 f = p - (float2) i0;
+    // The frame's own proxy, stored the way the taps are, to compare against.
+    const float3 guide = gPassthrough != 0 ? fullProxy : LinearToSrgb(fullProxy);
+    const float invRange2 = 1.0 / (kNvGuideRangeSigma * kNvGuideRangeSigma);
     float3 residual = float3(0.0, 0.0, 0.0);
+    float weightSum = 0.0;
 
     [unroll] for (int k = 0; k < 4; ++k)
     {
@@ -797,10 +810,16 @@ float3 NvidiaResidualModel(float3 fullProxy, float2 uv)
         const float3 la = NvOkLab(gPassthrough != 0 ? a4.rgb : SrgbToLinear(a4.rgb));
         const float3 lb = NvOkLab(gPassthrough != 0 ? b4.rgb : SrgbToLinear(b4.rgb));
         const float ratio = clamp(log(max(lb.x, 0.1)) - log(max(la.x, 0.1)), -2.0, 2.0) * saturate(10.0 * la.x);
-        const float weight = (tap.x != 0 ? f.x : 1.0 - f.x) * (tap.y != 0 ? f.y : 1.0 - f.y);
+        // The bilinear weight times the range weight. The 1e-6 floor turns it back into the plain bilinear blend
+        // where no texel is close (all range weights below it), without a second accumulator.
+        const float3 colourDelta = a4.rgb - guide;
+        const float weight = (tap.x != 0 ? f.x : 1.0 - f.x) * (tap.y != 0 ? f.y : 1.0 - f.y) *
+                             (exp(-0.5 * dot(colourDelta, colourDelta) * (1.0 / 3.0) * invRange2) + 1e-6);
         residual += weight * float3(ratio, lb.y - la.y, lb.z - la.z);
+        weightSum += weight;
     }
 
+    residual /= weightSum;
     const float3 lab = NvOkLab(fullProxy);
     const float L = saturate(lab.x * exp(residual.x));
     return saturate(FromOkLab(float3(L, lab.y + residual.y, lab.z + residual.z)));
@@ -1856,7 +1875,12 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // At the same rate there is no residual to carry: the model's own picture is already at the
         // frame's resolution, and P + (m - p) collapses to m exactly.
         // 1 is the cube-scaled additive edit, 2 is the OkLab residual (see NvidiaResidualModel).
-        model = gTransfer == 2 ? NvidiaResidualModel(fullProxy, cmpUv) : CubeScaleResidual(fullProxy, fullProxy + edit);
+        // A real branch: as a ?: both sides ran, so Matched residual paid for the OkLab path too
+        // (0.66 -> 0.39 ms at 4K with the model at 65%, RTX 5070 Ti).
+        [branch] if (gTransfer == 2)
+            model = NvidiaResidualModel(fullProxy, cmpUv);
+        else
+            model = CubeScaleResidual(fullProxy, fullProxy + edit);
     }
 
 #endif

@@ -1,26 +1,35 @@
-// Headless shader comparison: Windows D3D11 WARP runs dlssnr.hlsl's encode, downsample and resolve to compare the
-// three ways a model that ran below the frame's size comes back ([DlssNr] Transfer): 0 Classic (the answer
-// enlarged bilinearly), 1 Matched residual (the RGB change enlarged and added), 2 NVIDIA residual (the change
-// enlarged in OkLab: brightness as a ratio, colour as a difference).
+// Headless shader comparison: D3D11 runs dlssnr.hlsl's encode, downsample and resolve to compare the three ways a
+// model that ran below the frame's size comes back ([DlssNr] Transfer): 0 Classic (the answer enlarged bilinearly),
+// 1 Matched residual (the RGB change enlarged and added), 2 NVIDIA residual (the change in OkLab -- brightness as a
+// ratio, colour as a difference -- enlarged with weights guided by the full-size frame).
 //
 // Each scene is a row with hard edges, fine stripes or saturated colour. A known edit is made to it at full size
 // (brighten the highlights, deepen the shadows, local contrast, +10%, a colour shift), standing in for the model.
 // The reference is the resolve with the model at full size (Transfer 0, work scale 1). Each mode then gets only
-// the half-size pair -- the frame's proxy and the edited proxy, downsampled 2:1 by the shader -- and is scored
-// against that reference on the resolved frame:
+// the reduced pair -- the frame's proxy and the edited proxy, area-downsampled by the shader to 50% and to 65.6%
+// (42 of 64 pixels) -- and is scored against that reference on the resolved frame:
 //
 //   err    mean |Y - Y_ref| / max(Y_ref, 0.005), all pixels
 //   halo   the largest brightening past the reference on dark pixels (frame Y < 0.1), relative, and `at`, the pixel
 //          where it occurs
 //   carried  how much of the edit arrives: sum |Y - Y_frame| / sum |Y_ref - Y_frame| (1 = all of it)
 //   hue    the largest change of chromaticity (rgb / Y) past the reference, on pixels the edit touched
+//   edge   err on the pixels within 2 of an edge of the frame (neighbours differing by more than 20%); flat, the rest.
+//          The summary pools these pixels over all cases, so a scene with one flat pixel does not weigh like a flat one.
 //
-// It prints a table; it fails only when a mode's output is not finite or the harness breaks. A scoreboard of the
-// modes, not a regression test: none of its scenes reaches below OkLab L 0.1, so the near-black fix
+// It fails when a mode's output is not finite, when NVIDIA residual's mean edge err is not below kEdgeLimit of the
+// plain bilinear enlarge it had before (kBilinear, measured with this harness on 317f11f6), or when its flat err
+// grows past kFlatLimit of that. None of the scenes reaches below OkLab L 0.1, so the near-black fix
 // (nr_proxy_curves_shader_smoke.cpp section 7) does not show here.
 //
+// With a reference dlssnr.hlsl (an older commit's), it also requires Classic and Matched residual at both sizes, and
+// every mode with the model at full size, to come out bit-identical to the reference.
+//
+// Runs on the hardware GPU. --warp asks for WARP, which has crashed on this shader since 507c9404 (the percentile
+// exposure meter's groupshared histogram); the game never runs there.
+//
 // Build: cl /nologo /std:c++20 /EHsc /W3 tests\nr_residual_compare_shader_smoke.cpp /link d3d11.lib d3dcompiler.lib
-// Run:   nr_residual_compare_shader_smoke.exe <dlssnr.hlsl>
+// Run:   nr_residual_compare_shader_smoke.exe <dlssnr.hlsl> [reference dlssnr.hlsl] [--warp]
 #define NOMINMAX
 #include <windows.h>
 #include <d3d11.h>
@@ -55,9 +64,10 @@ struct Gpu
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11SamplerState> linearSampler;
 
-    Gpu()
+    explicit Gpu(bool warp)
     {
-        check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &ctx));
+        check(D3D11CreateDevice(nullptr, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
+                                D3D11_SDK_VERSION, &device, nullptr, &ctx));
         D3D11_BUFFER_DESC buffer {};
         buffer.ByteWidth = sizeof(DlssNrConstants);
         buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
@@ -154,18 +164,23 @@ static DlssNrConstants Base(uint32_t mode, UINT width, uint32_t reversible)
     return k;
 }
 
-// The encode's proxy and kept copy, and the proxy's 2:1 downsample, left on the GPU.
-struct Encoded { ComPtr<ID3D11Texture2D> proxy, keep, half; };
+// The encode's proxy and kept copy, and the proxy area-downsampled to `reduced` pixels, left on the GPU.
+struct Encoded { ComPtr<ID3D11Texture2D> proxy, keep, reduced; };
 
-static Encoded Encode(Gpu& gpu, ID3D11ComputeShader* shader, const Row& input, uint32_t reversible)
+static Encoded Encode(Gpu& gpu, ID3D11ComputeShader* shader, const Row& input, uint32_t reversible, UINT reduced)
 {
     const UINT n = (UINT) input.size();
     auto source = gpu.Texture(n, &input);
-    Encoded e {gpu.Texture(n, nullptr), gpu.Texture(n, nullptr), gpu.Texture(n / 2, nullptr)};
+    Encoded e {gpu.Texture(n, nullptr), gpu.Texture(n, nullptr), gpu.Texture(reduced, nullptr)};
     auto spare = gpu.Texture(n, nullptr);
     gpu.Run(shader, Base(DlssNrMode_Encode, n, reversible), source.Get(), nullptr, nullptr, e.proxy.Get(), e.keep.Get());
-    gpu.Run(shader, Base(DlssNrMode_Downsample, n / 2, reversible), e.proxy.Get(), nullptr, nullptr, e.half.Get(), spare.Get());
+    gpu.Run(shader, Base(DlssNrMode_Downsample, reduced, reversible), e.proxy.Get(), nullptr, nullptr, e.reduced.Get(), spare.Get());
     return e;
+}
+
+static bool SameBits(const Row& a, const Row& b)
+{
+    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(Pixel)) == 0;
 }
 
 // Resolve only: t0 the proxy the model saw, t1 its answer, t2 the kept frame.
@@ -225,6 +240,18 @@ static Row ColourScene()
     return row;
 }
 
+// A smooth ramp (a lit wall, a sky): no edges, so a guided enlarge must not fall back to blocks here.
+static Row RampScene()
+{
+    Row row;
+    for (int i = 0; i < 64; ++i)
+    {
+        const float t = (float) i / 63.0f;
+        row.push_back({0.03f + 0.8f * t, 0.03f + 0.6f * t, 0.05f + 0.3f * t, 1});
+    }
+    return row;
+}
+
 using Edit = std::function<Row(const Row&)>;
 
 static Row EachPixel(const Row& row, const std::function<Pixel(const Pixel&)>& f)
@@ -235,15 +262,53 @@ static Row EachPixel(const Row& row, const std::function<Pixel(const Pixel&)>& f
     return out;
 }
 
+// The pixels within 2 of an edge of the frame: neighbours whose luminance differs by more than 20%.
+static std::vector<bool> EdgeBand(const Row& frame)
+{
+    const int n = (int) frame.size();
+    std::vector<bool> band(n, false);
+    for (int i = 0; i + 1 < n; ++i)
+    {
+        const float a = Luma(frame[i]), b = Luma(frame[i + 1]);
+        if (std::abs(a - b) / std::max({a, b, 0.01f}) > 0.2f)
+            for (int j = std::max(i - 1, 0); j <= std::min(i + 2, n - 1); ++j)
+                band[j] = true;
+    }
+    return band;
+}
+
+// NVIDIA residual with the plain bilinear enlarge, before the guided one: mean edge / flat err per pixel, by curve
+// (soft knee, HLG) and size (50%, 65.6%). Measured with this harness on 317f11f6 (RTX 5070 Ti).
+static const double kBilinear[2][2][2] = {{{0.06473, 0.00065}, {0.05531, 0.00086}}, {{0.06841, 0.00066}, {0.05842, 0.00087}}};
+static constexpr double kEdgeLimit = 0.85; // the guided enlarge has to take at least 15% off the edge err
+static constexpr double kFlatLimit = 1.05; // and may not make flat areas more than 5% worse
+
 int wmain(int argc, wchar_t** argv) try
 {
-    if (argc != 2)
+    const wchar_t* shaderPath = nullptr;
+    const wchar_t* referencePath = nullptr;
+    bool warp = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::wcscmp(argv[i], L"--warp") == 0)
+            warp = true;
+        else if (!shaderPath)
+            shaderPath = argv[i];
+        else if (!referencePath)
+            referencePath = argv[i];
+        else
+            throw std::runtime_error("Too many arguments");
+    }
+    if (!shaderPath)
         throw std::runtime_error("Pass the dlssnr.hlsl path");
-    Gpu gpu;
-    auto shader = gpu.Compile(argv[1]);
+    Gpu gpu(warp);
+    auto shader = gpu.Compile(shaderPath);
+    ComPtr<ID3D11ComputeShader> reference;
+    if (referencePath)
+        reference = gpu.Compile(referencePath);
 
     struct Scene { const char* name; Row row; };
-    const Scene scenes[] = {{"edges", EdgeScene()}, {"stripes", StripeScene()}, {"colour", ColourScene()}};
+    const Scene scenes[] = {{"edges", EdgeScene()}, {"stripes", StripeScene()}, {"colour", ColourScene()}, {"ramp", RampScene()}};
 
     struct NamedEdit { const char* name; Edit edit; };
     const NamedEdit edits[] = {
@@ -272,82 +337,149 @@ int wmain(int argc, wchar_t** argv) try
 
     struct Curve { uint32_t mode; const char* name; };
     const Curve curves[] = {{0, "soft knee"}, {5, "HLG"}};
+    struct Size { UINT pixels; const char* name; };
+    const Size sizes[] = {{32, "50%"}, {42, "65.6%"}};
     const char* modeNames[3] = {"Classic", "Matched", "NVIDIA"};
 
-    // Totals per curve and mode, over every scene and edit.
-    double totalErr[2][3] = {}, worstHalo[2][3] = {}, totalCarried[2][3] = {};
-    int cases = 0;
+    // Totals per curve, size and mode, over every scene and edit.
+    double totalErr[2][2][3] = {}, worstHalo[2][2][3] = {}, totalCarried[2][2][3] = {}, totalEdge[2][2][3] = {},
+           totalFlat[2][2][3] = {};
+    int edgePixels[2][2] = {}, flatPixels[2][2] = {};
+    int cases = 0, identical = 0;
 
     for (int ci = 0; ci < 2; ++ci)
-    {
-        const Curve& curve = curves[ci];
-        std::printf("\n== %s (ReversibleMode %u), model at half size\n", curve.name, curve.mode);
-        std::printf("%-8s %-27s %-8s %8s %8s %4s %8s %8s\n", "scene", "edit", "mode", "err", "halo", "at", "carried", "hue");
-        for (const Scene& scene : scenes)
-            for (const NamedEdit& edit : edits)
-            {
-                const Row& frame = scene.row;
-                const Row answer = edit.edit(frame);
-                const UINT n = (UINT) frame.size();
-                const Encoded f = Encode(gpu, shader.Get(), frame, curve.mode);
-                const Encoded a = Encode(gpu, shader.Get(), answer, curve.mode);
-                const Row reference = Resolve(gpu, shader.Get(), f.proxy.Get(), a.proxy.Get(), f.keep.Get(), n, curve.mode, 0, 1.0f);
-                expect(Finite(reference), std::string("reference not finite: ") + scene.name + ", " + edit.name);
-
-                for (uint32_t transfer = 0; transfer < 3; ++transfer)
+        for (int si = 0; si < 2; ++si)
+        {
+            const Curve& curve = curves[ci];
+            const Size& size = sizes[si];
+            std::printf("\n== %s (ReversibleMode %u), model at %s\n", curve.name, curve.mode, size.name);
+            std::printf("%-8s %-27s %-8s %8s %8s %4s %8s %8s %8s %8s\n", "scene", "edit", "mode", "err", "halo", "at", "carried",
+                        "hue", "edge", "flat");
+            for (const Scene& scene : scenes)
+                for (const NamedEdit& edit : edits)
                 {
-                    const Row got = Resolve(gpu, shader.Get(), f.half.Get(), a.half.Get(), f.keep.Get(), n, curve.mode, transfer, 0.5f);
-                    expect(Finite(got), std::string("not finite: ") + scene.name + ", " + edit.name + ", " + modeNames[transfer]);
+                    const Row& frame = scene.row;
+                    const Row answer = edit.edit(frame);
+                    const UINT n = (UINT) frame.size();
+                    const float workScale = (float) size.pixels / (float) n;
+                    const std::vector<bool> band = EdgeBand(frame);
+                    const Encoded f = Encode(gpu, shader.Get(), frame, curve.mode, size.pixels);
+                    const Encoded a = Encode(gpu, shader.Get(), answer, curve.mode, size.pixels);
+                    const Row full = Resolve(gpu, shader.Get(), f.proxy.Get(), a.proxy.Get(), f.keep.Get(), n, curve.mode, 0, 1.0f);
+                    expect(Finite(full), std::string("reference not finite: ") + scene.name + ", " + edit.name);
 
-                    double err = 0.0, moved = 0.0, wanted = 0.0;
-                    float halo = 0.0f, hue = 0.0f;
-                    int haloAt = -1;
-                    for (UINT i = 0; i < n; ++i)
+                    for (uint32_t transfer = 0; transfer < 3; ++transfer)
                     {
-                        const float y = Luma(got[i]), yRef = Luma(reference[i]), yFrame = Luma(frame[i]);
-                        const float scale = std::max(yRef, 0.005f);
-                        err += std::abs(y - yRef) / scale;
-                        moved += std::abs(y - yFrame);
-                        wanted += std::abs(yRef - yFrame);
-                        if (yFrame < 0.1f && (y - yRef) / scale > halo)
+                        const Row got = Resolve(gpu, shader.Get(), f.reduced.Get(), a.reduced.Get(), f.keep.Get(), n, curve.mode, transfer,
+                                                workScale);
+                        const std::string label = std::string(scene.name) + ", " + edit.name + ", " + modeNames[transfer] + ", " +
+                                                  curve.name + ", " + size.name;
+                        expect(Finite(got), "not finite: " + label);
+
+                        if (reference)
                         {
-                            halo = (y - yRef) / scale;
-                            haloAt = (int) i;
+                            // The older shader on the same inputs: Classic and Matched below full size, every mode at it.
+                            const Encoded rf = Encode(gpu, reference.Get(), frame, curve.mode, size.pixels);
+                            const Encoded ra = Encode(gpu, reference.Get(), answer, curve.mode, size.pixels);
+                            if (transfer < 2)
+                            {
+                                expect(SameBits(got, Resolve(gpu, reference.Get(), rf.reduced.Get(), ra.reduced.Get(), rf.keep.Get(), n,
+                                                             curve.mode, transfer, workScale)),
+                                       "not bit-identical to the reference: " + label);
+                                ++identical;
+                            }
+                            if (si == 0)
+                            {
+                                const Row oursFull = Resolve(gpu, shader.Get(), f.proxy.Get(), a.proxy.Get(), f.keep.Get(), n,
+                                                             curve.mode, transfer, 1.0f);
+                                expect(SameBits(oursFull, Resolve(gpu, reference.Get(), rf.proxy.Get(), ra.proxy.Get(), rf.keep.Get(), n,
+                                                                  curve.mode, transfer, 1.0f)),
+                                       "not bit-identical to the reference at full size: " + label);
+                                ++identical;
+                            }
                         }
-                        if (std::abs(yRef - yFrame) > 1e-4f || std::abs(Luma(answer[i]) - yFrame) > 1e-4f ||
-                            std::abs(answer[i].g - frame[i].g) > 1e-4f)
+
+                        double err = 0.0, moved = 0.0, wanted = 0.0, edgeErr = 0.0, flatErr = 0.0;
+                        int edgeCount = 0, flatCount = 0;
+                        float halo = 0.0f, hue = 0.0f;
+                        int haloAt = -1;
+                        for (UINT i = 0; i < n; ++i)
                         {
-                            const float yy = std::max(y, 1e-4f), yr = std::max(yRef, 1e-4f);
-                            hue = std::max({hue, std::abs(got[i].r / yy - reference[i].r / yr), std::abs(got[i].g / yy - reference[i].g / yr),
-                                            std::abs(got[i].b / yy - reference[i].b / yr)});
+                            const float y = Luma(got[i]), yRef = Luma(full[i]), yFrame = Luma(frame[i]);
+                            const float scale = std::max(yRef, 0.005f);
+                            const double e = std::abs(y - yRef) / scale;
+                            err += e;
+                            (band[i] ? edgeErr : flatErr) += e;
+                            ++(band[i] ? edgeCount : flatCount);
+                            moved += std::abs(y - yFrame);
+                            wanted += std::abs(yRef - yFrame);
+                            if (yFrame < 0.1f && (y - yRef) / scale > halo)
+                            {
+                                halo = (y - yRef) / scale;
+                                haloAt = (int) i;
+                            }
+                            if (std::abs(yRef - yFrame) > 1e-4f || std::abs(Luma(answer[i]) - yFrame) > 1e-4f ||
+                                std::abs(answer[i].g - frame[i].g) > 1e-4f)
+                            {
+                                const float yy = std::max(y, 1e-4f), yr = std::max(yRef, 1e-4f);
+                                hue = std::max({hue, std::abs(got[i].r / yy - full[i].r / yr), std::abs(got[i].g / yy - full[i].g / yr),
+                                                std::abs(got[i].b / yy - full[i].b / yr)});
+                            }
                         }
+                        err /= n;
+                        totalEdge[ci][si][transfer] += edgeErr;
+                        totalFlat[ci][si][transfer] += flatErr;
+                        if (transfer == 0)
+                        {
+                            edgePixels[ci][si] += edgeCount;
+                            flatPixels[ci][si] += flatCount;
+                        }
+                        edgeErr = edgeCount ? edgeErr / edgeCount : 0.0;
+                        flatErr = flatCount ? flatErr / flatCount : 0.0;
+                        const double carried = wanted > 1e-6 ? moved / wanted : 1.0;
+                        std::printf("%-8s %-27s %-8s %8.4f %8.4f %4d %8.3f %8.4f %8.4f %8.4f\n", scene.name, edit.name, modeNames[transfer],
+                                    err, halo, haloAt, carried, hue, edgeErr, flatErr);
+                        totalErr[ci][si][transfer] += err;
+                        worstHalo[ci][si][transfer] = std::max(worstHalo[ci][si][transfer], (double) halo);
+                        totalCarried[ci][si][transfer] += std::abs(carried - 1.0);
                     }
-                    err /= n;
-                    const double carried = wanted > 1e-6 ? moved / wanted : 1.0;
-                    std::printf("%-8s %-27s %-8s %8.4f %8.4f %4d %8.3f %8.4f\n", scene.name, edit.name, modeNames[transfer], err, halo,
-                                haloAt, carried, hue);
-                    totalErr[ci][transfer] += err;
-                    worstHalo[ci][transfer] = std::max(worstHalo[ci][transfer], (double) halo);
-                    totalCarried[ci][transfer] += std::abs(carried - 1.0);
+                    if (ci == 0 && si == 0)
+                        ++cases;
                 }
-                if (ci == 0)
-                    ++cases;
-            }
-    }
+        }
 
     std::printf("\n== Summary over %d scene x edit cases (lower is better)\n", cases);
-    std::printf("%-10s %-8s %10s %10s %14s\n", "curve", "mode", "mean err", "worst halo", "mean |carried-1|");
+    std::printf("%-10s %-6s %-8s %10s %10s %14s %10s %10s\n", "curve", "size", "mode", "mean err", "worst halo", "mean |carried-1|",
+                "edge", "flat");
     for (int ci = 0; ci < 2; ++ci)
-        for (int t = 0; t < 3; ++t)
-            std::printf("%-10s %-8s %10.4f %10.4f %14.4f\n", curves[ci].name, modeNames[t], totalErr[ci][t] / cases, worstHalo[ci][t],
-                        totalCarried[ci][t] / cases);
+        for (int si = 0; si < 2; ++si)
+            for (int t = 0; t < 3; ++t)
+                std::printf("%-10s %-6s %-8s %10.4f %10.4f %14.4f %10.5f %10.5f\n", curves[ci].name, sizes[si].name, modeNames[t],
+                            totalErr[ci][si][t] / cases, worstHalo[ci][si][t], totalCarried[ci][si][t] / cases,
+                            totalEdge[ci][si][t] / edgePixels[ci][si], totalFlat[ci][si][t] / flatPixels[ci][si]);
+
+    for (int ci = 0; ci < 2; ++ci)
+        for (int si = 0; si < 2; ++si)
+        {
+            const double edge = totalEdge[ci][si][2] / edgePixels[ci][si], flat = totalFlat[ci][si][2] / flatPixels[ci][si];
+            const std::string where = std::string(curves[ci].name) + ", " + sizes[si].name;
+            expect(edge < kBilinear[ci][si][0] * kEdgeLimit,
+                   "NVIDIA residual edge err " + std::to_string(edge) + " not below " + std::to_string(kEdgeLimit) + " x bilinear " +
+                       std::to_string(kBilinear[ci][si][0]) + ": " + where);
+            expect(flat <= kBilinear[ci][si][1] * kFlatLimit + 1e-5, // + the table's rounding
+                   "NVIDIA residual flat err " + std::to_string(flat) + " above " + std::to_string(kFlatLimit) + " x bilinear " +
+                       std::to_string(kBilinear[ci][si][1]) + ": " + where);
+        }
 
     if (fails)
     {
         std::printf("%d check(s) failed\n", fails);
         return 1;
     }
-    std::puts("PASS: every mode finite on every scene and edit (comparison above, WARP HLSL)");
+    std::printf("PASS: every mode finite; NVIDIA residual edges below %.2f x bilinear, flat within %.2f x", kEdgeLimit, kFlatLimit);
+    if (reference)
+        std::printf("; %d resolves bit-identical to the reference", identical);
+    std::printf(" (%s)\n", warp ? "WARP" : "hardware GPU");
     return 0;
 }
 catch (const std::exception& e)

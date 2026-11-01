@@ -4247,7 +4247,7 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         HelpMarker("Below 100% Model resolution, how NR's result is enlarged.\n"
                    "Classic: the whole output.\n"
                    "Matched residual: only NR's changes; less blur and colour shift.\n"
-                   "NVIDIA residual: only the changes, NVIDIA's way.\n"
+                   "NVIDIA residual: only the changes, NVIDIA's way, kept on their side of edges.\n"
                    "Superior Scaling: its own Area downsample, frequency shaping and a private DLSS that steadies NR "
                    "over time, including at 100% with Compress screen edges. Needs DirectX 12 and NVIDIA DLSS; "
                    "where it cannot run, Matched residual is used. At 100% and above, the ordinary modes use the "
