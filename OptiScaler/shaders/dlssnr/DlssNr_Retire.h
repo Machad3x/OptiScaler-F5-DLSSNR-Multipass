@@ -4,8 +4,14 @@
 // the tick at the top of DlssNr_Dx12::Dispatch). Kept apart, with no D3D12 or NGX types, so
 // tests/nr_retire_gpu_safety_smoke.cpp runs the same rule against a simulated GPU queue.
 //
-// A parked item is freed kFrames submission epochs after it was parked. An epoch is what the caller hands Dispatch
+// A parked item is freed once the GPU has finished every list NR recorded before it was parked (`done`, from
+// DlssNr::GpuLifetime), and no sooner than kFrames submission epochs after parking. Counting epochs alone was not
+// enough: with several NR calls per frame, each with its own epoch, or a GPU running far behind, an item was freed
+// under work still in flight (issue #271). An epoch is what the caller hands Dispatch
 // (DlssNrFrameInfo::SubmissionEpoch); the first call with a new value counts every parked item down once.
+//
+// Should the lists never be reported done (a submit or reset the hooks did not see), the item would stay forever: it is
+// freed kStuckFrames epochs after its count ran out, and `free` is told the GPU did not confirm it.
 
 #include <cstddef>
 #include <cstdint>
@@ -15,14 +21,16 @@ namespace DlssNr::Retire
 {
 
 constexpr int kFrames = 32;
+constexpr int kStuckFrames = 600;
 
 template <typename Item> class List
 {
   public:
     void Park(const Item& item) { _parked.push_back({ item, kFrames }); }
 
-    // One count down per submission epoch: a call with the epoch of the last one does nothing.
-    template <typename FreeFn> void Tick(uint64_t epoch, FreeFn&& free)
+    // One count down per submission epoch: a call with the epoch of the last one does nothing. `done(item)` says the
+    // GPU finished with it; `free(item, gpuConfirmed)` frees it.
+    template <typename DoneFn, typename FreeFn> void Tick(uint64_t epoch, DoneFn&& done, FreeFn&& free)
     {
         if (epoch == _lastEpoch)
             return;
@@ -31,13 +39,20 @@ template <typename Item> class List
 
         for (size_t i = 0; i < _parked.size();)
         {
-            if (--_parked[i].framesLeft > 0)
+            Parked& parked = _parked[i];
+
+            if (parked.framesLeft > -kStuckFrames)
+                --parked.framesLeft;
+
+            const bool confirmed = parked.framesLeft <= 0 && done(parked.item);
+
+            if (!confirmed && parked.framesLeft > -kStuckFrames)
             {
                 ++i;
                 continue;
             }
 
-            free(_parked[i].item);
+            free(parked.item, confirmed);
             _parked.erase(_parked.begin() + i);
         }
     }
@@ -46,7 +61,7 @@ template <typename Item> class List
     template <typename FreeFn> void FreeAll(FreeFn&& free)
     {
         for (auto& parked : _parked)
-            free(parked.item);
+            free(parked.item, false);
 
         _parked.clear();
     }

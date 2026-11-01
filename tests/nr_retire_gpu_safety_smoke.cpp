@@ -4,8 +4,9 @@
 //
 // A simulated queue finishes each frame's work `lag` frames after the CPU submitted it. Every frame each NR caller
 // counts the parked items down (with its own epoch, as DlssNr_Dx12::Dispatch does), then records the current feature on a
-// list and submits it. Every few frames the feature is rebuilt and the old one parked. A free of an item some unfinished
-// submit used is counted as unsafe. No GPU and no game needed.
+// list and submits it. Every few frames the feature is rebuilt and the old one parked. `done` is what DlssNr::GpuLifetime
+// reports for an item: every list recorded before it was parked has finished. A free of an item some unfinished submit used
+// is counted as unsafe. No GPU and no game needed.
 // cl /std:c++20 /EHsc /W4 tests/nr_retire_gpu_safety_smoke.cpp
 #include "../OptiScaler/shaders/dlssnr/DlssNr_Retire.h"
 
@@ -27,6 +28,7 @@ static int fails = 0;
 struct Item
 {
     int id = 0;
+    int lastSubmit = 0; // the last submit recorded before it was parked
 };
 
 // Submits in order; a submit from frame f finishes once the CPU is at frame f + lag.
@@ -36,14 +38,22 @@ struct Queue
     {
         int frame;
         int uses;
+        int serial;
     };
 
     std::deque<Submit> inFlight;
+    int submitted = 0;
+    int finished = 0; // every submit up to this serial has finished
+
+    void Push(int frame, int uses) { inFlight.push_back({ frame, uses, ++submitted }); }
 
     void FinishThrough(int frame)
     {
         while (!inFlight.empty() && inFlight.front().frame <= frame)
+        {
+            finished = inFlight.front().serial;
             inFlight.pop_front();
+        }
     }
 
     bool InUse(int id) const
@@ -58,23 +68,27 @@ struct Queue
 
 struct Run
 {
-    int unsafe = 0;   // frees of an item an unfinished submit still used
-    int freed = 0;    // all frees
-    int leftover = 0; // still parked at the end
+    int unsafe = 0;      // frees of an item an unfinished submit still used
+    int freed = 0;       // all frees
+    int unconfirmed = 0; // frees the GPU did not confirm (kStuckFrames ran out)
+    int leftover = 0;    // still parked at the end
 };
 
 // `callers` NR calls per frame, each with its own epoch source (the game's upscaler call uses the frame count, native input
 // its present epoch: DlssNr_Dx12.cpp EvaluateInternal, DlssNr_Late.inl ApplyNativeInput), so each call is a new epoch.
-static Run Simulate(int callers, int lag, int rebuildEvery = 10, int frames = 600)
+// `reported` false: the submit and reset hooks never report a list, so the GPU never confirms anything.
+static Run Simulate(int callers, int lag, bool reported = true, int rebuildEvery = 10, int frames = 2000)
 {
     DlssNr::Retire::List<Item> list;
     Queue queue;
     Run run;
     int feature = 1;
 
-    const auto free = [&](const Item& item)
+    const auto done = [&](const Item& item) { return reported && queue.finished >= item.lastSubmit; };
+    const auto free = [&](const Item& item, bool gpuConfirmed)
     {
         ++run.freed;
+        run.unconfirmed += gpuConfirmed ? 0 : 1;
         if (queue.InUse(item.id))
             ++run.unsafe;
     };
@@ -86,12 +100,12 @@ static Run Simulate(int callers, int lag, int rebuildEvery = 10, int frames = 60
         for (int c = 0; c < callers; ++c)
         {
             const uint64_t epoch = 1'000'000ull * (c + 1) + f;
-            list.Tick(epoch, free);
-            queue.inFlight.push_back({ f, feature });
+            list.Tick(epoch, done, free);
+            queue.Push(f, feature);
         }
 
         if (f % rebuildEvery == rebuildEvery - 1)
-            list.Park({ feature++ });
+            list.Park({ feature++, queue.submitted });
     }
 
     run.leftover = (int) list.Size();
@@ -128,6 +142,7 @@ int main()
         const Run run = Simulate(1, lag);
         CHECK(run.unsafe == 0);
         CHECK(run.freed > 0);
+        CHECK(run.unconfirmed == 0);
     }
 
     // The rule's promise is "after the GPU is done with it", not "after N epochs": it must hold at any lag and with
@@ -145,8 +160,21 @@ int main()
             }
         }
 
-    // Nothing piles up: once the GPU has caught up every parked item but the last few is freed.
-    CHECK(Simulate(2, 3).leftover <= DlssNr::Retire::kFrames);
+    // Nothing piles up: every parked item but the last few is freed, and the GPU confirmed each one.
+    {
+        const Run run = Simulate(2, 3);
+        CHECK(run.leftover <= DlssNr::Retire::kFrames);
+        CHECK(run.unconfirmed == 0);
+    }
+
+    // The hooks never report a list: items still go (by time, told so), and not under the GPU at any lag above.
+    for (int lag = 1; lag <= kMaxLag; lag += 7)
+    {
+        const Run run = Simulate(2, lag, false);
+        CHECK(run.unsafe == 0);
+        CHECK(run.freed > 0);
+        CHECK(run.unconfirmed == run.freed);
+    }
 
     if (fails == 0)
         printf("retire gpu safety: ok\n");
