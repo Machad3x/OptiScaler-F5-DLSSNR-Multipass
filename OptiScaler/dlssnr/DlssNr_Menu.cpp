@@ -3383,7 +3383,7 @@ static void RenderLutSection(Config* config)
 
     HelpMarker("Applies a colour grade (.cube LUT) to the picture NR works from. Put files in OptiScaler\\LUTs and "
                "press Rescan. Strong grades also affect exposure, skin detection and reuse. To grade NR's result "
-               "instead, use F5LUT on the Image page.");
+               "instead, use the F5LUT page.");
 
     if (!current.empty())
     {
@@ -4440,8 +4440,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         HelpMarker("Higher: stronger NR colour (above 1 more saturated). 0: keeps the game's colours. Default: 1.");
     }
 
-    // The LUT stack that grades NR's result moved to the Image page (it also runs without NR).
-    ImGui::TextDisabled("Colour grades (.cube LUTs) for NR's result: F5LUT on the Image page.");
+    // The LUT stack that grades NR's result has its own page (it also runs without NR).
+    ImGui::TextDisabled("Colour grades (.cube LUTs) for NR's result: the F5LUT page, below Neural Rendering.");
 
     ImGui::PopItemWidth();
 }
@@ -5024,9 +5024,8 @@ void UpdateMultiViewHint(Config* config)
 
 void RenderF5LutCard(Config* config, float menuResScale)
 {
-    const bool on = std::any_of(config->DlssNrPostLutFile, config->DlssNrPostLutFile + Config::kPostLutLayers,
-                                [](const auto& file) { return !file.value_or_default().empty(); });
-    if (NrCard card("F5LUT##card", menuResScale, on); card.IsOpen())
+    // Its own page, so the card starts open.
+    if (NrCard card("LUT stack##f5lut", menuResScale); card.IsOpen())
         RenderPostLutSection(config);
 }
 
