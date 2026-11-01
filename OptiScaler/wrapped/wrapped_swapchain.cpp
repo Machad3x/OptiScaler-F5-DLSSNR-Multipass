@@ -14,6 +14,7 @@
 #include <with_dx12/with_dx12.h>
 
 #include <menu/menu_overlay_dx.h>
+#include <menu/menu_overlay_base.h>
 #include <output/SdrToHdr_Dx11Present.h>
 #include <native/NativeDriverDx12.h>
 #include <native/NativeLowLatency.h>
@@ -989,7 +990,10 @@ bool WrappedIDXGISwapChain4::PassesThrough() const
     return _otherWindow && State::Instance().currentFGSwapchain != nullptr;
 }
 
-bool WrappedIDXGISwapChain4::OwnsMenuCleanup() const { return !_otherWindow || (_presentedAsMain && !PassesThrough()); }
+bool WrappedIDXGISwapChain4::OwnsMenuCleanup() const
+{
+    return !_otherWindow || (_presentedAsMain && !PassesThrough() && MenuOverlayBase::Handle() == _handle);
+}
 
 //
 HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::QueryInterface(REFIID riid, void** ppvObject)

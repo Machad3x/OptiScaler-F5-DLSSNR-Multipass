@@ -121,12 +121,13 @@ class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChai
     HWND _handle = nullptr;
 
     bool _otherWindow = false;
-    // Presented through LocalPresent (frame generation was away): the menu may have drawn on this chain
-    bool _presentedAsMain = false;
+    // Presented through LocalPresent (frame generation was away): the menu may have drawn on this chain. Written by the
+    // presenting thread, read by Release's
+    std::atomic<bool> _presentedAsMain { false };
     bool PassesThrough() const;
     // The menu's buffers go with this chain (MenuOverlayDx::CleanupRenderTarget is global: it deactivates frame
     // generation and frees the menu's objects whatever the window): never for another window's chain while frame
-    // generation lives, nor for one the menu never drew on
+    // generation lives, nor for one the menu never drew on or has since left
     bool OwnsMenuCleanup() const;
 
     // HDR output (output/SdrToHdr_*): null until the chain is first proxied, then set once and never reset or replaced
