@@ -13,8 +13,8 @@
 # works on AMD/Intel). This script does not build it. Supplying the path is what opts it in; it never
 # replaces the default forwarder at the package root, only adds it under Optional\.
 #
-# -XefgCudaKit is the folder of a built xefg_cuda kit (xefg_cuda.dll + xefg_cuda.ini, built from the private
-# libxess-weights repo, not here). Both go into plugins\, where FG Output F5Low loads xefg_cuda.dll by itself; it hands
+# -F5LowKit is the folder of a built f5low kit (f5low.dll + f5low.ini, built from the private
+# libxess-weights repo, not here). Both go into plugins\, where FG Output F5Low loads f5low.dll by itself; it hands
 # over to the Intel libxess_fg.dll the package already ships in OptiScaler\ (a kit's own copy is not staged). Without
 # it F5Low is greyed out in the menu.
 
@@ -28,7 +28,7 @@ param(
     [string]$StreamlineArchive,
     [string]$PortBackendDll,
     [string]$PortBackendIni,
-    [string]$XefgCudaKit
+    [string]$F5LowKit
 )
 
 $ErrorActionPreference = "Stop"
@@ -335,32 +335,32 @@ Not validated on real AMD or Intel hardware.
     Write-Host "vendor-neutral port backend: staged under Optional\ (not the default)"
 }
 
-if ($XefgCudaKit) {
-    $kitFiles = @('xefg_cuda.dll', 'xefg_cuda.ini')
+if ($F5LowKit) {
+    $kitFiles = @('f5low.dll', 'f5low.ini')
     foreach ($f in $kitFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $XefgCudaKit $f) -PathType Leaf)) {
-            throw "XefgCudaKit is missing ${f}: $XefgCudaKit"
+        if (-not (Test-Path -LiteralPath (Join-Path $F5LowKit $f) -PathType Leaf)) {
+            throw "F5LowKit is missing ${f}: $F5LowKit"
         }
     }
 
     # XeFG's API plus our own export, so Intel's library or an unrelated file under the wrong name is caught.
-    $cudaText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes((Join-Path $XefgCudaKit 'xefg_cuda.dll')))
+    $cudaText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes((Join-Path $F5LowKit 'f5low.dll')))
     $cudaMissing = @(@('xefgSwapChainD3D12CreateContext', 'xefgCudaXellCountsRenderedOnly') | Where-Object { $cudaText.IndexOf($_) -lt 0 })
     if ($cudaMissing.Count -gt 0) {
-        throw "xefg_cuda.dll is missing required exports: $($cudaMissing -join ', ')"
+        throw "f5low.dll is missing required exports: $($cudaMissing -join ', ')"
     }
     # Same rule as the port backend: no PDB path or local build path in a public binary.
     $cudaLeaks = @(@('.pdb', ('\Users\' + [Environment]::UserName + '\'), $root) |
         Where-Object { $cudaText.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
     if ($cudaLeaks.Count -gt 0) {
-        throw "REFUSING: xefg_cuda.dll appears to contain a local path or identifying string ($($cudaLeaks -join ', '))."
+        throw "REFUSING: f5low.dll appears to contain a local path or identifying string ($($cudaLeaks -join ', '))."
     }
 
-    # xefg_cuda hands over to the package's own Intel library (OptiScaler\libxess_fg.dll, passed in by F5Low): it must
+    # f5low.dll hands over to the package's own Intel library (OptiScaler\libxess_fg.dll, passed in by F5Low): it must
     # be there, and Intel's own file, unmodified: its signature says so.
     $intelLibrary = "$stage\OptiScaler\libxess_fg.dll"
     if (-not (Test-Path -LiteralPath $intelLibrary -PathType Leaf)) {
-        throw "REFUSING: xefg_cuda needs OptiScaler\libxess_fg.dll in the package, and it is missing"
+        throw "REFUSING: f5low.dll needs OptiScaler\libxess_fg.dll in the package, and it is missing"
     }
     $intelSignature = Get-AuthenticodeSignature -LiteralPath $intelLibrary
     if ($intelSignature.Status -ne 'Valid' -or $intelSignature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Intel Corporation(,|$)') {
@@ -370,13 +370,13 @@ if ($XefgCudaKit) {
     $pluginsDir = "$stage\plugins"
     New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
     foreach ($f in $kitFiles) {
-        Copy-Item -LiteralPath (Join-Path $XefgCudaKit $f) -Destination "$pluginsDir\$f" -Force
+        Copy-Item -LiteralPath (Join-Path $F5LowKit $f) -Destination "$pluginsDir\$f" -Force
     }
     Copy-Item -LiteralPath "$root\external\xess\LICENSE.txt" -Destination "$stage\Licenses\XeSS_LICENSE.txt" -Force
-    Write-Host "xefg_cuda: staged in plugins\ (xefg_cuda.dll, xefg_cuda.ini; Intel library: OptiScaler\libxess_fg.dll)"
+    Write-Host "f5low.dll: staged in plugins\ (f5low.dll, f5low.ini; Intel library: OptiScaler\libxess_fg.dll)"
 }
 
-# Frame generation ships off and F5Low on its default generator: plugins\xefg_cuda.dll is only loaded when a player
+# Frame generation ships off and F5Low on its default generator: plugins\f5low.dll is only loaded when a player
 # picks FG Output F5Low.
 $packagedIni = Get-Content -LiteralPath "$stage\OptiScaler.ini" -Raw
 foreach ($key in @('FGOutput', 'FrameGenerator')) {

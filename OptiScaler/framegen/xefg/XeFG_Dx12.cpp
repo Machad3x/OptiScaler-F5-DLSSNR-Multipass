@@ -83,7 +83,7 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
         return false;
     }
 
-    // F5Low runs our xefg_cuda: the XeFG unlock patches Intel's library only
+    // F5Low runs our f5low.dll: the XeFG unlock patches Intel's library only
     const bool f5low = State::Instance().activeFgOutput == FGOutput::F5Low;
     if (f5low)
         F5Low::ApplyGenerator();
@@ -150,7 +150,7 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
 
 void XeFG_Dx12::ApplyMaxInterpolations(uint32_t reported)
 {
-    // F5Low: what xefg_cuda reports (up to 6x), capped by [XeFG] MaxInterpolations
+    // F5Low: what f5low.dll reports (up to 6x), capped by [XeFG] MaxInterpolations
     if (State::Instance().activeFgOutput == FGOutput::F5Low)
     {
         _nativeMaxInterpolations = reported < 1 ? 1 : static_cast<int>(reported);

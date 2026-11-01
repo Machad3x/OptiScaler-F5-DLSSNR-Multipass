@@ -59,7 +59,7 @@ std::string SourceOf(const std::filesystem::path& file, const std::wstring& over
         (std::filesystem::equivalent(file, overridePath, error) || SameFolder(file, overridePath)))
         return "the ini's path";
 
-    // FG Output F5Low's xefg_cuda.dll (and its Intel fallback) ship there
+    // FG Output F5Low's f5low.dll (and its Intel fallback) ship there
     if (SameFolder(file, pluginFolder))
         return "the plugins folder";
 

@@ -5,11 +5,12 @@
 ## What you need
 
 - An NVIDIA GPU. On other GPUs F5Low is greyed out in the menu.
-- `xefg_cuda.dll` (with its `xefg_cuda.ini`) in the `plugins` folder inside OptiScaler's folder
+- `f5low.dll` (with its `f5low.ini`) in the `plugins` folder inside OptiScaler's folder
   (`<game>\OptiScaler\plugins\`, or `<game>\plugins\` without an OptiScaler subfolder; `[Plugins] Path` changes it).
   It is **not part of the release zip yet**: without it F5Low is greyed out. Nothing to set once it is there: F5Low
   finds it, and hands it the Intel `libxess_fg.dll` OptiScaler already uses (from `OptiScaler\`, or `XeFGPath` if
-  you set one), so no second copy is needed. Older xefg_cuda builds still want `libxess_fg.dll` next to them.
+  you set one), so no second copy is needed. It used to be called `xefg_cuda.dll`: rename an old copy to
+  `f5low.dll`. Its old `xefg_cuda.ini` keeps working until you put an `f5low.ini` next to it.
 
 ## Turning it on
 
@@ -32,9 +33,9 @@ Changing between XeFG and F5Low needs a restart: only one of the two libraries c
 The overlay says `F5Low 2x` (or 3x ... 6x). With `LogToFile=true` the log has:
 
 ```
-F5Low: loaded ...\plugins\xefg_cuda.dll
+F5Low: loaded ...\plugins\f5low.dll
 F5Low: Frame Generator XeFG Tensor (XEFG_CUDA_GENERATOR=own)
 Max supported interpolations: 5 (F5Low library reports 5, MaxInterpolations 5)
 ```
 
-`xefg_cuda.ini` in the plugins folder has its own settings (pacing, logging); the defaults are fine.
+`f5low.ini` in the plugins folder has its own settings (pacing, logging); the defaults are fine.

@@ -10,7 +10,7 @@ enum class FGOutput : uint32_t
     FSRFG,
     DLSSG,
     XeFG,
-    F5Low, // our xefg_cuda from the plugins folder, behind XeFG's API (framegen/f5low)
+    F5Low, // our f5low.dll from the plugins folder, behind XeFG's API (framegen/f5low)
 };
 
 // F5Low's library implements XeFG's API, so every XeFG path (swap chain, borderless, latency, bridges) serves it too.
