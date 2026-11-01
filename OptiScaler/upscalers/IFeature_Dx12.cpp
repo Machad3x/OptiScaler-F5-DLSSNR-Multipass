@@ -376,6 +376,12 @@ void IFeature_Dx12::ReadDetailedGpuTimes(void* commandQueueVoid, std::vector<Det
 
     if (magnifierTime)
         detailedGpuTimes.emplace_back(DetailedGpuTime { Magnifier->Name(), magnifierTime.value(), false });
+
+    if (F5Lut != nullptr)
+    {
+        if (auto f5LutTime = F5Lut->ReadGpuTime(commandQueue))
+            detailedGpuTimes.emplace_back(DetailedGpuTime { F5Lut->Name(), f5LutTime.value(), false });
+    }
 }
 
 IFeature_Dx12::IFeature_Dx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters) { ++LiveFeatures; }

@@ -13,8 +13,12 @@ bool F5Lut_Dx11::ShouldRun(bool InLinearHdr)
         return false;
 
     const bool run = PrepareChain(InLinearHdr);
-    if (!_chain.wanted && _lutTexture != nullptr)
-        ReleaseLutTexture();
+    if (!_chain.wanted)
+    {
+        if (_lutTexture != nullptr)
+            ReleaseLutTexture();
+        _failedKey.clear(); // the same stack added again is tried again
+    }
     return run;
 }
 
@@ -42,7 +46,12 @@ bool F5Lut_Dx11::EnsureLutTexture()
     if (_srvLut != nullptr && _lutKey == _chain.key)
         return true;
 
+    // A bake whose upload failed is not tried again every frame (an allocation and a 4 MB pack each time).
+    if (_failedKey == _chain.key)
+        return false;
+
     ReleaseLutTexture();
+    _failedKey = _chain.key; // cleared below once the texture is made
 
     const int size = lut.size;
     const size_t rowPitch = (size_t) size * 4u * sizeof(float);
@@ -72,6 +81,7 @@ bool F5Lut_Dx11::EnsureLutTexture()
     }
 
     _lutKey = _chain.key;
+    _failedKey.clear();
     return true;
 }
 

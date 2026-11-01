@@ -9,14 +9,18 @@ bool F5Lut_Vk::ShouldRun(bool InLinearHdr)
     if (!_init)
         return false;
 
+    const std::string key = _chain.key;
     const bool run = PrepareChain(InLinearHdr);
+    if (_chain.key != key)
+        _failed = false; // a changed stack is tried again
     if (!_chain.wanted && _pass && _pass->HoldsImage())
     {
-        // Earlier frames may still read the lattice; one drain, then every frame without a stack costs nothing.
+        // Earlier frames may still read the lattice; one drain, then every frame without a stack costs nothing. Like
+        // NR's Vulkan LUT, this drains from the render thread, only when the stack changes.
         vkDeviceWaitIdle(_device);
         _pass->ReleaseLutImage();
     }
-    return run;
+    return run && !_failed;
 }
 
 VkImageInfo F5Lut_Vk::Setup(VkCommandBuffer InCmdBuffer, const VkImageInfo& InNextOutput, VkImageUsageFlags InUsage)
@@ -75,8 +79,19 @@ bool F5Lut_Vk::Dispatch(VkCommandBuffer InCmdBuffer, const VkImageInfo& InResour
     const bool graded = _pass->Dispatch(InCmdBuffer, InResource.ImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                         OutResource.ImageView, constants, exposure ? InExposure : VK_NULL_HANDLE,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    Report(graded);
-    return graded;
+    if (!graded)
+    {
+        // The game's output did not get this frame. Copying our image into it would need transfer use the game may not
+        // have given it, so the step leaves the chain instead: from the next frame the upscaler writes the output
+        // itself again (one stale frame, not an upscaler failure).
+        _failed = true;
+        LOG_ERROR("[{}] the Vulkan grade could not be recorded; F5LUT stands aside until the stack changes", _name);
+        Report(false, "The Vulkan grade failed; F5LUT stands aside until the stack changes.");
+        return true;
+    }
+
+    Report(true);
+    return true;
 }
 
 F5Lut_Vk::F5Lut_Vk(std::string InName, VkDevice InDevice, VkPhysicalDevice InPhysicalDevice)

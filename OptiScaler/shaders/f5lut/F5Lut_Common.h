@@ -16,6 +16,15 @@
 
 class F5Lut_Common
 {
+    unsigned long long _lastReportMs = 0;
+    bool _lastReportGraded = false;
+
+    // Whether NR's own stage is the one grading the stack: NR on and its model up on either backend (decided before NR
+    // runs this frame, so a hitch or NR's own frame order cannot let both grade), or NR's stage graded in the last
+    // quarter second (a D3D11 game's NR through the D3D12 bridge). NR switching on can still grade one frame twice: its
+    // model comes up during that frame's NR call, after this step. F5Lut_Common.cpp.
+    static bool NrGradesTheStack();
+
   protected:
     DlssNr_LutChainState _chain;
 
@@ -36,7 +45,7 @@ class F5Lut_Common
             return false;
         }
 
-        if (cfg.DlssNrEnabled.value_or_default() && DlssNr::PostLutGradedAfterNrWithin(250))
+        if (NrGradesTheStack())
             return false;
 
         if (DlssNr_LutChainEnsure(&_chain, entries,
@@ -76,9 +85,16 @@ class F5Lut_Common
         return constants;
     }
 
-    // The menu's status, once per frame the step ran (or failed to).
-    void Report(bool graded, const std::string& error = {}) const
+    // The menu's status when the step ran (or failed to): on a change, else five times a second (the menu calls a
+    // report older than a second stale), so a steady frame does not copy the chain's text under the status lock.
+    void Report(bool graded, const std::string& error = {})
     {
+        const unsigned long long now = GetTickCount64();
+        if (graded && _lastReportGraded && error.empty() && _chain.error.empty() && now - _lastReportMs < 200)
+            return;
+        _lastReportMs = now;
+        _lastReportGraded = graded;
+
         DlssNr::PostLutStatus status;
         status.stage = DlssNr::PostLutStage::UpscalerOutput;
         status.wanted = _chain.wanted;

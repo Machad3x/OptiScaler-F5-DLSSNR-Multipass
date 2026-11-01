@@ -12,8 +12,12 @@ bool F5Lut_Dx12::ShouldRun(bool InLinearHdr)
         return false;
 
     const bool run = PrepareChain(InLinearHdr);
-    if (!_chain.wanted && _lutTexture != nullptr)
-        ReleaseLutTexture();
+    if (!_chain.wanted)
+    {
+        if (_lutTexture != nullptr)
+            ReleaseLutTexture();
+        _failedKey.clear(); // the same stack added again is tried again
+    }
     return run;
 }
 
@@ -21,9 +25,12 @@ bool F5Lut_Dx12::CreateBufferResource(ID3D12Device* InDevice, ID3D12Resource* In
 {
     auto resourceFlags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
+    // The base returns true for a buffer it kept: its state is still last frame's (the Dispatch side's), so only a new
+    // buffer starts in InState.
+    ID3D12Resource* const before = _buffer;
     auto result = Shader_Dx12::CreateBufferResource(InDevice, InSource, InState, &_buffer, resourceFlags);
 
-    if (result)
+    if (result && _buffer != before)
     {
         _buffer->SetName(L"F5LUT_Buffer");
         _bufferState = InState;
@@ -55,9 +62,14 @@ bool F5Lut_Dx12::EnsureLutTexture(ID3D12GraphicsCommandList* InCmdList)
     if (_lutTexture != nullptr && _lutKey == _chain.key)
         return true;
 
+    // A bake whose upload failed is not tried again every frame (an allocation and a 4 MB pack each time).
+    if (_failedKey == _chain.key)
+        return false;
+
     if (_lutTexture != nullptr)
         ReleaseLutTexture();
 
+    _failedKey = _chain.key; // cleared below once the upload is recorded
     const int size = lut.size;
     const auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     const auto texDesc =
@@ -117,7 +129,19 @@ bool F5Lut_Dx12::EnsureLutTexture(ID3D12GraphicsCommandList* InCmdList)
     Util::DelayedRelease(upload);
 
     _lutKey = _chain.key;
+    _failedKey.clear();
     return true;
+}
+
+// Only a 2D texture the shader may read can stand as the exposure; a game handing a buffer or anything else gets the
+// white point of 1.0 (CreateShaderResourceView throws on those).
+static bool ReadableTexture2D(ID3D12Resource* resource)
+{
+    if (resource == nullptr)
+        return false;
+    const auto desc = resource->GetDesc();
+    return desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+           (desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) == 0;
 }
 
 void F5Lut_Dx12::CopyThrough(ID3D12GraphicsCommandList* InCmdList, ID3D12Resource* InResource,
@@ -156,14 +180,15 @@ bool F5Lut_Dx12::Dispatch(ID3D12GraphicsCommandList* InCmdList, ID3D12Resource* 
     _counter = (_counter + 1) % F5LUT_NUM_OF_HEAPS;
     FrameDescriptorHeap& heap = _frameHeaps[_counter];
 
+    const bool exposure = ReadableTexture2D(InExposure);
     const auto outDesc = OutResource->GetDesc();
     const DlssNrLutConstants constants =
-        ChainConstants((unsigned int) outDesc.Width, outDesc.Height, InLinearHdr, InExposure != nullptr, InPreExposure);
+        ChainConstants((unsigned int) outDesc.Width, outDesc.Height, InLinearHdr, exposure, InPreExposure);
 
     CreateShaderResourceView(_device, InResource, heap.GetSrvCPU(0));
     CreateShaderResourceView(_device, _lutTexture, heap.GetSrvCPU(1));
     // The source stands in when there is no exposure; the constants then say not to read it.
-    CreateShaderResourceView(_device, InExposure != nullptr ? InExposure : InResource, heap.GetSrvCPU(2));
+    CreateShaderResourceView(_device, exposure ? InExposure : InResource, heap.GetSrvCPU(2));
     CreateUnorderedAccessView(_device, OutResource, heap.GetUavCPU(0), 0);
 
     if (!CreateConstantsBuffer(_device, _constantBuffers[_counter], constants, heap.GetCbvCPU(0)))

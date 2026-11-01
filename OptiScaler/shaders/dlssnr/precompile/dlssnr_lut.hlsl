@@ -222,22 +222,21 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     // Linear HDR: Neutwo's inverse is unbounded and very steep near display 1, so a look that rolls a highlight off
     // toward white (AgX and other view transforms do, on purpose) came back first squeezed, then surging (3x over half a
-    // stop), then up to ~700x the white point: contour bands and flat silver patches once the game tonemaps them (RDR2
-    // faces in a dark room, 2026-11-01). Above a knee on the handed value (display 0.80-0.95, about 0.75-2.4x white) the
-    // look's change is applied instead as a per-channel ratio of display-linear values to the game's own light: smooth,
-    // the look's colour kept, the highlight roll-off left to the game's tonemapper. Then a grade may darken anything and
-    // brighten up to the white point, but never make a pixel brighter than it came in above that.
+    // stop), then up to ~700x the white point: contour bands and flat silver patches (RDR2 faces in a dark room,
+    // 2026-11-01). Where the handed value or the look's result is near white (peak display 0.80-0.95, blended in), the
+    // result goes back to light with the INPUT's own Neutwo scalar instead of its own: the encode's one scalar for all
+    // channels, so the look's colour holds (a black-and-white look greys a red highlight) and the light stays bounded --
+    // about the input's for a bright pixel, about the white point for a dark one -- with no clip. Exactly the input at
+    // strength 0; midtones and shadows go through the inverse as before. The same holds for NR's Finished Picture stage
+    // on an scRGB swapchain, where the picture is already tonemapped: the light handed back stays near the input's, so
+    // nothing there is pushed past what the game showed.
     if (inputEncoding != kInputPq && colourIsLinearHdr != 0)
     {
-        const float3 light = max(raw.rgb, 0.0);
-        const float knee = smoothstep(0.80, 0.95, max(display.r, max(display.g, display.b)));
-        const float3 ratio = (SrgbToLinear(result) + 1e-3) / (SrgbToLinear(display) + 1e-3);
-        encoded = lerp(encoded, light * ratio, knee);
-
-        const float cap = max(max(light.r, max(light.g, light.b)), white);
-        const float peak = max(encoded.r, max(encoded.g, encoded.b));
-        if (peak > cap)
-            encoded *= cap / peak;
+        const float3 light = max(raw.rgb, 0.0) / white;
+        const float m = max(light.r, max(light.g, light.b));
+        const float back = m > 1e-6 ? m / Neutwo(m) : 1.0;
+        const float nearWhite = max(max(display.r, max(display.g, display.b)), max(result.r, max(result.g, result.b)));
+        encoded = lerp(encoded, SrgbToLinear(result) * (back * white), smoothstep(0.80, 0.95, nearWhite));
     }
 
     gTarget[id.xy] = float4(encoded, raw.a);

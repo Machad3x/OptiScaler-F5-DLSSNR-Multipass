@@ -1195,6 +1195,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\sgsr1\SGSR1_Vk.cpp" />
     <ClCompile Include="shaders\rcas\RCAS_Dx11.cpp" />
     <ClCompile Include="shaders\rcas\RCAS_Dx12.cpp" />
+    <ClCompile Include="shaders\f5lut\F5Lut_Common.cpp" />
     <ClCompile Include="shaders\f5lut\F5Lut_Dx11.cpp" />
     <ClCompile Include="shaders\f5lut\F5Lut_Dx12.cpp" />
     <ClCompile Include="shaders\f5lut\F5Lut_Vk.cpp" />

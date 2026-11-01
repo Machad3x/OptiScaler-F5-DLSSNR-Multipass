@@ -11,6 +11,7 @@ class F5Lut_Dx11 : public Shader_Dx11, public F5Lut_Common
     ID3D11Texture3D* _lutTexture = nullptr;
     ID3D11ShaderResourceView* _srvLut = nullptr;
     std::string _lutKey;
+    std::string _failedKey; // the bake whose texture could not be made, not retried every frame
 
     ID3D11SamplerState* _sampler = nullptr;
     ID3D11ShaderResourceView* _srvExposure = nullptr;

@@ -6,7 +6,8 @@
 #include <shaders/Shader_Dx12Utils.h>
 #include <shaders/Shader_Dx12.h>
 
-#define F5LUT_NUM_OF_HEAPS 2
+// A heap and constant buffer per frame the GPU may still be reading (3 queued frames).
+#define F5LUT_NUM_OF_HEAPS 3
 
 // The F5LUT step of IFeature_Dx12's output chain (F5Lut_Common.h). The upscaler (or the step before) writes Buffer(),
 // Dispatch grades it into the next target with NR's own LUT shader (dlssnr_lut.hlsl).
@@ -22,6 +23,7 @@ class F5Lut_Dx12 : public Shader_Dx12, public F5Lut_Common
     // The baked lattice as a 3D texture, and the chain key it was uploaded from.
     ID3D12Resource* _lutTexture = nullptr;
     std::string _lutKey;
+    std::string _failedKey; // the bake whose upload failed, not retried every frame
 
     bool EnsureLutTexture(ID3D12GraphicsCommandList* InCmdList);
     void ReleaseLutTexture();

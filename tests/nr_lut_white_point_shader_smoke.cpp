@@ -19,8 +19,11 @@
 //   6. The precompiled D3D11 shader F5LUT's D3D11 chain step ships (dlssnr_lut_Shader_Dx11.h) grades bit-identically to
 //      this compile of dlssnr_lut.hlsl, with the chain step's constants (F5Lut_Common.h: no encoding, the HDR flag,
 //      white 1.0 or PreExposure / the game's exposure), so a stale header shows here.
-//   7. Linear HDR highlights a look sends to display white (AgX does) come back no brighter than they came in, or the
-//      white point (2026-11-01, RDR2's silver faces: Neutwo's inverse at display 1 gave ~700x white).
+//   7. Linear HDR highlights a look sends to display white (AgX does) come back at hypot(input, white), not ~700x white
+//      (2026-11-01, RDR2's silver faces: Neutwo's inverse at display 1).
+//   8. A black-and-white look greys saturated highlights (no per-channel ratio keeping them coloured).
+//   9. A brightening look keeps a grey ramp rising (no plateau) and matches the CPU model.
+//  10. Strength 0 is the identity on Linear HDR.
 //
 // Build: cl /nologo /std:c++20 /EHsc /W3 tests\nr_lut_white_point_shader_smoke.cpp d3d11.lib d3dcompiler.lib
 // Reference: git show 7364a7f8:OptiScaler/shaders/dlssnr/precompile/dlssnr_lut.hlsl > precompile\dlssnr_lut_ref.hlsl
@@ -64,7 +67,17 @@ struct Gpu
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<ID3D11Texture2D> sourceTex, exposureTex, target, readback;
-    ComPtr<ID3D11ShaderResourceView> sourceSrv, lutSrv, whiteLutSrv, exposureSrv;
+    ComPtr<ID3D11ShaderResourceView> sourceSrv, lutSrv, whiteLutSrv, bwLutSrv, brightLutSrv, exposureSrv;
+
+    ComPtr<ID3D11ShaderResourceView> Cube(const D3D11_TEXTURE3D_DESC& desc, const std::vector<float>& texels)
+    {
+        D3D11_SUBRESOURCE_DATA data { texels.data(), kLut * 16, kLut * kLut * 16 };
+        ComPtr<ID3D11Texture3D> tex;
+        check(device->CreateTexture3D(&desc, &data, &tex));
+        ComPtr<ID3D11ShaderResourceView> srv;
+        check(device->CreateShaderResourceView(tex.Get(), nullptr, &srv));
+        return srv;
+    }
     ComPtr<ID3D11UnorderedAccessView> targetUav;
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11SamplerState> sampler;
@@ -111,10 +124,23 @@ struct Gpu
 
         // A look that sends every colour to display white, as a view transform does with a bright enough highlight.
         std::vector<float> white(lattice.size(), 1.0f);
-        D3D11_SUBRESOURCE_DATA whiteData { white.data(), kLut * 16, kLut * kLut * 16 };
-        ComPtr<ID3D11Texture3D> whiteTex;
-        check(device->CreateTexture3D(&cube, &whiteData, &whiteTex));
-        check(device->CreateShaderResourceView(whiteTex.Get(), nullptr, &whiteLutSrv));
+        whiteLutSrv = Cube(cube, white);
+
+        // Black and white (display luma: linear in the lattice, so trilinear is exact) and a brightening look (display
+        // x1.6, clipped at 1).
+        std::vector<float> bw, bright;
+        for (int b = 0; b < kLut; ++b)
+            for (int g = 0; g < kLut; ++g)
+                for (int r = 0; r < kLut; ++r)
+                {
+                    const float R = r / float(kLut - 1), G = g / float(kLut - 1), B = b / float(kLut - 1);
+                    const float y = 0.2126f * R + 0.7152f * G + 0.0722f * B;
+                    bw.insert(bw.end(), { y, y, y, 1.0f });
+                    bright.insert(bright.end(), { std::min(1.6f * R, 1.0f), std::min(1.6f * G, 1.0f),
+                                                  std::min(1.6f * B, 1.0f), 1.0f });
+                }
+        bwLutSrv = Cube(cube, bw);
+        brightLutSrv = Cube(cube, bright);
 
         D3D11_BUFFER_DESC buffer {};
         buffer.ByteWidth = sizeof(DlssNrLutConstants);
@@ -202,38 +228,34 @@ static float LinearOf(float v)
     return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
 }
 
-// The pass's whole Linear HDR grade on the CPU: handed display, the look, back to light through Neutwo's inverse below
-// the knee and as a display-linear ratio of the input light above it, then the cap at max(input peak, white).
+// The pass's whole Linear HDR grade on the CPU: handed display, the look (mixed by `strength`), back to light through
+// Neutwo's inverse, blended (peak display of the handed value or the result 0.80-0.95) to the result's display-linear
+// value times the INPUT's own Neutwo scalar.
 template <typename Look>
-static void GradeLinearHdr(const float in[3], float white, const Look& look, float out[3])
+static void GradeLinearHdr(const float in[3], float white, const Look& look, float out[3], float strength = 1.0f)
 {
     float d[3], g[3], y[3];
     ToDisplay(in, white, d);
     look(d, g);
-    float m = 0.0f, dPeak = 0.0f, inPeak = 0.0f;
+    float ym = 0.0f, nearWhite = 0.0f, inPeak = 0.0f;
     for (int c = 0; c < 3; ++c)
     {
+        g[c] = d[c] + (g[c] - d[c]) * strength;
         y[c] = LinearOf(g[c]);
-        m = std::max(m, y[c]);
-        dPeak = std::max(dPeak, d[c]);
-        inPeak = std::max(inPeak, std::max(in[c], 0.0f));
+        ym = std::max(ym, y[c]);
+        nearWhite = std::max({ nearWhite, d[c], g[c] });
+        inPeak = std::max(inPeak, std::max(in[c], 0.0f) / white);
     }
-    m = std::min(m, 0.999999f);
-    const float x = m / std::sqrt(std::max(1.0f - m * m, 1e-8f));
-    const float t = std::clamp((dPeak - 0.80f) / 0.15f, 0.0f, 1.0f);
+    ym = std::min(ym, 0.999999f);
+    const float x = ym / std::sqrt(std::max(1.0f - ym * ym, 1e-8f));
+    const float t = std::clamp((nearWhite - 0.80f) / 0.15f, 0.0f, 1.0f);
     const float knee = t * t * (3.0f - 2.0f * t);
-    float peak = 0.0f;
+    const float back = inPeak > 1e-6f ? std::sqrt(inPeak * inPeak + 1.0f) : 1.0f; // m / Neutwo(m)
     for (int c = 0; c < 3; ++c)
     {
-        const float inverse = (m > 1e-6f ? y[c] * (x / m) : y[c]) * white;
-        const float ratio = (y[c] + 1e-3f) / (LinearOf(d[c]) + 1e-3f);
-        out[c] = inverse + (std::max(in[c], 0.0f) * ratio - inverse) * knee;
-        peak = std::max(peak, out[c]);
+        const float inverse = (ym > 1e-6f ? y[c] * (x / ym) : y[c]) * white;
+        out[c] = inverse + (y[c] * back * white - inverse) * knee;
     }
-    const float cap = std::max(inPeak, white);
-    if (peak > cap)
-        for (int c = 0; c < 3; ++c)
-            out[c] *= cap / peak;
 }
 
 static DlssNrLutConstants Base(uint32_t encoding, bool linearHdr, float white)
@@ -353,7 +375,7 @@ try
         const float off = Worst(gpu.Run(shader.Get(), pq, Base(4, true, 1.0f), 0.0f),
                                 gpu.Run(reference.Get(), pq, Base(4, true, 1.0f), 0.0f));
         std::printf("PQ at the default paper white vs the reference: %.2e\n", off);
-        expect(off < 1e-2f, "PQ at the default paper white differs from the reference");
+        expect(off < 2e-3f, "PQ at the default paper white differs from the reference");
     }
 
     // 2. Live exposure: PreExposure / exposure x Trim, following the texel; the host value is ignored.
@@ -423,9 +445,9 @@ try
                    "forced PQ at paper white 2 is not finite");
     }
 
-    // 7. A look that sends everything to display white, on Linear HDR: no pixel comes back brighter than it came in or
-    // than the white point, whichever is more (Neutwo's inverse at display 1 alone gives ~700x white), and the old
-    // shader shows the blow-up the cap removes.
+    // 7. A look that sends everything to display white, on Linear HDR: the light handed back is the input's own Neutwo
+    // scale, hypot(input peak, white) -- about the input for a bright pixel, about white for a dark one -- where
+    // Neutwo's inverse at display 1 alone gives ~700x white (the reference shader shows it).
     for (float white : { 0.06f, 1.0f, 18.5f })
     {
         const auto got = gpu.Run(shader.Get(), linear, Base(0, true, white), 0.0f, gpu.whiteLutSrv.Get());
@@ -433,17 +455,82 @@ try
         float worstGain = 0.0f, oldWorst = 0.0f;
         for (int i = 0; i < N; ++i)
         {
-            const float in = std::max({ linear[i].r, linear[i].g, linear[i].b });
-            const float cap = std::max(in, white);
-            worstGain = std::max(worstGain, std::max({ got[i].r, got[i].g, got[i].b }) / cap);
-            oldWorst = std::max(oldWorst, std::max({ old[i].r, old[i].g, old[i].b }) / cap);
+            const float in = std::max({ linear[i].r, linear[i].g, linear[i].b, 0.0f });
+            const float bound = std::sqrt(in * in + white * white);
+            worstGain = std::max(worstGain, std::max({ got[i].r, got[i].g, got[i].b }) / bound);
+            oldWorst = std::max(oldWorst, std::max({ old[i].r, old[i].g, old[i].b }) / bound);
             expect(std::isfinite(got[i].r) && std::isfinite(got[i].g) && std::isfinite(got[i].b),
                    "a look to white is not finite");
         }
-        std::printf("look to white at white %g: worst light / max(in, white) %.4f (reference shader %.1f)\n", white,
+        std::printf("look to white at white %g: worst light / hypot(in, white) %.4f (reference shader %.1f)\n", white,
                     worstGain, oldWorst);
-        expect(worstGain <= 1.0001f, "a look to white hands back more light than came in at white " +
+        expect(worstGain <= 1.0001f, "a look to white hands back more light than hypot(in, white) at white " +
                                          std::to_string(white));
+    }
+
+    // 8. A black-and-white look on saturated highlights (Review Pass 2026-11-01: a per-channel ratio left a red highlight
+    // red): every channel comes back equal, and as bright as the model says.
+    {
+        const std::array<Pixel, N> red {{ {1.5f, 0, 0, 1}, {4.0f, 0, 0, 1}, {30.0f, 0, 0, 1}, {0, 6.0f, 0, 1},
+                                          {0, 0, 12.0f, 1}, {8.0f, 0.1f, 0, 1}, {0.3f, 0, 0, 1}, {2.0f, 2.0f, 0, 1} }};
+        const auto got = gpu.Run(shader.Get(), red, Base(0, true, 1.0f), 0.0f, gpu.bwLutSrv.Get());
+        float spread = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            const float hi = std::max({ got[i].r, got[i].g, got[i].b }), lo = std::min({ got[i].r, got[i].g, got[i].b });
+            spread = std::max(spread, (hi - lo) / std::max(hi, 1e-6f));
+            expect(hi > 0.0f, "a black-and-white look blacks out a saturated highlight");
+        }
+        std::printf("black-and-white on saturated highlights: worst channel spread %.2e\n", spread);
+        expect(spread < 1e-4f, "a black-and-white look leaves a saturated highlight coloured");
+    }
+
+    // 9. A brightening look (display x1.6) on a grey ramp from 0.05x to 40x white: the output keeps rising (no plateau
+    // where a cap or the look's clip at 1 would flatten it) and matches the model.
+    {
+        const std::array<Pixel, N> ramp {{ {0.05f, 0.05f, 0.05f, 1}, {0.2f, 0.2f, 0.2f, 1}, {0.45f, 0.45f, 0.45f, 1},
+                                           {0.7f, 0.7f, 0.7f, 1}, {1.0f, 1.0f, 1.0f, 1}, {2.0f, 2.0f, 2.0f, 1},
+                                           {6.0f, 6.0f, 6.0f, 1}, {40.0f, 40.0f, 40.0f, 1} }};
+        const auto got = gpu.Run(shader.Get(), ramp, Base(0, true, 1.0f), 0.0f, gpu.brightLutSrv.Get());
+        // Each channel depends on its own only, so the lattice's trilinear is a 1D interpolation of its kLut samples.
+        const auto bright = [](const float d[3], float g[3])
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                const float p = std::clamp(d[c], 0.0f, 1.0f) * (kLut - 1);
+                const int i0 = std::min((int) p, kLut - 2);
+                const float f = p - (float) i0;
+                const float a = std::min(1.6f * i0 / float(kLut - 1), 1.0f);
+                const float b = std::min(1.6f * (i0 + 1) / float(kLut - 1), 1.0f);
+                g[c] = a + (b - a) * f;
+            }
+        };
+        bool rising = true;
+        float off = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            if (i > 0 && !(got[i].r > got[i - 1].r * 1.001f))
+                rising = false;
+            const float in[3] = { ramp[i].r, ramp[i].g, ramp[i].b };
+            float want[3];
+            GradeLinearHdr(in, 1.0f, bright, want);
+            off = std::max(off, std::abs(got[i].r - want[0]) / std::max(want[0], 1e-3f));
+        }
+        std::printf("brightening look on a grey ramp: rising %s, worst error vs the CPU grade %.2e\n",
+                    rising ? "yes" : "NO", off);
+        expect(rising, "a brightening look flattens or reverses the ramp");
+        expect(off < 1e-2f, "a brightening look does not grade as the CPU model");
+    }
+
+    // 10. Strength 0 is the identity on Linear HDR, below and above the knee and past Neutwo's old clamp.
+    for (float white : { 0.06f, 1.0f, 18.5f })
+    {
+        auto c = Base(0, true, white);
+        c.Strength = 0.0f;
+        const auto got = gpu.Run(shader.Get(), linear, c, 0.0f);
+        const float off = Worst(got, linear);
+        std::printf("strength 0 at white %g: worst relative change %.2e\n", white, off);
+        expect(off < 1e-4f, "strength 0 changes a Linear HDR picture at white " + std::to_string(white));
     }
 
     // 6. The shipped D3D11 bytecode against this compile, with the chain step's constants.
