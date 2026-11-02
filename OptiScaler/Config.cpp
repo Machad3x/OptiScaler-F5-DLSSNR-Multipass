@@ -1019,6 +1019,7 @@ void Config::ReadDlssNr()
     DlssNrFinishedPicture.set_from_config(readBool("DlssNr", "FinishedPicture"));
     DlssNrDeferredDlss.set_from_config(readBool("DlssNr", "DeferredDLSS"));
     DlssNrMultiViewScreens.set_from_config(readUInt("DlssNr", "MultiViewScreens"));
+    DlssNrSecondaryFeatures.set_from_config(readUInt("DlssNr", "SecondaryFeatures"));
     // ResidualFG and ResidualFGApproxCamera are no longer read: NR every second frame through NVIDIA Frame
     // Generation is off for good, whatever an old ini says.
     DlssNrPrecision.set_from_config(readUInt("DlssNr", "Precision"));
@@ -1338,6 +1339,7 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
     out.SetValue("DlssNr", "DeferredDLSS",
                  GetBoolValue(c.DlssNrDeferredDlss.value_for_config()).c_str());
     out.SetValue("DlssNr", "MultiViewScreens", GetIntValue(c.DlssNrMultiViewScreens.value_for_config()).c_str());
+    out.SetValue("DlssNr", "SecondaryFeatures", GetIntValue(c.DlssNrSecondaryFeatures.value_for_config()).c_str());
     out.SetValue("DlssNr", "Precision", GetIntValue(c.DlssNrPrecision.value_for_config()).c_str());
     out.SetValue("DlssNr", "VitEvery", GetIntValue(c.DlssNrVitEvery.value_for_config()).c_str());
     out.SetValue("DlssNr", "VitEveryPlain", GetIntValue(c.DlssNrVitEveryPlain.value_for_config()).c_str());

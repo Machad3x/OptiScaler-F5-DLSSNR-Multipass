@@ -1353,6 +1353,17 @@ static void RenderStatusLine(const NrCommon& nr)
                            nr.vulkan ? " natively on Vulkan" : "", ms.value());
     else
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Running.");
+
+    if (!nr.vulkan && nr.enabled)
+    {
+        unsigned aside = 0, own = 0;
+        DlssNr::GameFeatureStatus(aside, own);
+        if (aside + own > 0)
+            ImGui::TextDisabled("The game uses %u more DLSS feature(s) (a preview or second camera): %s.", aside + own,
+                                own == 0     ? "left as they are"
+                                : aside == 0 ? "each with a model of its own"
+                                             : "some with a model of their own, the rest left as they are");
+    }
 }
 
 // The mode in effect, as the Optical F5Low page and the summary line name it.
@@ -3985,6 +3996,37 @@ static void RenderSeveralViews(Config* config, float menuResScale, bool beforeSr
     }
 }
 
+// "Other DLSS features": shown only while the game keeps another DLSS feature alive besides the main one (a 3D
+// character preview next to the world), or once the setting was changed.
+static void RenderOtherFeatures(Config* config, float menuResScale)
+{
+    unsigned aside = 0, own = 0;
+    DlssNr::GameFeatureStatus(aside, own);
+    const uint32_t mode = config->DlssNrSecondaryFeatures.value_or_default();
+
+    if (aside + own == 0 && mode == 0)
+        return;
+
+    NrCard card("Other DLSS features##card", menuResScale);
+    if (!card.IsOpen())
+        return;
+
+    if (aside + own > 0)
+        ImGui::TextWrapped("The game uses %u more DLSS feature(s) besides the main one (a 3D character preview or a "
+                           "second camera).",
+                           aside + own);
+
+    static const char* const kModes[] = { "Leave as they are", "A model of their own", "Share the main model" };
+    int selected = (int) (mode < 3 ? mode : 0);
+    if (ImGui::Combo("Other DLSS features##secondaryfeatures", &selected, kModes, 3))
+        config->DlssNrSecondaryFeatures = (uint32_t) selected;
+    HelpMarker("Leave as they are: NR works on the main picture only; the others stay as DLSS made them.\n"
+               "A model of their own: each gets its own model and history (more GPU time and video memory). It uses "
+               "the main picture's exposure and scene cuts, and Superior Scaling, Reuse detail and the edit cache "
+               "stand aside for it.\nShare the main model: the old behaviour. The pictures take turns in one "
+               "history, which mixes them and, before SR, can rebuild the model on every call (a freeze).");
+}
+
 static void RenderInputPage(Config* config, float menuResScale, const NrCommon& nr)
 {
     ImGui::PushItemWidth(220.0f * menuResScale);
@@ -3997,7 +4039,10 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
     const bool rayReconstruction = activeFeature && activeFeature->GetUpscalerType() == Upscaler::DLSSD;
 
     if (!nr.vulkan)
+    {
         RenderSeveralViews(config, menuResScale, beforeSr);
+        RenderOtherFeatures(config, menuResScale);
+    }
 
     if (NrCard card("Size", menuResScale); card.IsOpen())
     {

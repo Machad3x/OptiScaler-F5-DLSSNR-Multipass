@@ -283,6 +283,10 @@ class Config
     // picture (shaders/dlssnr/DlssNr_Views.h). 0: NR stands down while that happens (default). Not part of an NR
     // profile: it describes the rig.
     CustomOptional<uint32_t> DlssNrMultiViewScreens { 0 };
+    // A game that keeps several DLSS features alive (a 3D character preview next to the world): what NR does with the
+    // ones besides the main feature (shaders/dlssnr/DlssNr_Contexts.h). 0 = stand aside (default), 1 = a model of
+    // their own, 2 = share the main one (the old behaviour). Not part of an NR profile.
+    CustomOptional<uint32_t> DlssNrSecondaryFeatures { 0 };
     CustomOptional<bool> DlssNrResidualFg { false }; // forced off: not read from the ini, not in the menu
     CustomOptional<uint32_t> DlssNrPrecision { 0 }; // 0 NVIDIA FP8 (default), 4 Experimental NVFP4 hybrid
     CustomOptional<uint32_t> DlssNrVitEvery { 2 };  // NVIDIA model: compute the ViT bottleneck every N-th frame (1 = always; 2 = every other frame, default), reuse it in between
