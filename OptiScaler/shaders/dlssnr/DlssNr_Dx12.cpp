@@ -322,6 +322,13 @@ struct NrState
     ID3D12Resource* lutScratch = nullptr;
     bool lutScratchFailed = false;
 
+    // hdrCopy (without a UAV), activeColor and lutScratch keep the game's exact format. A game that alternates two
+    // formats (Neverness to Everness: RGBA16F and R11G11B10F) would park one and make another of each on every call,
+    // each parked one held for 32 epochs; the one of the other format waits here instead (KeepExactFormat).
+    ID3D12Resource* hdrCopySpare = nullptr;
+    ID3D12Resource* activeColorSpare = nullptr;
+    ID3D12Resource* lutScratchSpare = nullptr;
+
     // The frame shrunk for the model, when it is working below full resolution.
     ID3D12Resource* colorSmall = nullptr;
 
@@ -558,15 +565,25 @@ struct NrState
 
     // The game's last output format, to say once that it swaps RGBA8 and BGRA8 (the surfaces and model are kept)
     DXGI_FORMAT lastGameFormat = DXGI_FORMAT_UNKNOWN;
+    bool lastBeforeUpscale = false; // where lastGameFormat was taken: before or after SR
     bool saidFormatSwap = false;
+    // The game has flipped between RGBA16F and R11G11B10F: our surfaces stay RGBA16F for both (DlssNr_SurfaceFormats.h)
+    bool floatFlipSeen = false;
+
+    // Stands NR down while the game's frames would rebuild the model on every call (DlssNr_SurfaceFormats.h)
+    DlssNr::RebuildGuard rebuildGuard;
 };
 
 NrState g_nr;
 
+// Some view's RebuildGuard stands NR down, for the menu (read off the render thread)
+std::atomic<bool> g_rebuildStandDown { false };
+
 // DlssNr_SurfaceFormats.h takes no Windows headers and spells these formats as numbers
 static_assert(DXGI_FORMAT_R8G8B8A8_TYPELESS == 27 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&
               DXGI_FORMAT_R8G8B8A8_UNORM_SRGB == 29 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
-              DXGI_FORMAT_B8G8R8A8_TYPELESS == 90 && DXGI_FORMAT_B8G8R8A8_UNORM_SRGB == 91);
+              DXGI_FORMAT_B8G8R8A8_TYPELESS == 90 && DXGI_FORMAT_B8G8R8A8_UNORM_SRGB == 91 &&
+              DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R11G11B10_FLOAT == 26);
 
 // Automatic's own base white point (PreExposure / its metered exposure, never the followed game's), from the CPU
 // readbacks a few frames behind the shader's live value. 0 when there is no reading yet.
@@ -1067,6 +1084,34 @@ void ParkNrResource(ID3D12Resource*& res)
     ParkNr(r);
 }
 
+// A surface that keeps the game's exact format (copied to or from its texture) and no longer matches it: the one in
+// `spare` is taken if it has that format and the same size, and the old one waits in `spare` for the game to switch
+// back. Otherwise `current` is left empty for the caller to make.
+void KeepExactFormat(ID3D12Resource*& current, ID3D12Resource*& spare, DXGI_FORMAT format)
+{
+    if (current == nullptr)
+        return;
+
+    const D3D12_RESOURCE_DESC have = current->GetDesc();
+    if (have.Format == format)
+        return;
+
+    ID3D12Resource* old = current;
+    current = nullptr;
+
+    if (spare != nullptr)
+    {
+        const D3D12_RESOURCE_DESC other = spare->GetDesc();
+
+        if (other.Format == format && other.Width == have.Width && other.Height == have.Height)
+            current = spare;
+        else
+            ParkNrResource(spare);
+    }
+
+    spare = old;
+}
+
 void ReleaseNrFeature(const NrRetired& r)
 {
     if (r.feature != nullptr)
@@ -1154,9 +1199,9 @@ void ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat, DXGI_FORMAT colourF
         g_nr.passPendingSubmission[i] = false;
     }
 
-    for (ID3D12Resource** r :
-         { &g_nr.output, &g_nr.passScratch, &g_nr.passClampScratch, &g_nr.passClampScratch2, &g_nr.colorCopy,
-           &g_nr.hdrCopy, &g_nr.colorSmall, &g_nr.outputNative, &g_nr.activeColor, &g_nr.lutScratch })
+    for (ID3D12Resource** r : { &g_nr.output, &g_nr.passScratch, &g_nr.passClampScratch, &g_nr.passClampScratch2,
+                                &g_nr.colorCopy, &g_nr.hdrCopy, &g_nr.colorSmall, &g_nr.outputNative, &g_nr.activeColor,
+                                &g_nr.lutScratch, &g_nr.hdrCopySpare, &g_nr.activeColorSpare, &g_nr.lutScratchSpare })
         ParkNrResource(*r);
 
     g_nr.passScratchFailed = false;
@@ -2411,6 +2456,9 @@ void SwapView(ViewState& v)
     NR_VIEW_SWAP(activeColor);
     NR_VIEW_SWAP(lutScratch);
     NR_VIEW_SWAP(lutScratchFailed);
+    NR_VIEW_SWAP(hdrCopySpare);
+    NR_VIEW_SWAP(activeColorSpare);
+    NR_VIEW_SWAP(lutScratchSpare);
     NR_VIEW_SWAP(colorSmall);
     NR_VIEW_SWAP(superUp);
     NR_VIEW_SWAP(outputNative);
@@ -2453,6 +2501,9 @@ void SwapView(ViewState& v)
     NR_VIEW_SWAP(builtAutoMask);
     NR_VIEW_SWAP(settledAt);
     NR_VIEW_SWAP(lastGameFormat);
+    NR_VIEW_SWAP(lastBeforeUpscale);
+    NR_VIEW_SWAP(floatFlipSeen);
+    NR_VIEW_SWAP(rebuildGuard);
 #undef NR_VIEW_SWAP
 
     namespace ec = EdgeCompression;
@@ -2511,7 +2562,8 @@ void ParkLoadedView()
     for (ID3D12Resource** r :
          { &g_nr.output, &g_nr.passScratch, &g_nr.passClampScratch, &g_nr.passClampScratch2, &g_nr.colorCopy,
            &g_nr.hdrCopy, &g_nr.colorSmall, &g_nr.outputNative, &g_nr.activeColor, &g_nr.lutScratch, &g_nr.styled,
-           &g_nr.styledB, &g_nr.heldColor, &g_nr.depthClone, &g_nr.motionClone, &g_nr.depthConstant })
+           &g_nr.styledB, &g_nr.heldColor, &g_nr.depthClone, &g_nr.motionClone, &g_nr.depthConstant, &g_nr.hdrCopySpare,
+           &g_nr.activeColorSpare, &g_nr.lutScratchSpare })
         ParkNrResource(*r);
 
     // The scalers are deleted on the spot wherever this module drops them (a filter change); the same here.
@@ -3676,10 +3728,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     }
 
     const D3D12_RESOURCE_DESC desc = target->GetDesc();
-    // Our surfaces' colour format: the game's, with BGRA8 made RGBA8 (DlssNr_SurfaceFormats.h). A game that swaps the
-    // two keeps one set of surfaces, one model feature and its history. Only the surfaces copied straight to or from
-    // `target` use desc.Format and check it themselves (activeColor, lutScratch, heldColor, hdrCopy without a UAV).
-    const auto colourFormat = (DXGI_FORMAT) DlssNr::CanonicalColourFormat((int) desc.Format);
+    // Our surfaces' colour format: the game's, with BGRA8 made RGBA8, and R11G11B10F made RGBA16F once the game flipped
+    // between the two (DlssNr_SurfaceFormats.h). A game that swaps them keeps one set of surfaces, one model feature
+    // and its history. Only the surfaces copied straight to or from `target` use desc.Format and check it themselves
+    // (activeColor, lutScratch, heldColor, hdrCopy without a UAV).
     {
         auto& lastGameFormat = g_nr.lastGameFormat;
 
@@ -3692,8 +3744,20 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                      (int) lastGameFormat, (int) desc.Format);
         }
 
+        // Moving NR before or after SR also changes the format (R11G11B10F colour, RGBA16F upscaler output): no flip
+        if (!g_nr.floatFlipSeen && g_nr.lastBeforeUpscale == frame.BeforeUpscale &&
+            DlssNr::IsFloatFlip((int) lastGameFormat, (int) desc.Format))
+        {
+            g_nr.floatFlipSeen = true;
+            LOG_INFO("DLSS-NR: the game's colour changes between format {} and {} (RGBA16F/R11G11B10F); NR's surfaces "
+                     "stay RGBA16F for both, the model is built once more and then kept",
+                     (int) lastGameFormat, (int) desc.Format);
+        }
+
         lastGameFormat = desc.Format;
+        g_nr.lastBeforeUpscale = frame.BeforeUpscale;
     }
+    const auto colourFormat = (DXGI_FORMAT) DlssNr::CanonicalColourFormat((int) desc.Format, g_nr.floatFlipSeen);
     const auto active =
         frame.BeforeUpscale
             ? DlssNr::PreSrColorExtent(desc, frame.RenderSubrectWidth, frame.RenderSubrectHeight,
@@ -3944,13 +4008,55 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     const bool replaceCorrection =
         spatial && !superiorPacked && DlssNrProxyCurve::IsReplace(cfg.DlssNrReversibleMode.value_or_default());
 
-    ReleaseSurfacesIfFormatChanged(modelFormat, colourFormat);
-
+    // What would rebuild the model below: a stale surface format (ReleaseSurfacesIfFormatChanged), a new size or a new
+    // placement. Tuning is left out, it is the user's doing.
     const bool resolutionChanged = g_nr.width != width || g_nr.height != height ||
                                    g_nr.workWidth != modelWidth || g_nr.workHeight != modelHeight;
-    const bool placementChanged = g_nr.feature != nullptr &&
-        (g_nr.beforeUpscale != frame.BeforeUpscale ||
-         g_nr.rayReconstruction != frame.RayReconstruction);
+    const bool placementDiffers =
+        g_nr.beforeUpscale != frame.BeforeUpscale || g_nr.rayReconstruction != frame.RayReconstruction;
+
+    // A game alternating two set-ups (two formats or sizes) would have the model rebuilt on every call, a long stall
+    // each: NR stands down until the game settles on one (DlssNr_SurfaceFormats.h). Before anything is parked or made.
+    // Compress screen edges has already been set up for this call; it keeps that state for the next call that runs.
+    {
+        const DXGI_FORMAT haveModel = g_nr.output != nullptr ? g_nr.output->GetDesc().Format : DXGI_FORMAT_UNKNOWN;
+        const DXGI_FORMAT haveColour =
+            g_nr.colorCopy != nullptr ? g_nr.colorCopy->GetDesc().Format : DXGI_FORMAT_UNKNOWN;
+        const bool wouldRebuild =
+            DlssNr::SurfacesStale((int) haveModel, (int) modelFormat, (int) haveColour, (int) colourFormat) ||
+            (g_nr.feature != nullptr && (resolutionChanged || placementDiffers));
+        const DlssNr::Setup setup { (int) modelFormat,   (int) colourFormat,     width, height, modelWidth, modelHeight,
+                                    frame.BeforeUpscale, frame.RayReconstruction };
+
+        auto& guard = g_nr.rebuildGuard;
+        const bool wasStanding = guard.standing;
+        const bool run = guard.Allow(setup, wouldRebuild);
+        // Every call, so a view parked or swapped out while standing does not leave the menu saying so
+        g_rebuildStandDown.store(guard.standing, std::memory_order_relaxed);
+
+        if (guard.standing != wasStanding)
+        {
+            if (guard.standing)
+                LOG_WARN("DLSS-NR: the game keeps switching back and forth between what the model is built for "
+                         "(format {}, {}x{}, model {}x{}); NR stands down until it settles",
+                         (int) colourFormat, width, height, modelWidth, modelHeight);
+            else
+                LOG_INFO("DLSS-NR: the game settled, NR runs again");
+        }
+
+        if (!run)
+        {
+            // The frames passed untouched break the history
+            g_nr.reset = true;
+            ReportSkipOnce("the game kept switching back and forth between what the model is built for");
+            device->Release();
+            return;
+        }
+    }
+
+    ReleaseSurfacesIfFormatChanged(modelFormat, colourFormat);
+
+    const bool placementChanged = g_nr.feature != nullptr && placementDiffers;
 
     // The model reads its tuning once, while the feature is built, so a changed setting only takes
     // effect when the feature is rebuilt. TuningMatchesFeature was written to notice that and then
@@ -3990,6 +4096,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ParkNrResource(g_nr.outputNative);
             ParkNrResource(g_nr.activeColor);
             ParkNrResource(g_nr.lutScratch);
+            ParkNrResource(g_nr.hdrCopySpare);
+            ParkNrResource(g_nr.activeColorSpare);
+            ParkNrResource(g_nr.lutScratchSpare);
             ParkNrResource(g_nr.styled);
             g_nr.styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
             ParkNrResource(g_nr.styledB);
@@ -4011,8 +4120,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                                        ? DXGI_FORMAT_R16G16B16A16_FLOAT
                                        : colourFormat;
 
-    if (g_nr.hdrCopy != nullptr && g_nr.hdrCopy->GetDesc().Format != keepFormat)
-        ParkNrResource(g_nr.hdrCopy);
+    KeepExactFormat(g_nr.hdrCopy, g_nr.hdrCopySpare, keepFormat);
 
     if (g_nr.output == nullptr)
     {
@@ -4026,8 +4134,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.hdrCopy = CreateScratch(device, keepFormat, width, height);
 
     // The crop is a CopyTextureRegion from the game's colour: exact format
-    if (g_nr.activeColor != nullptr && g_nr.activeColor->GetDesc().Format != desc.Format)
-        ParkNrResource(g_nr.activeColor);
+    KeepExactFormat(g_nr.activeColor, g_nr.activeColorSpare, desc.Format);
 
     if (cropColor && g_nr.activeColor == nullptr)
         g_nr.activeColor = CreateScratch(device, desc.Format, width, height);
@@ -4870,7 +4977,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             // Copied back onto `target` (CopyTextureRegion): exact format
             if (g_nr.lutScratch != nullptr && g_nr.lutScratch->GetDesc().Format != desc.Format)
             {
-                ParkNrResource(g_nr.lutScratch);
+                KeepExactFormat(g_nr.lutScratch, g_nr.lutScratchSpare, desc.Format);
                 g_nr.lutScratchFailed = false;
             }
 
@@ -4937,7 +5044,12 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             // already released/parked.
             // The post-NR stack shares the scratch, so it stays while that stack wants it.
             if (!postLutWanted)
+            {
                 ParkNrResource(g_nr.lutScratch);
+            }
+            // Also when making the scratch failed after its old format moved to the spare
+            if (!postLutWanted)
+                ParkNrResource(g_nr.lutScratchSpare);
             ReleaseLutTexture();
             DlssNr::ReportLutStatus(false, "", 0, false, "", "", cfg.DlssNrLutStrength.value_or_default());
         }
@@ -6564,12 +6676,15 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ReleasePostLut();
             if (g_nr.lutScratch != nullptr && cfg.DlssNrLutFile.value_or_default().empty())
                 ParkNrResource(g_nr.lutScratch);
+            // Also when making the scratch failed after its old format moved to the spare
+            if (cfg.DlssNrLutFile.value_or_default().empty())
+                ParkNrResource(g_nr.lutScratchSpare);
         }
         else if (composed)
         {
             if (g_nr.lutScratch != nullptr && g_nr.lutScratch->GetDesc().Format != desc.Format)
             {
-                ParkNrResource(g_nr.lutScratch);
+                KeepExactFormat(g_nr.lutScratch, g_nr.lutScratchSpare, desc.Format);
                 g_nr.lutScratchFailed = false;
             }
 
@@ -7479,6 +7594,8 @@ int CurrentModelResolutionPercent() { return (int) lroundf(g_nr.appliedWorkScale
 
 Views::Snapshot MultiViewStatus() { return g_views.Status(); }
 
+bool StoodDownForRebuilds() { return g_rebuildStandDown.load(std::memory_order_relaxed); }
+
 Spatial::Published EdgeCompressionStatus()
 {
     std::lock_guard<std::mutex> lock(EdgeCompression::publishedLock);
@@ -7533,6 +7650,9 @@ void Shutdown()
 
     g_nr.feature = nullptr;
     g_nr.featurePendingSubmission = false;
+    g_nr.rebuildGuard = {};
+    g_nr.floatFlipSeen = false;
+    g_rebuildStandDown.store(false, std::memory_order_relaxed);
 
     for (unsigned int pass = 1; pass < DlssNr::MaxPassCount; ++pass)
     {
@@ -7601,6 +7721,15 @@ void Shutdown()
         g_nr.lutScratch = nullptr;
     }
     g_nr.lutScratchFailed = false;
+
+    for (ID3D12Resource** spare : { &g_nr.hdrCopySpare, &g_nr.activeColorSpare, &g_nr.lutScratchSpare })
+    {
+        if (*spare != nullptr)
+        {
+            (*spare)->Release();
+            *spare = nullptr;
+        }
+    }
 
     if (g_nr.colorSmall != nullptr)
     {
