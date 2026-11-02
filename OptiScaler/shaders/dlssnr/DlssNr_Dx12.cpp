@@ -30,6 +30,7 @@
 #include "DlssNr_SurfaceFormats.h"
 #include "DlssNr_ActiveColor.h"
 #include "DlssNr_Views.h"
+#include "DlssNr_Contexts.h"
 #include "DlssNr_Retire.h"
 #include "DlssNr_Guides.h"
 #include "DlssNr_SeamClock.h"
@@ -2289,6 +2290,7 @@ void ReportSkipOnce(const char* reason)
 }
 
 namespace Views = DlssNr::Views;
+namespace Contexts = DlssNr::Contexts;
 
 // A game that draws several views into one colour allocation (a triple-screen rig) calls the upscaler once per view,
 // each with its own active rectangle, and often once more for the combined picture. This module has one model feature
@@ -2303,8 +2305,19 @@ Views::Detector g_views;
 // scene cut, the scan, frame statistics) are taken on the first view NR runs on in the frame only.
 bool g_multiRun = false;
 bool g_viewSecondary = false;
+
+// The game's DLSS features (DlssNr_Contexts.h). g_contextRun: this evaluate is a secondary feature with a model of its
+// own, which stands aside from the same one-picture state as a multi-view run and takes the main picture's
+// measurements. The counts are for the menu.
+Contexts::Map g_contexts;
+bool g_contextRun = false;
+std::atomic<unsigned> g_contextsAside { 0 }, g_contextsOwn { 0 };
 unsigned long long g_sceneCuts = 0; // cuts the first view found; each other view resets once per cut
-unsigned long long g_viewSceneCuts[Views::kSlots] = {}; // ... and remembers the last one it took
+// The view slots: one per screen of a multi-monitor layout (Views::kSlots), then one per game DLSS feature with a
+// model of its own (DlssNr_Contexts.h, SecondaryFeatures = Own model), at kContextSlot + k.
+constexpr unsigned kContextSlot = Views::kSlots;
+constexpr unsigned kAllSlots = Views::kSlots + Contexts::kOwnSlots;
+unsigned long long g_viewSceneCuts[kAllSlots] = {}; // ... and remembers the last one it took
 
 // The first view is the leftmost ticked view that is still being drawn, picked by slot, not by the present count: AC
 // EVO records its views on a render thread while presents go on elsewhere, so a present can fall between two views of
@@ -2426,7 +2439,7 @@ struct ViewState
 };
 
 ViewState g_mainView;
-ViewState g_viewSlots[Views::kSlots];
+ViewState g_viewSlots[kAllSlots];
 int g_loadedSlot = -1;
 
 void SwapView(ViewState& v)
@@ -2527,11 +2540,11 @@ ViewState& SlotState(int slot) { return slot < 0 ? g_mainView : g_viewSlots[slot
 // When each view last ran (index slot + 1). A view's model is kept while the game switches layouts (AC EVO: the cockpit
 // camera draws one view per screen, the outside cameras one wide view) and released after kKeepIdle without a run.
 constexpr auto kKeepIdle = std::chrono::minutes(2);
-std::chrono::steady_clock::time_point g_viewLastUsed[Views::kSlots + 1] {};
+std::chrono::steady_clock::time_point g_viewLastUsed[kAllSlots + 1] {};
 
 void UseViewSlot(int slot)
 {
-    if (slot >= (int) Views::kSlots)
+    if (slot >= (int) kAllSlots)
         return;
 
     const auto now = std::chrono::steady_clock::now();
@@ -2642,7 +2655,7 @@ void ParkIdleViews()
     checked = now;
 
     unsigned int parked = 0;
-    for (int slot = -1; slot < (int) Views::kSlots; ++slot)
+    for (int slot = -1; slot < (int) kAllSlots; ++slot)
     {
         if (slot == g_loadedSlot || !SlotHolds(slot) || now - g_viewLastUsed[slot + 1] < kKeepIdle)
             continue;
@@ -3668,7 +3681,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         superiorState.wasSelected = superiorSelected;
         superiorState.unavailable.clear();
     }
-    const bool superior = superiorSelected && superiorState.unavailable.empty() && !g_multiRun;
+    const bool superior = superiorSelected && superiorState.unavailable.empty() && !g_multiRun && !g_contextRun;
     if (superiorState.wasActive != superior)
     {
         superiorState.wasActive = superior;
@@ -3856,7 +3869,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     };
 
     // One per view: two views of different sizes would otherwise log every evaluate.
-    static GuideReport loggedPerView[Views::kSlots + 1] {};
+    static GuideReport loggedPerView[kAllSlots + 1] {};
     GuideReport& loggedGuides = loggedPerView[g_loadedSlot + 1];
 
     const GuideReport guidesNow { true,
@@ -5786,7 +5799,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // and measures Reuse bottleneck as it runs.
     // A capture shows the model on every frame: before/after are a control, and an edit cache dump measures carrying
     // the model's real answers
-    reuseFrame.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || g_multiRun;
+    reuseFrame.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || g_multiRun || g_contextRun;
     reuseFrame.frameNumber = frame.SubmissionEpoch != 0 ? frame.SubmissionEpoch : g_frames;
     {
         // The motion size is left out on purpose: saved vectors are uv displacements, so a render-size change does not
@@ -5829,7 +5842,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ci.workAbove100 = workScale > 1.0f;
         ci.edgeCompression = spatial;
         ci.convertedEncoding = frame.InputEncoding != 0;
-        ci.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || CalibrationActive() || g_multiRun;
+        ci.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || CalibrationActive() ||
+                     g_multiRun || g_contextRun;
         // The skin mask preview is painted by the resolve: carried, it would be taken for the model's edit
         ci.debugOrCompare = cfg.DlssNrDebugView.value_or_default() != 0 || cfg.DlssNrCompare.value_or_default() != 0 ||
                             cfg.DlssNrShowSkinMask.value_or_default();
@@ -6873,9 +6887,9 @@ void RetryAfterFailure()
 // This is the call site's job, not the pass's. A caller that has the resources in hand -- a
 // reprojection stage, a frame generation path, anything that is not the upscaler seam -- calls
 // RunPass directly and never touches an NGX parameter block.
-void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                      bool beforeUpscale, ID3D12CommandQueue* timingQueue, bool rayReconstruction,
-                      unsigned long long submissionEpoch)
+void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params, bool beforeUpscale,
+                      ID3D12CommandQueue* timingQueue, bool rayReconstruction, unsigned long long submissionEpoch,
+                      uint32_t gameFeature)
 {
     std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
     const Config& cfg = *Config::Instance();
@@ -6889,13 +6903,64 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
     }
     DlssNrNative::SetPrecision(precision);
 
+    // A game with several DLSS features alive (DlssNr_Contexts.h): the main one goes on as before, another stands aside
+    // or works in a view slot of its own. First of all, since everything below keeps one model and one history.
+    bool contextSlot = false;
+    if (cfg.DlssNrEnabled.value_or_default() && cmdList != nullptr && params != nullptr)
+    {
+        const auto mode = (Contexts::Mode) std::min(cfg.DlssNrSecondaryFeatures.value_or_default(), 2u);
+        const unsigned long long epoch = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
+        const Contexts::Role role = g_contexts.Acquire(gameFeature, mode, epoch);
+        g_contextsAside.store(g_contexts.AsideCount(), std::memory_order_relaxed);
+        g_contextsOwn.store(g_contexts.OwnCount(), std::memory_order_relaxed);
+
+        if (role.first && role.kind == Contexts::Kind::StandAside)
+            LOG_INFO("DLSS-NR: the game uses another DLSS feature ({}) besides the main one; NR leaves it as it is "
+                     "(SecondaryFeatures)",
+                     gameFeature);
+        else if (role.first && role.kind == Contexts::Kind::Own)
+            LOG_INFO(
+                "DLSS-NR: the game uses another DLSS feature ({}) besides the main one; it gets a model of its own",
+                gameFeature);
+        else if (role.tookMain)
+            LOG_INFO("DLSS-NR: the main DLSS feature has not been used for a while; feature {} is the main one now",
+                     gameFeature);
+
+        if (role.kind == Contexts::Kind::StandAside)
+            return;
+
+        if (role.kind == Contexts::Kind::Own)
+        {
+            // One picture's modes cannot run on a second one
+            if (cfg.DlssNrFinishedPicture.value_or_default() || cfg.DlssNrDeferredDlss.value_or_default())
+            {
+                ReportSkipOnce("another DLSS feature of the game: Finished picture and Deferred DLSS work on the main "
+                               "one only");
+                return;
+            }
+
+            UseViewSlot((int) (kContextSlot + role.slot));
+            contextSlot = true;
+        }
+        else
+        {
+            if (g_loadedSlot >= (int) kContextSlot)
+                UseViewSlot(-1);
+            // Another picture's state: its history does not carry over
+            if (role.tookMain)
+                g_nr.reset = true;
+        }
+    }
+    g_contextRun = contextSlot;
+
     // Several views in one allocation: only the ticked ones go on, each with its own model (the view slots). Before
     // every placement and mode below, since all of them keep one model feature and one history.
     bool viewNeedsBeforeSr = false;
     bool viewLatched = false;
     bool onePicture = false; // all screens as one picture: once per frame, after SR, on the whole shared output
     unsigned long long viewEpoch = 0;
-    if (cfg.DlssNrEnabled.value_or_default() && cmdList != nullptr && params != nullptr && !rayReconstruction)
+    if (cfg.DlssNrEnabled.value_or_default() && cmdList != nullptr && params != nullptr && !rayReconstruction &&
+        !contextSlot)
     {
         viewEpoch = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
         const auto view = JudgeViews(cfg, params, viewEpoch);
@@ -7130,7 +7195,9 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         return;
 
     // The first view takes the frame's measurements; the others read them.
-    g_viewSecondary = viewLatched && IsSecondaryView(g_loadedSlot, cfg.DlssNrMultiViewScreens.value_or_default());
+    // A secondary game feature with a model of its own reads the main one's too.
+    g_viewSecondary =
+        contextSlot || (viewLatched && IsSecondaryView(g_loadedSlot, cfg.DlssNrMultiViewScreens.value_or_default()));
 
     // Which of the game's APIs this evaluate arrived through.
     //
@@ -7390,17 +7457,17 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
 }
 
 void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                          ID3D12CommandQueue* timingQueue, bool rayReconstruction,
-                          unsigned long long submissionEpoch)
+                          ID3D12CommandQueue* timingQueue, bool rayReconstruction, unsigned long long submissionEpoch,
+                          uint32_t gameFeature)
 {
-    EvaluateInternal(cmdList, params, false, timingQueue, rayReconstruction, submissionEpoch);
+    EvaluateInternal(cmdList, params, false, timingQueue, rayReconstruction, submissionEpoch, gameFeature);
 }
 
 void EvaluateBeforeUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                           ID3D12CommandQueue* timingQueue, unsigned long long submissionEpoch,
-                           bool rayReconstruction)
+                           ID3D12CommandQueue* timingQueue, unsigned long long submissionEpoch, bool rayReconstruction,
+                           uint32_t gameFeature)
 {
-    EvaluateInternal(cmdList, params, true, timingQueue, rayReconstruction, submissionEpoch);
+    EvaluateInternal(cmdList, params, true, timingQueue, rayReconstruction, submissionEpoch, gameFeature);
 }
 
 // The pass. Resources in, nothing read from anywhere the caller cannot see.
@@ -7596,6 +7663,27 @@ Views::Snapshot MultiViewStatus() { return g_views.Status(); }
 
 bool StoodDownForRebuilds() { return g_rebuildStandDown.load(std::memory_order_relaxed); }
 
+void ReleaseGameFeature(uint32_t gameFeature)
+{
+    std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
+    const Contexts::Released released = g_contexts.Release(gameFeature);
+
+    if (released.own)
+    {
+        ParkSlot((int) (kContextSlot + released.slot));
+        LOG_INFO("DLSS-NR: the game released DLSS feature {}; its own model is released", gameFeature);
+    }
+
+    g_contextsAside.store(g_contexts.AsideCount(), std::memory_order_relaxed);
+    g_contextsOwn.store(g_contexts.OwnCount(), std::memory_order_relaxed);
+}
+
+void GameFeatureStatus(unsigned& standingAside, unsigned& ownModels)
+{
+    standingAside = g_contextsAside.load(std::memory_order_relaxed);
+    ownModels = g_contextsOwn.load(std::memory_order_relaxed);
+}
+
 Spatial::Published EdgeCompressionStatus()
 {
     std::lock_guard<std::mutex> lock(EdgeCompression::publishedLock);
@@ -7637,6 +7725,12 @@ void Shutdown()
     // Every view's model into the retired list, which is emptied below
     LeaveMultiView(true);
     g_views.Reset();
+    for (unsigned k = 0; k < Contexts::kOwnSlots; ++k)
+        ParkSlot((int) (kContextSlot + k));
+    g_contexts.Reset();
+    g_contextRun = false;
+    g_contextsAside.store(0, std::memory_order_relaxed);
+    g_contextsOwn.store(0, std::memory_order_relaxed);
     DeferredSr::Shutdown();
     if (SuperiorRun::g_used)
         SuperiorRun::Shutdown();

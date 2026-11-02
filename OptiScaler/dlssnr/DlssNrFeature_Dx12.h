@@ -44,17 +44,23 @@ inline constexpr unsigned int DefaultMaxPassCount = 3;
 // game never does -- so without this the pass runs and never reports what it cost.
 // rayReconstruction identifies the feature for history reset and the SR-only deferred experiment.
 // Placement and model cost controls are shared by SR and RR+SR.
+// gameFeature is the game's DLSS feature handle, when the caller has it: a game that keeps several alive (a 3D
+// character preview next to the world) gets one NR state per feature (shaders/dlssnr/DlssNr_Contexts.h). 0 = main.
 void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
                           ID3D12CommandQueue* timingQueue = nullptr, bool rayReconstruction = false,
-                          unsigned long long submissionEpoch = 0);
+                          unsigned long long submissionEpoch = 0, uint32_t gameFeature = 0);
 
 // Runs the same pass over Color immediately before SR or RR+SR consumes it. The call is a no-op
 // unless RunBeforeSR is enabled. Color is returned in its original readable state.
 void EvaluateBeforeUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                           ID3D12CommandQueue* timingQueue = nullptr,
-                           unsigned long long submissionEpoch = 0, bool rayReconstruction = false);
+                           ID3D12CommandQueue* timingQueue = nullptr, unsigned long long submissionEpoch = 0,
+                           bool rayReconstruction = false, uint32_t gameFeature = 0);
 
+// The game released one of its DLSS features: a model NR kept for it alone is parked.
+void ReleaseGameFeature(uint32_t gameFeature);
 
+// Of the game's DLSS features other than the main one: how many stand aside and how many have a model of their own.
+void GameFeatureStatus(unsigned& standingAside, unsigned& ownModels);
 
 // Frame generation titles tag their UI layer through Streamline; a copy of it makes the HUD mask
 // exact at the finished frame. Called at tag time.
