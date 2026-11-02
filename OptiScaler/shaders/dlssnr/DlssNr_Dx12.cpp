@@ -4868,13 +4868,14 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // "Tune for this scene" (DlssNr_ExposureCalibrate_Dx12.inl): before the white point is resolved, so a run's
     // pinned white point (CalibrationWhitePoint) reaches the encode and resolve below. While no run is on and the menu
     // is not looking, only a timestamp.
-    if (CalibrationWanted())
+    // Measured on the main picture only: another view or game feature has its own size, which would stop a run
+    if (!g_viewSecondary && CalibrationWanted())
         CalibrationBeginFrame(cfg, device, width, height,
                               CalibrationSituation(cfg, usingAutoExposure, isHdrBuffer, frame.FinishedPicture,
                                                    frame.ExposureTexture != nullptr,
                                                    DlssNrColourEncoding::ShaderConverts(frame.InputEncoding)),
                               CalibrationBase(cfg));
-    else
+    else if (!g_viewSecondary)
         CalibrationIdleFrame();
 
     g_nr.gamePreExposure = frame.PreExposure;
@@ -6944,8 +6945,8 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
             picture.width = (unsigned) desc.Width;
             picture.height = desc.Height;
             picture.format = (int) desc.Format;
-            params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &picture.renderWidth);
-            params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, &picture.renderHeight);
+            params->Get(NVSDK_NGX_Parameter_OutWidth, &picture.outputWidth);
+            params->Get(NVSDK_NGX_Parameter_OutHeight, &picture.outputHeight);
         }
 
         const Contexts::Role role = g_contexts.Acquire(gameFeature, mode, picture);

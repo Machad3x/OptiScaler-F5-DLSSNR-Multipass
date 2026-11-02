@@ -48,16 +48,20 @@ struct Picture
     uint64_t resource = 0;
     unsigned width = 0, height = 0; // the allocation
     int format = 0;
-    unsigned renderWidth = 0, renderHeight = 0; // the part the game renders into, when it says (else the allocation)
+    // The size DLSS makes of it, when the game says (else the allocation): steady under dynamic resolution, unlike
+    // the render size
+    unsigned outputWidth = 0, outputHeight = 0;
 
     unsigned long long Area() const
     {
-        return renderWidth != 0 ? (unsigned long long) renderWidth * renderHeight : (unsigned long long) width * height;
+        return outputWidth != 0 ? (unsigned long long) outputWidth * outputHeight : (unsigned long long) width * height;
     }
+    // The same resource; size and format only when a call does not say which resource it is (a preview of the
+    // world's size and format is another picture)
     bool SameAllocation(const Picture& o) const
     {
-        if (resource != 0 && resource == o.resource)
-            return true;
+        if (resource != 0 && o.resource != 0)
+            return resource == o.resource;
         return width != 0 && width == o.width && height == o.height && format == o.format;
     }
 };
@@ -94,8 +98,15 @@ class Map
         ++calls;
         Role role;
 
-        if (handle == 0 || mode == Mode::Share)
+        if (handle == 0)
             return role;
+
+        // Share: every feature through the main state, as before; one that had a model of its own gives it back
+        if (mode == Mode::Share)
+        {
+            Forget(handle, role);
+            return role;
+        }
 
         if (haveMain && handle == main)
         {
@@ -106,18 +117,25 @@ class Map
 
         if (!haveMain)
         {
+            // Main's successor shows main's picture: the same allocation, or (made again at another size) its colour
+            // format, being new or made just before the release. A known other picture, or one in another format,
+            // waits kQuietCalls in case main's successor comes.
             const Entry* known = Find(handle);
-            const bool successor = !known || !haveReleased || picture.SameAllocation(releasedPicture) ||
-                                   known->firstSeen + kSuccessorCalls >= releasedAt || calls - releasedAt > kQuietCalls;
+            const bool sameFormat = picture.format == releasedPicture.format;
+            const bool successor = !haveReleased || picture.SameAllocation(releasedPicture) ||
+                                   (sameFormat && (!known || known->firstSeen + kSuccessorCalls >= releasedAt)) ||
+                                   calls - releasedAt > kQuietCalls;
             if (successor)
                 return TakeMain(handle, picture, known != nullptr);
         }
         else
         {
-            // A view of main's picture (one feature per screen of a multi-monitor layout)
+            // A view of main's picture (one feature per screen of a multi-monitor layout). One that stood aside or had
+            // a model of its own while main was another picture gives that up.
             if (picture.SameAllocation(mainPicture))
             {
                 mainLast = calls;
+                Forget(handle, role);
                 return role;
             }
 
@@ -192,6 +210,17 @@ class Map
             if (entries[i].handle == handle)
                 return &entries[i];
         return nullptr;
+    }
+
+    // The feature is no other picture any more: its entry goes, and its own slot with it (to be parked)
+    void Forget(uint32_t handle, Role& role)
+    {
+        if (Entry* e = Find(handle))
+        {
+            if (e->own)
+                role.freedSlot = (int) e->slot;
+            *e = Entry {};
+        }
     }
 
     unsigned Count(bool own) const

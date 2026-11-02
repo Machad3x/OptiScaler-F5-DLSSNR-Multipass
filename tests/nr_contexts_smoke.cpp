@@ -58,9 +58,12 @@ int main()
         for (uint32_t h : { preview, third, fourth })
             allMain = m.Acquire(h, Mode::StandAside, rig).kind == Kind::Main && allMain;
         check(allMain && m.AsideCount() == 0, "features on main's colour allocation are views of main: main");
-        // Same size and format in another allocation that cannot be told apart: also main (the old behaviour)
-        check(m.Acquire(fifth, Mode::StandAside, Picture { 0x4000, 5120, 960, 10 }).kind == Kind::Main,
-              "same size and format: treated as main's picture");
+        // Same size and format in another resource: another picture
+        check(m.Acquire(fifth, Mode::StandAside, Picture { 0x4000, 5120, 960, 10 }).kind == Kind::StandAside,
+              "same size and format, another resource: another picture");
+        // No resource said: size and format decide
+        check(m.Acquire(fifth + 1, Mode::StandAside, Picture { 0, 5120, 960, 10 }).kind == Kind::Main,
+              "no resource: same size and format count as main's picture");
     }
     {
         // Own model: a slot each, up to kOwnSlots, then stand aside.
@@ -87,6 +90,29 @@ int main()
         Map m;
         m.Acquire(world, Mode::Share, worldPic);
         check(m.Acquire(preview, Mode::Share, previewPic).kind == Kind::Main, "share: everything is main");
+    }
+    {
+        // Switched from Own model to Share: each feature gives its slot back on its next call.
+        Map m;
+        m.Acquire(world, Mode::OwnModel, worldPic);
+        m.Acquire(preview, Mode::OwnModel, previewPic);
+        const Role r = m.Acquire(preview, Mode::Share, previewPic);
+        check(r.kind == Kind::Main && r.freedSlot == 0 && m.OwnCount() == 0, "share: the own slot is freed");
+    }
+    {
+        // A feature that stood aside and turns into a view of main (main moved to its allocation) is forgotten.
+        Map m;
+        const Picture rig { 0x3000, 5120, 960, 10 }, combined { 0x3100, 7680, 1440, 10 };
+        m.Acquire(world, Mode::OwnModel, combined);
+        m.Acquire(preview, Mode::OwnModel, rig);
+        check(m.OwnCount() == 1, "a per-screen feature with its own model while the combined view is main");
+        // The combined view goes quiet; the left screen takes main, the other screen is a view of it
+        Role r;
+        for (int i = 0; i < 300; ++i)
+            r = m.Acquire(third, Mode::OwnModel, rig);
+        const Role v = m.Acquire(preview, Mode::OwnModel, rig);
+        check(v.kind == Kind::Main && v.freedSlot == 0 && m.OwnCount() == 0 && m.AsideCount() == 0,
+              "a former other picture that is a view of main gives its slot back, no phantom");
     }
     {
         // Main released and made again (a resolution change), nothing else alive: the new one is main, state kept.
@@ -136,6 +162,33 @@ int main()
         check(r.tookMain && waited == kQuietCalls, "the preview alone takes main after kQuietCalls calls, reset");
     }
     {
+        // Neverness to Everness resized on the Character page: both features made again, the new preview first.
+        Map m;
+        m.Acquire(world, Mode::StandAside, worldPic);
+        for (int i = 0; i < 1000; ++i)
+            m.Acquire(preview, Mode::StandAside, previewPic), m.Acquire(world, Mode::StandAside, worldPic);
+        m.Release(world);
+        m.Release(preview);
+        const Picture newWorld { 0xA000, 2560, 1440, 26 }, newPreview { 0xB000, 2560, 1440, 10 };
+        check(m.Acquire(fourth, Mode::StandAside, newPreview).kind == Kind::StandAside,
+              "resize: a new feature in another format than main's does not take main");
+        check(m.Acquire(fifth, Mode::StandAside, newWorld).kind == Kind::Main,
+              "the new world feature (main's format) does");
+        check(m.Acquire(fourth, Mode::StandAside, newPreview).kind == Kind::StandAside, "the new preview stays aside");
+    }
+    {
+        // Main made again in another format, nothing else alive: after a while it takes main anyway.
+        Map m;
+        m.Acquire(world, Mode::StandAside, worldPic);
+        m.Release(world);
+        Role r;
+        unsigned long long waited = 0;
+        while ((r = m.Acquire(fifth, Mode::StandAside, Picture { 0xC000, 1705, 960, 10 })).kind != Kind::Main &&
+               waited < 10000)
+            ++waited;
+        check(waited == kQuietCalls, "another format: main after kQuietCalls calls");
+    }
+    {
         // A larger picture takes main (a menu scene's small feature made first).
         Map m;
         const Picture small { 0x8000, 960, 540, 10 }, big { 0x9000, 1920, 1080, 10 };
@@ -177,7 +230,7 @@ int main()
         check(m.Failed(world) == -1, "main is not in the map: nothing to park");
     }
     {
-        // The render area, not the allocation, decides "larger": a big render-target pool is no bigger picture.
+        // The output size, not the allocation, decides "larger": a big render-target pool is no bigger picture.
         Map m;
         m.Acquire(world, Mode::StandAside, Picture { 0x1, 1920, 1080, 26, 1920, 1080 });
         check(m.Acquire(preview, Mode::StandAside, Picture { 0x2, 3840, 2160, 10, 960, 540 }).kind == Kind::StandAside,
