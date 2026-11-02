@@ -6957,6 +6957,18 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         }
 
         const Contexts::Role role = g_contexts.Acquire(gameFeature, mode, picture);
+
+        // Once per game feature: what it hands in and what NR makes of it (multi-view rigs and previews told apart)
+        {
+            static std::set<uint32_t> described; // under g_nrMutex
+            if (gameFeature != 0 && described.size() < 64 && described.insert(gameFeature).second)
+                LOG_INFO("DLSS-NR: game DLSS feature {}: colour {:X} {}x{} format {}, output {}x{}: {}", gameFeature,
+                         picture.resource, picture.width, picture.height, picture.format, picture.outputWidth,
+                         picture.outputHeight,
+                         role.kind == Contexts::Kind::StandAside ? "left as it is"
+                         : role.kind == Contexts::Kind::Own      ? "a model of its own"
+                                                                 : "main picture");
+        }
         g_contextsAside.store(g_contexts.AsideCount(), std::memory_order_relaxed);
         g_contextsOwn.store(g_contexts.OwnCount(), std::memory_order_relaxed);
 
