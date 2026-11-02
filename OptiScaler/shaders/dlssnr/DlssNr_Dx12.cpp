@@ -565,6 +565,7 @@ struct NrState
 
     // The game's last output format, to say once that it swaps RGBA8 and BGRA8 (the surfaces and model are kept)
     DXGI_FORMAT lastGameFormat = DXGI_FORMAT_UNKNOWN;
+    bool lastBeforeUpscale = false; // where lastGameFormat was taken: before or after SR
     bool saidFormatSwap = false;
     // The game has flipped between RGBA16F and R11G11B10F: our surfaces stay RGBA16F for both (DlssNr_SurfaceFormats.h)
     bool floatFlipSeen = false;
@@ -2500,6 +2501,7 @@ void SwapView(ViewState& v)
     NR_VIEW_SWAP(builtAutoMask);
     NR_VIEW_SWAP(settledAt);
     NR_VIEW_SWAP(lastGameFormat);
+    NR_VIEW_SWAP(lastBeforeUpscale);
     NR_VIEW_SWAP(floatFlipSeen);
     NR_VIEW_SWAP(rebuildGuard);
 #undef NR_VIEW_SWAP
@@ -3742,7 +3744,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                      (int) lastGameFormat, (int) desc.Format);
         }
 
-        if (!g_nr.floatFlipSeen && DlssNr::IsFloatFlip((int) lastGameFormat, (int) desc.Format))
+        // Moving NR before or after SR also changes the format (R11G11B10F colour, RGBA16F upscaler output): no flip
+        if (!g_nr.floatFlipSeen && g_nr.lastBeforeUpscale == frame.BeforeUpscale &&
+            DlssNr::IsFloatFlip((int) lastGameFormat, (int) desc.Format))
         {
             g_nr.floatFlipSeen = true;
             LOG_INFO("DLSS-NR: the game's colour changes between format {} and {} (RGBA16F/R11G11B10F); NR's surfaces "
@@ -3751,6 +3755,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         }
 
         lastGameFormat = desc.Format;
+        g_nr.lastBeforeUpscale = frame.BeforeUpscale;
     }
     const auto colourFormat = (DXGI_FORMAT) DlssNr::CanonicalColourFormat((int) desc.Format, g_nr.floatFlipSeen);
     const auto active =
