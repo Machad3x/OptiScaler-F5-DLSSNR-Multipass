@@ -181,6 +181,7 @@ inline constexpr std::string_view kLeftOutKeys[] = {
     "DisplayPaperWhiteNits",
     // the rig's, not the look: which view of a multi-monitor layout NR works on
     "MultiViewScreens",
+    "SecondaryFeatures",
     // old keys kept for older builds: NativeLowLatency is [Framerate] LowLatencyInput's, InputStyle and
     // InputStyleStrength are written from the input style card (whose keys are kept), WhitePointFromExposure became
     // WhitePointSource

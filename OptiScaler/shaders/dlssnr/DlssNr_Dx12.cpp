@@ -3682,7 +3682,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         superiorState.unavailable.clear();
     }
     const bool superior = superiorSelected && superiorState.unavailable.empty() && !g_multiRun && !g_contextRun;
-    if (superiorState.wasActive != superior)
+    // A secondary game feature's own model never runs it: that is no change of the main picture's choice
+    if (!g_contextRun && superiorState.wasActive != superior)
     {
         superiorState.wasActive = superior;
         g_nr.reset = true;
@@ -4578,7 +4579,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // finished, sRGB-encoded frames. The white point is what maps one to the other, and it is a property
     // of the game's exposure rather than a number worth asking anyone to guess: measured means of 0.065,
     // 1.8 and 185 have all been seen in this one game.
-    ++g_frames;
+    // Counted on the main picture only: the exposure easing and frame statistics need one step per frame of it
+    if (!g_contextRun)
+        ++g_frames;
     CheckCaptureTrigger();
 
     if (g_captureWriteAtFrame != 0 && g_frames >= g_captureWriteAtFrame)
@@ -6553,7 +6556,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             Barrier(cmdList, g_nr.hdrCopy, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        if (CalibrationActive())
+        if (CalibrationActive() && !g_viewSecondary)
         {
             const D3D12_RESOURCE_STATES priorTargetState = targetState;
             TransitionTarget(D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -6906,13 +6909,52 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
     // A game with several DLSS features alive (DlssNr_Contexts.h): the main one goes on as before, another stands aside
     // or works in a view slot of its own. First of all, since everything below keeps one model and one history.
     bool contextSlot = false;
+    uint32_t ownFeature = 0;
+    // A failure on a secondary feature's own model must not turn NR off for the main picture: that feature stands
+    // aside from then on, and the failure is forgotten (g_nr.failed is shared by every slot).
+    struct OwnFailureGuard
+    {
+        const uint32_t& feature;
+        ~OwnFailureGuard()
+        {
+            if (feature == 0 || !g_nr.failed)
+                return;
+            LOG_WARN("DLSS-NR: the model of DLSS feature {} failed ({}); it is left as it is from now on", feature,
+                     g_nr.reason);
+            const int slot = g_contexts.Failed(feature);
+            g_nr.failed = false;
+            g_nr.reason = "";
+            g_nr.reset = true;
+            if (slot >= 0)
+                ParkSlot((int) kContextSlot + slot);
+            g_contextsAside.store(g_contexts.AsideCount(), std::memory_order_relaxed);
+            g_contextsOwn.store(g_contexts.OwnCount(), std::memory_order_relaxed);
+        }
+    } ownFailureGuard { ownFeature };
     if (cfg.DlssNrEnabled.value_or_default() && cmdList != nullptr && params != nullptr)
     {
         const auto mode = (Contexts::Mode) std::min(cfg.DlssNrSecondaryFeatures.value_or_default(), 2u);
-        const unsigned long long epoch = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
-        const Contexts::Role role = g_contexts.Acquire(gameFeature, mode, epoch);
+
+        // The colour this call works on, as the views detector reads it
+        Contexts::Picture picture;
+        if (ID3D12Resource* color = GetResource(params, NVSDK_NGX_Parameter_Color, "DLSSD.Color"))
+        {
+            const D3D12_RESOURCE_DESC desc = color->GetDesc();
+            picture.resource = (uint64_t) (uintptr_t) color;
+            picture.width = (unsigned) desc.Width;
+            picture.height = desc.Height;
+            picture.format = (int) desc.Format;
+            params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &picture.renderWidth);
+            params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, &picture.renderHeight);
+        }
+
+        const Contexts::Role role = g_contexts.Acquire(gameFeature, mode, picture);
         g_contextsAside.store(g_contexts.AsideCount(), std::memory_order_relaxed);
         g_contextsOwn.store(g_contexts.OwnCount(), std::memory_order_relaxed);
+
+        // An own model this feature gave up (it took main, or the setting moved off Own model)
+        if (role.freedSlot >= 0)
+            ParkSlot((int) kContextSlot + role.freedSlot);
 
         if (role.first && role.kind == Contexts::Kind::StandAside)
             LOG_INFO("DLSS-NR: the game uses another DLSS feature ({}) besides the main one; NR leaves it as it is "
@@ -6923,7 +6965,8 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
                 "DLSS-NR: the game uses another DLSS feature ({}) besides the main one; it gets a model of its own",
                 gameFeature);
         else if (role.tookMain)
-            LOG_INFO("DLSS-NR: the main DLSS feature has not been used for a while; feature {} is the main one now",
+            LOG_INFO("DLSS-NR: DLSS feature {} is the main one now (a larger picture, the old main gone quiet or "
+                     "released)",
                      gameFeature);
 
         if (role.kind == Contexts::Kind::StandAside)
@@ -6941,6 +6984,8 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
 
             UseViewSlot((int) (kContextSlot + role.slot));
             contextSlot = true;
+            // NR already off for the main picture: not this feature's failure to take over
+            ownFeature = g_nr.failed ? 0 : gameFeature;
         }
         else
         {

@@ -9,8 +9,20 @@
 //
 // This decides, per game DLSS feature, what NR does with it. The main one keeps NR's ordinary state, as in a game with
 // one feature. Any other one stands aside (passes untouched), or with SecondaryFeatures = Own model gets a view slot of
-// its own (DlssNr_Dx12.cpp: a model, its surfaces and history, like a screen of a multi-monitor layout), or with Share
-// runs through the main state as before. Nothing here touches D3D12. Host-testable (tests/nr_contexts_smoke.cpp).
+// its own (DlssNr_Dx12.cpp: a model, its surfaces and history), or with Share runs through the main state as before.
+//
+// Not every second feature is a second picture: Assetto Corsa EVO draws its triple-screen views with one feature per
+// screen, all into one colour allocation (DlssNr_Views.h sorts those out). A feature whose colour is main's allocation
+// is a view of main's picture and goes on as main.
+//
+// Which feature is main: the first one, unless a picture clearly larger than main's arrives (the world, not a preview
+// or a scope), or main has gone quiet (a menu scene's feature the game never released). After the game releases main
+// (it makes its feature again on a resolution change, and NR keeps its model through that, as it always did), main goes
+// to the first feature that shows main's picture again, is new, or was made just before the release; one already known
+// as another picture (the preview, still open) waits a while.
+//
+// Counted in calls, not presents: the presents are not counted where the swapchain is not wrapped. Nothing here touches
+// D3D12. Host-testable (tests/nr_contexts_smoke.cpp).
 namespace DlssNr::Contexts
 {
 // [DlssNr] SecondaryFeatures
@@ -22,9 +34,33 @@ enum class Mode : uint32_t
 };
 
 constexpr unsigned kOwnSlots = 3; // features with a model of their own besides the main one
-// Presented frames without a call from the main feature before another feature may take main over: a game whose first
-// feature lingers unused (a menu scene) must not keep its gameplay feature from NR.
-constexpr unsigned long long kMainIdleEpochs = 120;
+// Calls by other features without one from main (about 120 frames of two NR seams each) before main counts as quiet,
+// and how long a known other picture waits for main's successor after a release.
+constexpr unsigned long long kQuietCalls = 240;
+// A feature first seen at most this many calls before main's release is main's successor (made before the old one went)
+constexpr unsigned long long kSuccessorCalls = 240;
+// A picture with this much more area than main's takes main
+constexpr unsigned long long kLargerNum = 5, kLargerDen = 4;
+
+// The colour a call works on: the allocation and its size and format
+struct Picture
+{
+    uint64_t resource = 0;
+    unsigned width = 0, height = 0; // the allocation
+    int format = 0;
+    unsigned renderWidth = 0, renderHeight = 0; // the part the game renders into, when it says (else the allocation)
+
+    unsigned long long Area() const
+    {
+        return renderWidth != 0 ? (unsigned long long) renderWidth * renderHeight : (unsigned long long) width * height;
+    }
+    bool SameAllocation(const Picture& o) const
+    {
+        if (resource != 0 && resource == o.resource)
+            return true;
+        return width != 0 && width == o.width && height == o.height && format == o.format;
+    }
+};
 
 enum class Kind
 {
@@ -38,7 +74,8 @@ struct Role
     Kind kind = Kind::Main;
     unsigned slot = 0;
     bool first = false;    // the first call this feature made in this role (to say it once)
-    bool tookMain = false; // this feature took main over from an idle one: the state is of another picture
+    bool tookMain = false; // main moved to this feature from another picture: its history does not carry over
+    int freedSlot = -1;    // an own slot this call gave up (its model is to be parked)
 };
 
 // What releasing a game feature leaves to the caller.
@@ -52,133 +89,208 @@ class Map
 {
   public:
     // handle 0: the caller does not know the game's feature (the native path): main.
-    Role Acquire(uint32_t handle, Mode mode, unsigned long long epoch)
+    Role Acquire(uint32_t handle, Mode mode, const Picture& picture)
     {
+        ++calls;
         Role role;
 
         if (handle == 0 || mode == Mode::Share)
             return role;
 
-        const bool mainIdle = epoch > mainEpoch && epoch - mainEpoch > kMainIdleEpochs;
-        if (!haveMain || handle == main || mainIdle)
+        if (haveMain && handle == main)
         {
-            const bool newMain = !haveMain || handle != main;
-            role.tookMain = haveMain && handle != main;
-            role.first = newMain;
-
-            // A feature that had a slot of its own and now takes main gives the slot back
-            if (newMain)
-                for (unsigned i = 0; i < kOwnSlots; ++i)
-                    if (ownUsed[i] && own[i] == handle)
-                        ownUsed[i] = false;
-
-            main = handle;
-            haveMain = true;
-            mainEpoch = epoch;
+            mainLast = calls;
+            mainPicture = picture;
             return role;
         }
 
-        if (mode == Mode::OwnModel)
+        if (!haveMain)
         {
-            for (unsigned i = 0; i < kOwnSlots; ++i)
-                if (ownUsed[i] && own[i] == handle)
-                {
-                    role.kind = Kind::Own;
-                    role.slot = i;
-                    return role;
-                }
+            const Entry* known = Find(handle);
+            const bool successor = !known || !haveReleased || picture.SameAllocation(releasedPicture) ||
+                                   known->firstSeen + kSuccessorCalls >= releasedAt || calls - releasedAt > kQuietCalls;
+            if (successor)
+                return TakeMain(handle, picture, known != nullptr);
+        }
+        else
+        {
+            // A view of main's picture (one feature per screen of a multi-monitor layout)
+            if (picture.SameAllocation(mainPicture))
+            {
+                mainLast = calls;
+                return role;
+            }
 
-            for (unsigned i = 0; i < kOwnSlots; ++i)
-                if (!ownUsed[i])
-                {
-                    ownUsed[i] = true;
-                    own[i] = handle;
-                    role.kind = Kind::Own;
-                    role.slot = i;
-                    role.first = true;
-                    return role;
-                }
+            const bool larger = picture.Area() * kLargerDen > mainPicture.Area() * kLargerNum;
+            if (larger || calls - mainLast > kQuietCalls)
+                return TakeMain(handle, picture, true);
         }
 
-        role.kind = Kind::StandAside;
-        role.first = SeenAside(handle);
-        return role;
+        return Secondary(handle, mode);
     }
 
-    // The main feature's state is kept: games make their feature again on a resolution change, and NR keeps its model
-    // through that as it always did. The next feature to call takes main.
+    // The main feature's state is kept for its successor (Acquire). An own slot is handed back to be parked.
     Released Release(uint32_t handle)
     {
         Released r;
 
         if (haveMain && handle == main)
+        {
             haveMain = false;
+            haveReleased = true;
+            releasedPicture = mainPicture;
+            releasedAt = calls;
+        }
 
-        for (unsigned i = 0; i < kOwnSlots; ++i)
-            if (ownUsed[i] && own[i] == handle)
+        for (unsigned i = 0; i < kEntries; ++i)
+            if (entries[i].handle == handle)
             {
-                ownUsed[i] = false;
-                r.own = true;
-                r.slot = i;
+                if (entries[i].own)
+                {
+                    r.own = true;
+                    r.slot = entries[i].slot;
+                }
+                entries[i] = Entry {};
             }
-
-        for (unsigned i = 0; i < kAsideRemembered; ++i)
-            if (aside[i] == handle)
-                aside[i] = 0;
 
         return r;
     }
 
-    // For the menu: features seen standing aside or with their own model, still alive.
-    unsigned OwnCount() const
+    // Its own model could not be made or failed: it stands aside from now on, whatever the setting. Returns the slot to
+    // park, or -1.
+    int Failed(uint32_t handle)
     {
-        unsigned n = 0;
-        for (unsigned i = 0; i < kOwnSlots; ++i)
-            n += ownUsed[i] ? 1 : 0;
-        return n;
+        Entry* e = Find(handle);
+        if (e == nullptr)
+            return -1;
+        const int slot = e->own ? (int) e->slot : -1;
+        e->own = false;
+        e->failed = true;
+        return slot;
     }
 
-    unsigned AsideCount() const
-    {
-        unsigned n = 0;
-        for (unsigned i = 0; i < kAsideRemembered; ++i)
-            n += aside[i] != 0 ? 1 : 0;
-        return n;
-    }
-
-    bool OwnHandle(unsigned slot, uint32_t& handle) const
-    {
-        if (slot >= kOwnSlots || !ownUsed[slot])
-            return false;
-        handle = own[slot];
-        return true;
-    }
+    // For the menu: the other features standing aside, and those with a model of their own
+    unsigned AsideCount() const { return Count(false); }
+    unsigned OwnCount() const { return Count(true); }
 
     void Reset() { *this = Map {}; }
 
   private:
-    static constexpr unsigned kAsideRemembered = 8;
-
-    // True the first time this feature stands aside (remembered until it is released)
-    bool SeenAside(uint32_t handle)
+    struct Entry
     {
-        for (unsigned i = 0; i < kAsideRemembered; ++i)
-            if (aside[i] == handle)
-                return false;
-        for (unsigned i = 0; i < kAsideRemembered; ++i)
-            if (aside[i] == 0)
-            {
-                aside[i] = handle;
-                return true;
-            }
-        return false; // more than remembered: said already for enough of them
+        uint32_t handle = 0;
+        unsigned long long firstSeen = 0;
+        bool own = false;
+        unsigned slot = 0;
+        bool failed = false; // its own model failed: aside for good
+    };
+    static constexpr unsigned kEntries = 8;
+
+    Entry* Find(uint32_t handle)
+    {
+        for (unsigned i = 0; i < kEntries; ++i)
+            if (entries[i].handle == handle)
+                return &entries[i];
+        return nullptr;
     }
 
+    unsigned Count(bool own) const
+    {
+        unsigned n = 0;
+        for (unsigned i = 0; i < kEntries; ++i)
+            n += entries[i].handle != 0 && entries[i].own == own ? 1 : 0;
+        return n;
+    }
+
+    // tookMain: main was another picture's (or this one stood aside until now)
+    Role TakeMain(uint32_t handle, const Picture& picture, bool otherPicture)
+    {
+        Role role;
+        role.first = true;
+        role.tookMain = otherPicture;
+
+        if (Entry* e = Find(handle))
+        {
+            if (e->own)
+                role.freedSlot = (int) e->slot;
+            *e = Entry {};
+        }
+
+        // The old main, if still alive, is another feature from now on (it gets its role on its next call)
+        main = handle;
+        haveMain = true;
+        haveReleased = false;
+        mainLast = calls;
+        mainPicture = picture;
+        return role;
+    }
+
+    Role Secondary(uint32_t handle, Mode mode)
+    {
+        Role role;
+        role.kind = Kind::StandAside;
+        Entry* e = Find(handle);
+
+        if (e == nullptr)
+        {
+            for (unsigned i = 0; i < kEntries && e == nullptr; ++i)
+                if (entries[i].handle == 0)
+                {
+                    e = &entries[i];
+                    e->handle = handle;
+                    e->firstSeen = calls;
+                    role.first = true;
+                }
+
+            if (e == nullptr)
+                return role; // more features than remembered: they stand aside, unsaid
+        }
+
+        // The setting moved off Own model: the slot goes
+        if (e->own && mode != Mode::OwnModel)
+        {
+            role.freedSlot = (int) e->slot;
+            e->own = false;
+            role.first = true;
+        }
+
+        if (mode == Mode::OwnModel && !e->own && !e->failed)
+        {
+            for (unsigned s = 0; s < kOwnSlots; ++s)
+                if (!SlotUsed(s))
+                {
+                    e->own = true;
+                    e->slot = s;
+                    role.first = true;
+                    break;
+                }
+        }
+
+        if (e->own)
+        {
+            role.kind = Kind::Own;
+            role.slot = e->slot;
+        }
+
+        return role;
+    }
+
+    bool SlotUsed(unsigned slot) const
+    {
+        for (unsigned i = 0; i < kEntries; ++i)
+            if (entries[i].handle != 0 && entries[i].own && entries[i].slot == slot)
+                return true;
+        return false;
+    }
+
+    unsigned long long calls = 0;
     uint32_t main = 0;
     bool haveMain = false;
-    unsigned long long mainEpoch = 0;
-    uint32_t own[kOwnSlots] = {};
-    bool ownUsed[kOwnSlots] = {};
-    uint32_t aside[kAsideRemembered] = {};
+    unsigned long long mainLast = 0;
+    Picture mainPicture {};
+    bool haveReleased = false;
+    Picture releasedPicture {};
+    unsigned long long releasedAt = 0;
+    Entry entries[kEntries] = {};
 };
 } // namespace DlssNr::Contexts
