@@ -81,7 +81,13 @@ struct Setup
     unsigned width = 0, height = 0, modelWidth = 0, modelHeight = 0;
     bool beforeUpscale = false, rayReconstruction = false;
 
-    constexpr bool operator==(const Setup&) const = default;
+    // Spelled out: the host tests build as C++17
+    constexpr bool operator==(const Setup& o) const
+    {
+        return modelFormat == o.modelFormat && colourFormat == o.colourFormat && width == o.width &&
+               height == o.height && modelWidth == o.modelWidth && modelHeight == o.modelHeight &&
+               beforeUpscale == o.beforeUpscale && rayReconstruction == o.rayReconstruction;
+    }
 };
 
 // Counts the game's calls that return the model to a set-up it was built for recently (A, B, A or A, B, C, A): the

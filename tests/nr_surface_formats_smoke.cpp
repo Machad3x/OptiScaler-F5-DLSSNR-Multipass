@@ -87,7 +87,7 @@ int main()
             return run;
         }
     };
-    const auto size = [](unsigned w) { return Setup { kRgba16f, kRgba16f, w, w, w, w, true, false }; };
+    const auto size = [&](unsigned w) { return Setup { kRgba16f, kRgba16f, w, w, w, w, true, false }; };
     const Setup a = size(100), b = size(200), c = size(300), d = size(400);
     {
         Sim sim;
