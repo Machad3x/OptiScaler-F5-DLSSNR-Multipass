@@ -148,6 +148,29 @@ int main()
         check(!sim.guard.standing && sim.ran == 2000, "slow back-and-forth: never stood down");
     }
     {
+        // Three set-ups in turn (three pictures of different sizes per frame): stood down too.
+        Sim sim;
+        for (int i = 0; i < 300; ++i)
+            sim.Call(i % 3 == 0 ? a : i % 3 == 1 ? b : c);
+        check(sim.guard.standing && sim.rebuilt <= 5, "three set-ups in turn: stood down after a few rebuilds");
+    }
+    {
+        // Four in turn: still within the recent ones.
+        Sim sim;
+        for (int i = 0; i < 300; ++i)
+            sim.Call(i % 4 == 0 ? a : i % 4 == 1 ? b : i % 4 == 2 ? c : d);
+        check(sim.guard.standing, "four set-ups in turn: stood down");
+    }
+    {
+        // A call the caller does not count as a rebuild (no model yet) still becomes the one built.
+        RebuildGuard g;
+        g.Allow(a, false);
+        g.Allow(b, false);
+        g.Allow(c, true);
+        check(!g.Allow(b, true) || !g.standing, "the set-up taken without a rebuild is remembered");
+        check(g.built == b, "built follows calls that needed no rebuild");
+    }
+    {
         Sim sim;
         for (int i = 0; i < 500; ++i)
             sim.Call(a);

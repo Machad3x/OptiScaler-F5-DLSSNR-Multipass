@@ -23,8 +23,8 @@
 // it without loss and the shaders read the game's texture through its own view. Only after the first flip, so a game
 // that stays on R11G11B10F keeps the surfaces (and memory) it always had.
 //
-// Once seen, the flip holds for the session: a game that flips only during a splash keeps RGBA16F surfaces (twice the
-// memory of R11G11B10F) for the rest of it, with no change to the picture.
+// Once seen, the flip holds until NR shuts down: a game that flips only during a splash keeps RGBA16F surfaces (twice
+// the memory of R11G11B10F) after it, with no change to the picture.
 //
 // A game that alternates something else the model is built for (a format pair not covered here, two sizes, the
 // placement) still makes the model rebuild every call. RebuildGuard stands NR down while that goes on.
@@ -84,22 +84,26 @@ struct Setup
     constexpr bool operator==(const Setup&) const = default;
 };
 
-// Counts the game's calls that return the model to the set-up it was built for before the current one (A, B, A): the
-// signature of a game alternating two set-ups, where every call builds the model again (a long stall each). kLimit of
+// Counts the game's calls that return the model to a set-up it was built for recently (A, B, A or A, B, C, A): the
+// signature of a game cycling a few set-ups, where every call builds the model again (a long stall each). kLimit of
 // them within kWindow calls and NR stands down (the picture passes untouched) until the game asks for one set-up
 // kSettle calls in a row, then builds it once. Steps that do not go back (a dynamic resolution moving on, a slider
 // being dragged, a setting changed) are never counted. After a stand-down the next return trips it at once, for a
-// while (kWary calls), so a game that settles and then alternates again does not stall another kLimit times first.
+// while (kWary calls), so a game that settles and then alternates again does not stall another kLimit times first. A
+// setting changed and changed back within that time costs one stand-down (kSettle calls), which is accepted.
 struct RebuildGuard
 {
     static constexpr unsigned kLimit = 3;
     static constexpr unsigned long long kWindow = 16;
     static constexpr unsigned kSettle = 30;
     static constexpr unsigned long long kWary = 600;
+    static constexpr unsigned kRecent = 4; // set-ups built before the current one that count as a return
 
     unsigned long long calls = 0;
-    Setup built {}, before {};
-    bool haveBuilt = false, haveBefore = false;
+    Setup built {};
+    bool haveBuilt = false;
+    Setup recent[kRecent] = {}; // newest first
+    unsigned recentCount = 0;
     unsigned long long returns[kLimit] = {}; // call numbers of the latest returns, oldest first
     unsigned count = 0;
     bool standing = false;
@@ -130,17 +134,15 @@ struct RebuildGuard
             return true;
         }
 
+        // The model matches this call (or is made for it now): that is the one built
         if (!wouldRebuild)
         {
-            if (!haveBuilt)
-            {
-                built = setup;
-                haveBuilt = true;
-            }
+            built = setup;
+            haveBuilt = true;
             return true;
         }
 
-        if (!(haveBefore && setup == before))
+        if (!Recent(setup))
         {
             Built(setup);
             return true;
@@ -169,12 +171,27 @@ struct RebuildGuard
     }
 
   private:
+    bool Recent(const Setup& setup) const
+    {
+        for (unsigned i = 0; i < recentCount; ++i)
+            if (recent[i] == setup)
+                return true;
+        return false;
+    }
+
     void Built(const Setup& setup)
     {
         if (haveBuilt && !(setup == built))
         {
-            before = built;
-            haveBefore = true;
+            // The one built so far moves to the front of the recent ones, once
+            unsigned i = 0;
+            while (i < recentCount && !(recent[i] == built))
+                ++i;
+            if (i == recentCount && recentCount < kRecent)
+                ++recentCount;
+            for (unsigned j = i < recentCount ? i : recentCount - 1; j > 0; --j)
+                recent[j] = recent[j - 1];
+            recent[0] = built;
         }
         built = setup;
         haveBuilt = true;

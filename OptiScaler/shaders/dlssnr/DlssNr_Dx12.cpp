@@ -4026,11 +4026,11 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         auto& guard = g_nr.rebuildGuard;
         const bool wasStanding = guard.standing;
         const bool run = guard.Allow(setup, wouldRebuild);
+        // Every call, so a view parked or swapped out while standing does not leave the menu saying so
+        g_rebuildStandDown.store(guard.standing, std::memory_order_relaxed);
 
         if (guard.standing != wasStanding)
         {
-            g_rebuildStandDown.store(guard.standing, std::memory_order_relaxed);
-
             if (guard.standing)
                 LOG_WARN("DLSS-NR: the game keeps switching back and forth between what the model is built for "
                          "(format {}, {}x{}, model {}x{}); NR stands down until it settles",
@@ -5041,8 +5041,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             if (!postLutWanted)
             {
                 ParkNrResource(g_nr.lutScratch);
-                ParkNrResource(g_nr.lutScratchSpare);
             }
+            // Also when making the scratch failed after its old format moved to the spare
+            if (!postLutWanted)
+                ParkNrResource(g_nr.lutScratchSpare);
             ReleaseLutTexture();
             DlssNr::ReportLutStatus(false, "", 0, false, "", "", cfg.DlssNrLutStrength.value_or_default());
         }
@@ -6668,10 +6670,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         {
             ReleasePostLut();
             if (g_nr.lutScratch != nullptr && cfg.DlssNrLutFile.value_or_default().empty())
-            {
                 ParkNrResource(g_nr.lutScratch);
+            // Also when making the scratch failed after its old format moved to the spare
+            if (cfg.DlssNrLutFile.value_or_default().empty())
                 ParkNrResource(g_nr.lutScratchSpare);
-            }
         }
         else if (composed)
         {
@@ -7644,6 +7646,7 @@ void Shutdown()
     g_nr.feature = nullptr;
     g_nr.featurePendingSubmission = false;
     g_nr.rebuildGuard = {};
+    g_nr.floatFlipSeen = false;
     g_rebuildStandDown.store(false, std::memory_order_relaxed);
 
     for (unsigned int pass = 1; pass < DlssNr::MaxPassCount; ++pass)
