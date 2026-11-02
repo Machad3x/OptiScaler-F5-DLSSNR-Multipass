@@ -6947,6 +6947,13 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
             picture.format = (int) desc.Format;
             params->Get(NVSDK_NGX_Parameter_OutWidth, &picture.outputWidth);
             params->Get(NVSDK_NGX_Parameter_OutHeight, &picture.outputHeight);
+            // Not said: the output resource's size, as the pass takes it
+            if (picture.outputWidth == 0 || picture.outputHeight == 0)
+                if (ID3D12Resource* output = GetResource(params, NVSDK_NGX_Parameter_Output, "DLSSD.Output"))
+                {
+                    picture.outputWidth = (unsigned) output->GetDesc().Width;
+                    picture.outputHeight = output->GetDesc().Height;
+                }
         }
 
         const Contexts::Role role = g_contexts.Acquire(gameFeature, mode, picture);

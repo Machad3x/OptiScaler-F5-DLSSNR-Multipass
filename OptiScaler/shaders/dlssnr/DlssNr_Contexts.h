@@ -39,6 +39,9 @@ constexpr unsigned kOwnSlots = 3; // features with a model of their own besides 
 constexpr unsigned long long kQuietCalls = 240;
 // A feature first seen at most this many calls before main's release is main's successor (made before the old one went)
 constexpr unsigned long long kSuccessorCalls = 240;
+// After main's release, a feature that is the only one calling for this many calls is main's successor (a game with one
+// feature making it again in another colour format, HDR switched on): about 30 frames
+constexpr unsigned long long kSoloCalls = 60;
 // A picture with this much more area than main's takes main
 constexpr unsigned long long kLargerNum = 5, kLargerDen = 4;
 
@@ -95,15 +98,25 @@ class Map
     // handle 0: the caller does not know the game's feature (the native path): main.
     Role Acquire(uint32_t handle, Mode mode, const Picture& picture)
     {
-        ++calls;
         Role role;
 
         if (handle == 0)
             return role;
 
-        // Share: every feature through the main state, as before; one that had a model of its own gives it back
+        ++calls;
+
+        // Share: every feature through the main state, as before; one that had a model of its own gives it back. Main
+        // is still followed, so leaving Share does not find it quiet.
         if (mode == Mode::Share)
         {
+            if (!haveMain || handle == main)
+            {
+                main = handle;
+                haveMain = true;
+                haveReleased = false;
+                mainLast = calls;
+                mainPicture = picture;
+            }
             Forget(handle, role);
             return role;
         }
@@ -120,11 +133,22 @@ class Map
             // Main's successor shows main's picture: the same allocation, or (made again at another size) its colour
             // format, being new or made just before the release. A known other picture, or one in another format,
             // waits kQuietCalls in case main's successor comes.
+            // A feature calling alone since the release is it too, whatever its format.
+            if (soloHandle == handle)
+                ++soloCalls;
+            else
+            {
+                otherCalled = otherCalled || soloHandle != 0;
+                soloHandle = handle;
+                soloCalls = 1;
+            }
+
             const Entry* known = Find(handle);
             const bool sameFormat = picture.format == releasedPicture.format;
+            const bool alone = !otherCalled && soloCalls >= kSoloCalls;
             const bool successor = !haveReleased || picture.SameAllocation(releasedPicture) ||
                                    (sameFormat && (!known || known->firstSeen + kSuccessorCalls >= releasedAt)) ||
-                                   calls - releasedAt > kQuietCalls;
+                                   alone || calls - releasedAt > kQuietCalls;
             if (successor)
                 return TakeMain(handle, picture, known != nullptr);
         }
@@ -158,6 +182,9 @@ class Map
             haveReleased = true;
             releasedPicture = mainPicture;
             releasedAt = calls;
+            soloHandle = 0;
+            soloCalls = 0;
+            otherCalled = false;
         }
 
         for (unsigned i = 0; i < kEntries; ++i)
@@ -320,6 +347,9 @@ class Map
     bool haveReleased = false;
     Picture releasedPicture {};
     unsigned long long releasedAt = 0;
+    uint32_t soloHandle = 0; // since main's release: the feature calling, how often in a row, and whether another did
+    unsigned long long soloCalls = 0;
+    bool otherCalled = false;
     Entry entries[kEntries] = {};
 };
 } // namespace DlssNr::Contexts

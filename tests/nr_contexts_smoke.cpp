@@ -149,7 +149,7 @@ int main()
         check(m.AsideCount() == 0, "and is no longer counted aside (no phantom feature in the menu)");
     }
     {
-        // Main released and the preview alone stays: after a while it takes main.
+        // Main released and only the preview goes on calling: after a while it takes main.
         Map m;
         m.Acquire(world, Mode::StandAside, worldPic);
         for (int i = 0; i < 1000; ++i)
@@ -159,7 +159,7 @@ int main()
         unsigned long long waited = 0;
         while ((r = m.Acquire(preview, Mode::StandAside, previewPic)).kind != Kind::Main && waited < 10000)
             ++waited;
-        check(r.tookMain && waited == kQuietCalls, "the preview alone takes main after kQuietCalls calls, reset");
+        check(r.tookMain && waited == kSoloCalls - 1, "the preview calling alone takes main after kSoloCalls, reset");
     }
     {
         // Neverness to Everness resized on the Character page: both features made again, the new preview first.
@@ -177,7 +177,7 @@ int main()
         check(m.Acquire(fourth, Mode::StandAside, newPreview).kind == Kind::StandAside, "the new preview stays aside");
     }
     {
-        // Main made again in another format, nothing else alive: after a while it takes main anyway.
+        // Main made again in another format, nothing else calling (HDR switched on): main after kSoloCalls calls.
         Map m;
         m.Acquire(world, Mode::StandAside, worldPic);
         m.Release(world);
@@ -186,7 +186,16 @@ int main()
         while ((r = m.Acquire(fifth, Mode::StandAside, Picture { 0xC000, 1705, 960, 10 })).kind != Kind::Main &&
                waited < 10000)
             ++waited;
-        check(waited == kQuietCalls, "another format: main after kQuietCalls calls");
+        check(waited == kSoloCalls - 1, "another format, calling alone: main after kSoloCalls calls");
+    }
+    {
+        // Leaving Share mode does not find main quiet.
+        Map m;
+        for (int i = 0; i < 1000; ++i)
+            m.Acquire(world, Mode::Share, worldPic), m.Acquire(preview, Mode::Share, previewPic);
+        check(m.Acquire(preview, Mode::StandAside, previewPic).kind == Kind::StandAside,
+              "after Share, the preview calling first does not take main");
+        check(m.Acquire(world, Mode::StandAside, worldPic).kind == Kind::Main, "the world is still main");
     }
     {
         // A larger picture takes main (a menu scene's small feature made first).
