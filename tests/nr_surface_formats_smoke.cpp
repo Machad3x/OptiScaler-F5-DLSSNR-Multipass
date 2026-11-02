@@ -62,37 +62,96 @@ int main()
         check(!SurfacesStale(a, b, a, b) && !SurfacesStale(b, a, b, a), "after the flip, 10 <-> 26 keeps the model");
     }
 
-    // RebuildGuard: three rebuilds within the window stand NR down; it runs again once one set-up held kSettle calls.
+    // RebuildGuard. Sim plays the game against a model the way DlssNr_Dx12::Dispatch does: a call whose set-up differs
+    // from the model's rebuilds it, if the guard lets it run.
     using DlssNr::RebuildGuard;
+    using DlssNr::Setup;
+    struct Sim
     {
-        RebuildGuard g;
-        int ran = 0;
-        // An alternating game: every call asks for the other set-up, so each would rebuild.
+        RebuildGuard guard;
+        Setup model {};
+        bool haveModel = false;
+        int ran = 0, rebuilt = 0;
+
+        bool Call(const Setup& s)
+        {
+            const bool wouldRebuild = haveModel && !(s == model);
+            const bool run = guard.Allow(s, wouldRebuild);
+            if (run)
+            {
+                ++ran;
+                rebuilt += wouldRebuild ? 1 : 0;
+                model = s;
+                haveModel = true;
+            }
+            return run;
+        }
+    };
+    const auto size = [](unsigned w) { return Setup { kRgba16f, kRgba16f, w, w, w, w, true, false }; };
+    const Setup a = size(100), b = size(200), c = size(300), d = size(400);
+    {
+        Sim sim;
+        // Two set-ups alternating on every call: two rebuilds, then three returns stand NR down.
         for (int i = 0; i < 200; ++i)
-            ran += g.Allow(i & 1 ? 2 : 1, true) ? 1 : 0;
-        check(ran == (int) RebuildGuard::kLimit - 1, "alternating: two rebuilds run, then NR stands down");
-        check(g.standing, "alternating: still standing");
-        // The game settles on set-up 1: the first kSettle calls still wait, then it runs (and builds once).
+            sim.Call(i & 1 ? b : a);
+        check(sim.guard.standing, "alternating: stood down");
+        check(sim.rebuilt == 3, "alternating: three rebuilds before the stand-down");
+        check(sim.ran == 4, "alternating: four calls ran");
+        check(sim.model == b, "alternating: the model stays as last built");
+        // The game settles on a new set-up: kSettle calls in a row, the last one runs and builds it once.
         int waited = 0;
-        while (!g.Allow(1, true) && waited < 100)
+        while (!sim.Call(c) && waited < 100)
             ++waited;
-        check(waited == (int) RebuildGuard::kSettle, "settled: runs after kSettle steady calls");
-        check(!g.standing, "settled: no longer standing");
-        check(g.Allow(1, false), "settled: steady frames run");
+        check(waited == (int) RebuildGuard::kSettle - 1, "settled: runs on the kSettle-th steady call");
+        check(!sim.guard.standing && sim.model == c, "settled: running, built for the new set-up");
+        check(sim.Call(c) && sim.Call(c), "settled: steady calls run");
+        // Wary after the stand-down: one return trips it at once.
+        sim.Call(d);
+        check(!sim.Call(c) && sim.guard.standing, "wary: the first return after a stand-down stands down again");
     }
     {
-        RebuildGuard g;
-        bool allRan = true;
-        // A game that changes resolution now and then (one rebuild every 100 calls) is never stood down.
-        for (int i = 0; i < 1000; ++i)
-            allRan = g.Allow(i / 100, i % 100 == 0 && i > 0) && allRan;
-        check(allRan && !g.standing, "occasional rebuilds: never stood down");
+        Sim sim;
+        for (int i = 0; i < 10; ++i)
+            sim.Call(i & 1 ? b : a);
+        // A change while standing starts the count again.
+        int calls = 0;
+        for (int i = 0; i < 20; ++i, ++calls)
+            sim.Call(c);
+        while (!sim.Call(d) && calls < 200)
+            ++calls;
+        check(calls == 20 + (int) RebuildGuard::kSettle - 1, "a new set-up while standing restarts the settle count");
     }
     {
-        RebuildGuard g;
+        // The window: a switch every k calls puts the first and third return 2k calls apart.
+        const auto standsAt = [&](int k)
+        {
+            Sim sim;
+            for (int i = 0; i < 200; ++i)
+                sim.Call((i / k) & 1 ? b : a);
+            return sim.guard.standing;
+        };
+        check(standsAt(7), "returns 14 calls apart: stood down");
+        check(!standsAt(8), "returns 16 calls apart: not stood down");
+    }
+    {
+        Sim sim;
+        // Dynamic resolution moving on (a new size every 3 calls, never going back) is never stood down.
+        for (int i = 0; i < 3000; ++i)
+            sim.Call(size(100 + (unsigned) i / 3));
+        check(!sim.guard.standing && sim.ran == 3000, "dynamic resolution stepping on: never stood down");
+    }
+    {
+        Sim sim;
+        // Dynamic resolution swinging back and forth slowly (every 20 calls) is not stood down either.
+        for (int i = 0; i < 2000; ++i)
+            sim.Call((i / 20) & 1 ? b : a);
+        check(!sim.guard.standing && sim.ran == 2000, "slow back-and-forth: never stood down");
+    }
+    {
+        Sim sim;
         for (int i = 0; i < 500; ++i)
-            g.Allow(7, false);
-        check(!g.standing, "steady game: never stood down");
+            sim.Call(a);
+        check(!sim.guard.standing && sim.ran == 500 && sim.rebuilt == 0, "steady game: never stood down");
     }
 
     // The reviewer's probe: the ordinary size moved 960x544 -> 976x544 while the packed one did not.

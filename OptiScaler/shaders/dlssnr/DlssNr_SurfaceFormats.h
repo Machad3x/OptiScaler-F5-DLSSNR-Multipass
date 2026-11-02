@@ -23,8 +23,11 @@
 // it without loss and the shaders read the game's texture through its own view. Only after the first flip, so a game
 // that stays on R11G11B10F keeps the surfaces (and memory) it always had.
 //
-// A game that flips something else the model is built for (a format pair not covered here, two sizes, the placement)
-// still makes the model rebuild every frame. RebuildGuard stands NR down while that goes on.
+// Once seen, the flip holds for the session: a game that flips only during a splash keeps RGBA16F surfaces (twice the
+// memory of R11G11B10F) for the rest of it, with no change to the picture.
+//
+// A game that alternates something else the model is built for (a format pair not covered here, two sizes, the
+// placement) still makes the model rebuild every call. RebuildGuard stands NR down while that goes on.
 
 namespace DlssNr
 {
@@ -70,61 +73,111 @@ constexpr bool SurfacesStale(int haveModel, int wantModel, int haveColour, int w
     return (haveModel != 0 && haveModel != wantModel) || (haveColour != 0 && haveColour != wantColour);
 }
 
-// Counts the model rebuilds the game's frames force (format, size, placement) on one view. kLimit of them within
-// kWindow calls means the game alternates set-ups, and every call would build the model again: NR stands down (the
-// picture passes untouched) until the game asks for one set-up kSettle calls in a row, then builds it once.
+// What the model is built for on one call: the formats, the sizes and the placement (before or after SR, RR). Two calls
+// with the same set-up need no rebuild between them.
+struct Setup
+{
+    int modelFormat = 0, colourFormat = 0;
+    unsigned width = 0, height = 0, modelWidth = 0, modelHeight = 0;
+    bool beforeUpscale = false, rayReconstruction = false;
+
+    constexpr bool operator==(const Setup&) const = default;
+};
+
+// Counts the game's calls that return the model to the set-up it was built for before the current one (A, B, A): the
+// signature of a game alternating two set-ups, where every call builds the model again (a long stall each). kLimit of
+// them within kWindow calls and NR stands down (the picture passes untouched) until the game asks for one set-up
+// kSettle calls in a row, then builds it once. Steps that do not go back (a dynamic resolution moving on, a slider
+// being dragged, a setting changed) are never counted. After a stand-down the next return trips it at once, for a
+// while (kWary calls), so a game that settles and then alternates again does not stall another kLimit times first.
 struct RebuildGuard
 {
     static constexpr unsigned kLimit = 3;
-    static constexpr unsigned long long kWindow = 120;
+    static constexpr unsigned long long kWindow = 16;
     static constexpr unsigned kSettle = 30;
+    static constexpr unsigned long long kWary = 600;
 
     unsigned long long calls = 0;
-    unsigned long long rebuilds[kLimit] = {}; // call numbers of the latest rebuilds, oldest first
+    Setup built {}, before {};
+    bool haveBuilt = false, haveBefore = false;
+    unsigned long long returns[kLimit] = {}; // call numbers of the latest returns, oldest first
     unsigned count = 0;
     bool standing = false;
-    unsigned long long key = 0;
+    Setup waiting {};
     unsigned settled = 0;
+    unsigned long long resumedAt = 0;
+    bool resumed = false;
 
-    // key identifies the set-up this call asks for; wouldRebuild: it differs from the one the model was built for.
-    // True when NR runs this call.
-    bool Allow(unsigned long long setup, bool wouldRebuild)
+    // setup: what this call asks for; wouldRebuild: it differs from what the model was built for (the caller knows
+    // whether a model exists at all). True when NR runs this call.
+    bool Allow(const Setup& setup, bool wouldRebuild)
     {
         ++calls;
 
         if (standing)
         {
-            settled = setup == key ? settled + 1 : 0;
-            key = setup;
+            settled = setup == waiting ? settled + 1 : 1;
+            waiting = setup;
 
             if (settled < kSettle)
                 return false;
 
             standing = false;
             count = 0;
+            resumed = true;
+            resumedAt = calls;
+            Built(setup);
             return true;
         }
 
         if (!wouldRebuild)
+        {
+            if (!haveBuilt)
+            {
+                built = setup;
+                haveBuilt = true;
+            }
             return true;
+        }
+
+        if (!(haveBefore && setup == before))
+        {
+            Built(setup);
+            return true;
+        }
 
         if (count == kLimit)
         {
             for (unsigned i = 1; i < kLimit; ++i)
-                rebuilds[i - 1] = rebuilds[i];
+                returns[i - 1] = returns[i];
             --count;
         }
-        rebuilds[count++] = calls;
+        returns[count++] = calls;
 
-        if (count == kLimit && calls - rebuilds[0] < kWindow)
+        const bool wary = resumed && calls - resumedAt < kWary;
+        if ((count == kLimit && calls - returns[0] < kWindow) || wary)
         {
+            // Not built: the model stays as it is until the game settles
             standing = true;
-            key = setup;
-            settled = 0;
+            waiting = setup;
+            settled = 1;
             return false;
         }
 
+        Built(setup);
         return true;
+    }
+
+  private:
+    void Built(const Setup& setup)
+    {
+        if (haveBuilt && !(setup == built))
+        {
+            before = built;
+            haveBefore = true;
+        }
+        built = setup;
+        haveBuilt = true;
     }
 };
 

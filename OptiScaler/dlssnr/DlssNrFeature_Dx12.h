@@ -298,6 +298,10 @@ Spatial::Published EdgeCompressionStatus();
 // NR works on (shaders/dlssnr/DlssNr_Views.h). Direct3D 12 only.
 Views::Snapshot MultiViewStatus();
 
+// NR stands down because the game keeps switching back and forth between what the model is built for (two formats or
+// sizes): every call would rebuild it (shaders/dlssnr/DlssNr_SurfaceFormats.h, RebuildGuard). Direct3D 12 only.
+bool StoodDownForRebuilds();
+
 // The size NR hands the model, in pixels, or 0x0 before the first frame. The network pools that 2x2 before
 // its body runs, so the body sees half of it (rounded up); the menu and log show both so tuning is not
 // done against the wrong number.

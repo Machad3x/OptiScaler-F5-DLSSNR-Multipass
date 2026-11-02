@@ -1343,6 +1343,9 @@ static void RenderStatusLine(const NrCommon& nr)
     else if (views.active && ms.has_value())
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Running on %u of %zu views - %.2f ms elapsed (last view)",
                            DlssNr::Views::CountRuns(views.mask), views.count, ms.value());
+    else if (!nr.vulkan && DlssNr::StoodDownForRebuilds())
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                           "Stood down: the game keeps switching formats or sizes. Runs again once it settles.");
     else if (!DlssNr::IsRunning() && !nr.vulkan)
         ImGui::TextDisabled("NR is not running. See Status & Presets.");
     else if (ms.has_value())

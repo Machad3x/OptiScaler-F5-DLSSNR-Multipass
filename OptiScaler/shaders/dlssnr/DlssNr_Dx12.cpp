@@ -322,6 +322,13 @@ struct NrState
     ID3D12Resource* lutScratch = nullptr;
     bool lutScratchFailed = false;
 
+    // hdrCopy (without a UAV), activeColor and lutScratch keep the game's exact format. A game that alternates two
+    // formats (Neverness to Everness: RGBA16F and R11G11B10F) would park one and make another of each on every call,
+    // each parked one held for 32 epochs; the one of the other format waits here instead (KeepExactFormat).
+    ID3D12Resource* hdrCopySpare = nullptr;
+    ID3D12Resource* activeColorSpare = nullptr;
+    ID3D12Resource* lutScratchSpare = nullptr;
+
     // The frame shrunk for the model, when it is working below full resolution.
     ID3D12Resource* colorSmall = nullptr;
 
@@ -567,6 +574,9 @@ struct NrState
 };
 
 NrState g_nr;
+
+// Some view's RebuildGuard stands NR down, for the menu (read off the render thread)
+std::atomic<bool> g_rebuildStandDown { false };
 
 // DlssNr_SurfaceFormats.h takes no Windows headers and spells these formats as numbers
 static_assert(DXGI_FORMAT_R8G8B8A8_TYPELESS == 27 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&
@@ -1073,6 +1083,34 @@ void ParkNrResource(ID3D12Resource*& res)
     ParkNr(r);
 }
 
+// A surface that keeps the game's exact format (copied to or from its texture) and no longer matches it: the one in
+// `spare` is taken if it has that format and the same size, and the old one waits in `spare` for the game to switch
+// back. Otherwise `current` is left empty for the caller to make.
+void KeepExactFormat(ID3D12Resource*& current, ID3D12Resource*& spare, DXGI_FORMAT format)
+{
+    if (current == nullptr)
+        return;
+
+    const D3D12_RESOURCE_DESC have = current->GetDesc();
+    if (have.Format == format)
+        return;
+
+    ID3D12Resource* old = current;
+    current = nullptr;
+
+    if (spare != nullptr)
+    {
+        const D3D12_RESOURCE_DESC other = spare->GetDesc();
+
+        if (other.Format == format && other.Width == have.Width && other.Height == have.Height)
+            current = spare;
+        else
+            ParkNrResource(spare);
+    }
+
+    spare = old;
+}
+
 void ReleaseNrFeature(const NrRetired& r)
 {
     if (r.feature != nullptr)
@@ -1160,9 +1198,9 @@ void ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat, DXGI_FORMAT colourF
         g_nr.passPendingSubmission[i] = false;
     }
 
-    for (ID3D12Resource** r :
-         { &g_nr.output, &g_nr.passScratch, &g_nr.passClampScratch, &g_nr.passClampScratch2, &g_nr.colorCopy,
-           &g_nr.hdrCopy, &g_nr.colorSmall, &g_nr.outputNative, &g_nr.activeColor, &g_nr.lutScratch })
+    for (ID3D12Resource** r : { &g_nr.output, &g_nr.passScratch, &g_nr.passClampScratch, &g_nr.passClampScratch2,
+                                &g_nr.colorCopy, &g_nr.hdrCopy, &g_nr.colorSmall, &g_nr.outputNative, &g_nr.activeColor,
+                                &g_nr.lutScratch, &g_nr.hdrCopySpare, &g_nr.activeColorSpare, &g_nr.lutScratchSpare })
         ParkNrResource(*r);
 
     g_nr.passScratchFailed = false;
@@ -2417,6 +2455,9 @@ void SwapView(ViewState& v)
     NR_VIEW_SWAP(activeColor);
     NR_VIEW_SWAP(lutScratch);
     NR_VIEW_SWAP(lutScratchFailed);
+    NR_VIEW_SWAP(hdrCopySpare);
+    NR_VIEW_SWAP(activeColorSpare);
+    NR_VIEW_SWAP(lutScratchSpare);
     NR_VIEW_SWAP(colorSmall);
     NR_VIEW_SWAP(superUp);
     NR_VIEW_SWAP(outputNative);
@@ -2519,7 +2560,8 @@ void ParkLoadedView()
     for (ID3D12Resource** r :
          { &g_nr.output, &g_nr.passScratch, &g_nr.passClampScratch, &g_nr.passClampScratch2, &g_nr.colorCopy,
            &g_nr.hdrCopy, &g_nr.colorSmall, &g_nr.outputNative, &g_nr.activeColor, &g_nr.lutScratch, &g_nr.styled,
-           &g_nr.styledB, &g_nr.heldColor, &g_nr.depthClone, &g_nr.motionClone, &g_nr.depthConstant })
+           &g_nr.styledB, &g_nr.heldColor, &g_nr.depthClone, &g_nr.motionClone, &g_nr.depthConstant, &g_nr.hdrCopySpare,
+           &g_nr.activeColorSpare, &g_nr.lutScratchSpare })
         ParkNrResource(*r);
 
     // The scalers are deleted on the spot wherever this module drops them (a filter change); the same here.
@@ -3961,25 +4003,25 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     const bool replaceCorrection =
         spatial && !superiorPacked && DlssNrProxyCurve::IsReplace(cfg.DlssNrReversibleMode.value_or_default());
 
-    // A game whose frames ask for a different model on every call (two formats or sizes alternating) would have it
-    // rebuilt each time, a long stall per frame: NR stands down until the game settles on one
-    // (DlssNr_SurfaceFormats.h).
+    // What would rebuild the model below: a stale surface format (ReleaseSurfacesIfFormatChanged), a new size or a new
+    // placement. Tuning is left out, it is the user's doing.
+    const bool resolutionChanged = g_nr.width != width || g_nr.height != height ||
+                                   g_nr.workWidth != modelWidth || g_nr.workHeight != modelHeight;
+    const bool placementDiffers =
+        g_nr.beforeUpscale != frame.BeforeUpscale || g_nr.rayReconstruction != frame.RayReconstruction;
+
+    // A game alternating two set-ups (two formats or sizes) would have the model rebuilt on every call, a long stall
+    // each: NR stands down until the game settles on one (DlssNr_SurfaceFormats.h). Before anything is parked or made.
+    // Compress screen edges has already been set up for this call; it keeps that state for the next call that runs.
     {
         const DXGI_FORMAT haveModel = g_nr.output != nullptr ? g_nr.output->GetDesc().Format : DXGI_FORMAT_UNKNOWN;
         const DXGI_FORMAT haveColour =
             g_nr.colorCopy != nullptr ? g_nr.colorCopy->GetDesc().Format : DXGI_FORMAT_UNKNOWN;
         const bool wouldRebuild =
             DlssNr::SurfacesStale((int) haveModel, (int) modelFormat, (int) haveColour, (int) colourFormat) ||
-            (g_nr.feature != nullptr && (g_nr.width != width || g_nr.height != height || g_nr.workWidth != modelWidth ||
-                                         g_nr.workHeight != modelHeight || g_nr.beforeUpscale != frame.BeforeUpscale ||
-                                         g_nr.rayReconstruction != frame.RayReconstruction));
-
-        unsigned long long setup = 1469598103934665603ull;
-        for (const unsigned long long part :
-             { (unsigned long long) modelFormat, (unsigned long long) colourFormat, (unsigned long long) width,
-               (unsigned long long) height, (unsigned long long) modelWidth, (unsigned long long) modelHeight,
-               (unsigned long long) frame.BeforeUpscale, (unsigned long long) frame.RayReconstruction })
-            setup = (setup ^ part) * 1099511628211ull;
+            (g_nr.feature != nullptr && (resolutionChanged || placementDiffers));
+        const DlssNr::Setup setup { (int) modelFormat,   (int) colourFormat,     width, height, modelWidth, modelHeight,
+                                    frame.BeforeUpscale, frame.RayReconstruction };
 
         auto& guard = g_nr.rebuildGuard;
         const bool wasStanding = guard.standing;
@@ -3987,10 +4029,12 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
         if (guard.standing != wasStanding)
         {
+            g_rebuildStandDown.store(guard.standing, std::memory_order_relaxed);
+
             if (guard.standing)
-                LOG_WARN("DLSS-NR: the game asked for a different model {} times within {} calls (format, size or "
-                         "placement); NR stands down until it settles",
-                         DlssNr::RebuildGuard::kLimit, DlssNr::RebuildGuard::kWindow);
+                LOG_WARN("DLSS-NR: the game keeps switching back and forth between what the model is built for "
+                         "(format {}, {}x{}, model {}x{}); NR stands down until it settles",
+                         (int) colourFormat, width, height, modelWidth, modelHeight);
             else
                 LOG_INFO("DLSS-NR: the game settled, NR runs again");
         }
@@ -3999,7 +4043,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         {
             // The frames passed untouched break the history
             g_nr.reset = true;
-            ReportSkipOnce("the game kept changing the model it needs (format, size or placement)");
+            ReportSkipOnce("the game kept switching back and forth between what the model is built for");
             device->Release();
             return;
         }
@@ -4007,11 +4051,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     ReleaseSurfacesIfFormatChanged(modelFormat, colourFormat);
 
-    const bool resolutionChanged = g_nr.width != width || g_nr.height != height ||
-                                   g_nr.workWidth != modelWidth || g_nr.workHeight != modelHeight;
-    const bool placementChanged = g_nr.feature != nullptr &&
-        (g_nr.beforeUpscale != frame.BeforeUpscale ||
-         g_nr.rayReconstruction != frame.RayReconstruction);
+    const bool placementChanged = g_nr.feature != nullptr && placementDiffers;
 
     // The model reads its tuning once, while the feature is built, so a changed setting only takes
     // effect when the feature is rebuilt. TuningMatchesFeature was written to notice that and then
@@ -4051,6 +4091,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ParkNrResource(g_nr.outputNative);
             ParkNrResource(g_nr.activeColor);
             ParkNrResource(g_nr.lutScratch);
+            ParkNrResource(g_nr.hdrCopySpare);
+            ParkNrResource(g_nr.activeColorSpare);
+            ParkNrResource(g_nr.lutScratchSpare);
             ParkNrResource(g_nr.styled);
             g_nr.styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
             ParkNrResource(g_nr.styledB);
@@ -4072,8 +4115,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                                        ? DXGI_FORMAT_R16G16B16A16_FLOAT
                                        : colourFormat;
 
-    if (g_nr.hdrCopy != nullptr && g_nr.hdrCopy->GetDesc().Format != keepFormat)
-        ParkNrResource(g_nr.hdrCopy);
+    KeepExactFormat(g_nr.hdrCopy, g_nr.hdrCopySpare, keepFormat);
 
     if (g_nr.output == nullptr)
     {
@@ -4087,8 +4129,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.hdrCopy = CreateScratch(device, keepFormat, width, height);
 
     // The crop is a CopyTextureRegion from the game's colour: exact format
-    if (g_nr.activeColor != nullptr && g_nr.activeColor->GetDesc().Format != desc.Format)
-        ParkNrResource(g_nr.activeColor);
+    KeepExactFormat(g_nr.activeColor, g_nr.activeColorSpare, desc.Format);
 
     if (cropColor && g_nr.activeColor == nullptr)
         g_nr.activeColor = CreateScratch(device, desc.Format, width, height);
@@ -4931,7 +4972,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             // Copied back onto `target` (CopyTextureRegion): exact format
             if (g_nr.lutScratch != nullptr && g_nr.lutScratch->GetDesc().Format != desc.Format)
             {
-                ParkNrResource(g_nr.lutScratch);
+                KeepExactFormat(g_nr.lutScratch, g_nr.lutScratchSpare, desc.Format);
                 g_nr.lutScratchFailed = false;
             }
 
@@ -4998,7 +5039,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             // already released/parked.
             // The post-NR stack shares the scratch, so it stays while that stack wants it.
             if (!postLutWanted)
+            {
                 ParkNrResource(g_nr.lutScratch);
+                ParkNrResource(g_nr.lutScratchSpare);
+            }
             ReleaseLutTexture();
             DlssNr::ReportLutStatus(false, "", 0, false, "", "", cfg.DlssNrLutStrength.value_or_default());
         }
@@ -6624,13 +6668,16 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         {
             ReleasePostLut();
             if (g_nr.lutScratch != nullptr && cfg.DlssNrLutFile.value_or_default().empty())
+            {
                 ParkNrResource(g_nr.lutScratch);
+                ParkNrResource(g_nr.lutScratchSpare);
+            }
         }
         else if (composed)
         {
             if (g_nr.lutScratch != nullptr && g_nr.lutScratch->GetDesc().Format != desc.Format)
             {
-                ParkNrResource(g_nr.lutScratch);
+                KeepExactFormat(g_nr.lutScratch, g_nr.lutScratchSpare, desc.Format);
                 g_nr.lutScratchFailed = false;
             }
 
@@ -7540,6 +7587,8 @@ int CurrentModelResolutionPercent() { return (int) lroundf(g_nr.appliedWorkScale
 
 Views::Snapshot MultiViewStatus() { return g_views.Status(); }
 
+bool StoodDownForRebuilds() { return g_rebuildStandDown.load(std::memory_order_relaxed); }
+
 Spatial::Published EdgeCompressionStatus()
 {
     std::lock_guard<std::mutex> lock(EdgeCompression::publishedLock);
@@ -7594,6 +7643,8 @@ void Shutdown()
 
     g_nr.feature = nullptr;
     g_nr.featurePendingSubmission = false;
+    g_nr.rebuildGuard = {};
+    g_rebuildStandDown.store(false, std::memory_order_relaxed);
 
     for (unsigned int pass = 1; pass < DlssNr::MaxPassCount; ++pass)
     {
@@ -7662,6 +7713,15 @@ void Shutdown()
         g_nr.lutScratch = nullptr;
     }
     g_nr.lutScratchFailed = false;
+
+    for (ID3D12Resource** spare : { &g_nr.hdrCopySpare, &g_nr.activeColorSpare, &g_nr.lutScratchSpare })
+    {
+        if (*spare != nullptr)
+        {
+            (*spare)->Release();
+            *spare = nullptr;
+        }
+    }
 
     if (g_nr.colorSmall != nullptr)
     {
