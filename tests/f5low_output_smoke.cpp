@@ -41,7 +41,9 @@ int main()
     CHECK(F5Low::ParseGenerator("XeFG_Tensor", valid) == F5Low::Generator::XefgTensor && valid);
     CHECK(F5Low::ParseGenerator("dlssg", valid) == F5Low::Generator::Dlssg && valid);
     CHECK(F5Low::ParseGenerator("DLSSG", valid) == F5Low::Generator::Dlssg && valid);
-    CHECK(!F5Low::ParseGenerator("libxess", valid).has_value() && !valid); // planned, not there yet
+    CHECK(F5Low::ParseGenerator("intel", valid) == F5Low::Generator::Intel && valid);
+    CHECK(F5Low::ParseGenerator("Intel", valid) == F5Low::Generator::Intel && valid);
+    CHECK(!F5Low::ParseGenerator("libxess", valid).has_value() && !valid); // not a name
     CHECK(!F5Low::ParseGenerator("junk", valid).has_value() && !valid);
     CHECK(strcmp(F5Low::GeneratorText(std::nullopt), "auto") == 0);
     CHECK(strcmp(F5Low::GeneratorText(F5Low::Generator::XefgTensor), "xefg_tensor") == 0);
@@ -60,6 +62,18 @@ int main()
     }
     CHECK(strcmp(F5Low::GeneratorLabel(F5Low::Generator::Dlssg), "DLSS-G (NVIDIA)") == 0);
     CHECK(wcscmp(F5Low::GeneratorEnvValue(F5Low::Generator::Dlssg), L"dlssg") == 0);
+    CHECK(strcmp(F5Low::GeneratorText(F5Low::Generator::Intel), "intel") == 0);
+    {
+        bool ok = false;
+        CHECK(F5Low::ParseGenerator(F5Low::GeneratorText(F5Low::Generator::Intel), ok) == F5Low::Generator::Intel &&
+              ok);
+    }
+    CHECK(strcmp(F5Low::GeneratorLabel(F5Low::Generator::Intel), "XeFG (Intel library)") == 0);
+    CHECK(wcscmp(F5Low::GeneratorEnvValue(F5Low::Generator::Intel), L"intel") == 0);
+    CHECK(strcmp(F5Low::IntelFilesMissing(true, true), "") == 0);
+    CHECK(strstr(F5Low::IntelFilesMissing(false, true), "libxess_fg.dll") != nullptr);
+    CHECK(strstr(F5Low::IntelFilesMissing(true, false), "libxell.dll") != nullptr);
+    CHECK(strstr(F5Low::IntelFilesMissing(false, false), "libxell.dll") != nullptr);
     CHECK(strcmp(F5Low::GeneratorLabel(F5Low::Generator::XefgTensor), "XeFG Tensor") == 0);
     CHECK(wcscmp(F5Low::GeneratorEnvValue(F5Low::Generator::XefgTensor), L"own") == 0);
 
@@ -106,6 +120,13 @@ int main()
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Own, F5Low::Generator::Dlssg), "DLSS-G") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unavailable, F5Low::Generator::Dlssg), "DLSS-G") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Undecided, F5Low::Generator::Dlssg), "starting") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Own, F5Low::Generator::Intel), "XeFG (Intel library) running") !=
+          nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::HandedOver, F5Low::Generator::Intel),
+                 "XeFG (Intel library) running") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unavailable, F5Low::Generator::Intel), "unavailable") !=
+          nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Undecided, F5Low::Generator::Intel), "starting") != nullptr);
 
     if (fails == 0)
         printf("f5low_output_smoke: PASS\n");

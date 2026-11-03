@@ -63,6 +63,14 @@ void ApplyGenerator();
 // it can.
 std::string DlssgFilesMissing();
 
+// Why the Intel generator cannot run (libxess_fg.dll or libxell.dll missing in OptiScaler's folder); empty when both
+// are there. Does not look at the GPU vendor.
+std::string IntelFilesMissing();
+
+// Whether slDLSSGSetOptions forces the game's own DLSS-G off (F5Low + DLSS-G generator, FG Input not DLSSG,
+// KeepGameDlssg off), from the settings latched at startup.
+bool ForcesGameDlssgOff();
+
 // What a load of this module (a bare name or a full path) gets while F5Low runs DLSS-G: nullptr to load it as asked,
 // kBlockedLoad when it is the game's own (or the driver's) nvngx_dlssg that must stay out, or our private copy's handle
 // (a reference taken) when that one is already loaded: the game then shares it, as a bare-name load of nvngx_dlssg.dll

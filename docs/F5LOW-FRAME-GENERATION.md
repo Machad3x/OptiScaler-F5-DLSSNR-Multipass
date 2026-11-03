@@ -22,10 +22,17 @@
 
 1. Open the OptiScaler menu, Frame Generation: pick an **FG Input** and set **FG Output** to **F5Low**.
 2. **Frame Generator** appears under it: **XeFG Tensor** (our XeFG frame generation on the tensor cores) or
-   **DLSS-G (NVIDIA)**. libxess will follow.
+   **DLSS-G (NVIDIA)** or **XeFG (Intel library)**.
 3. Save Settings and restart the game.
 
-In the ini: `[FrameGen] FGOutput=f5low`, `[F5Low] FrameGenerator=auto` (= xefg_tensor) or `dlssg`.
+In the ini: `[FrameGen] FGOutput=f5low`, `[F5Low] FrameGenerator=auto` (= xefg_tensor), `dlssg` or `intel`.
+
+### XeFG (Intel library) as the Frame Generator
+
+`intel` runs Intel's own XeFG (`libxess_fg.dll`) with `libxell.dll`, both from OptiScaler's folder; f5low.dll paces the
+frames and unlocks up to 6x in memory (nothing on disk is changed). Intel's library itself runs on any GPU vendor; F5Low
+as a whole is still offered on NVIDIA GPUs only. The menu shows a red line when `libxess_fg.dll` or `libxell.dll` is
+missing. The DLSS-G redirect and `KeepGameDlssg` below only apply to the DLSS-G generator, not to this one.
 
 ### DLSS-G as the Frame Generator
 
@@ -41,6 +48,13 @@ instead, and a plain `nvngx_dlssg.dll` load by the game's Streamline gets it fro
 DLSS-G, which is intended. The block only applies when F5Low can run here (NVIDIA GPU, `f5low.dll`, Streamline and
 `nvngx_dlssg.dll` in OptiScaler's `streamline` folder). `[F5Low] KeepGameDlssg=true` turns the block off. It is also not done when FG Input is DLSSG, because the game's DLSS-G is
 the input then; the log warns that two copies may fault.
+
+With the DLSS-G generator and FG Input other than DLSSG, OptiScaler also forces the game's own DLSS-G off in
+`slDLSSGSetOptions` (logged once): on RTX 20-40 f5low patches the shared `nvngx_dlssg` only when its own context
+starts, so the game must not turn DLSS-G on. FG Input DLSSG and `KeepGameDlssg=true` leave the game's options alone.
+This is only done when F5Low can run here (NVIDIA GPU, `f5low.dll`, Streamline and `nvngx_dlssg.dll` found), and the
+game's `slAllocateResources` for DLSS-G is skipped too. Streamline 1 games and the Steam overlay path are not covered by
+the force-off, and the game's own FG counter may show 1x while F5Low generates.
 
 ## Options
 
