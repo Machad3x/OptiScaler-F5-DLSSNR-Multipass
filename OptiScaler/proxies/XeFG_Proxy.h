@@ -238,7 +238,7 @@ class XeFGProxy
                 // Not Intel's: a library that runs NVIDIA's DLSS-G behind XeFG's API (xefg_cuda Generator=dlssg)
                 _driverMultipliesReflexCap = (PFN_DriverMultipliesReflexCap) KernelBaseProxy::GetProcAddress_()(
                     _dll, "xefgCudaDriverMultipliesReflexCap");
-                // Asked once now too: the library warns in its log when an OptiScaler never asks (one that divides the cap)
+                // Asked once now too: the library logs a warning when an OptiScaler never asks
                 if (_driverMultipliesReflexCap != nullptr)
                     _driverMultipliesReflexCap();
                 _xefgSwapChainSetSceneChangeThreshold =
@@ -337,9 +337,9 @@ class XeFGProxy
     // Support"). A replacement such as xefg_cuda that does not says so (xefgCudaXellCountsRenderedOnly, while its own
     // context runs): XeLL then caps the game's own frames.
     static bool XellCountsShownFrames() { return _xellCountsRenderedOnly == nullptr || _xellCountsRenderedOnly() == 0; }
-    // A library that runs DLSS-G behind XeFG's API (xefgCudaDriverMultipliesReflexCap, while it does): the NVIDIA driver
-    // multiplies a Reflex interval by DLSS-G's multiplier itself (NBA 2K27: 33333 us at 3x read back as 99999 us), so a
-    // shown-frame cap goes to real Reflex undivided, as for a game's own DLSS-G (CapForGame)
+    // A library that runs DLSS-G behind XeFG's API (xefgCudaDriverMultipliesReflexCap, while it does): the NVIDIA
+    // driver multiplies a Reflex interval by DLSS-G's multiplier itself (NBA 2K27: 33333 us at 3x read back as 99999
+    // us), so a shown-frame cap goes to real Reflex undivided, as for a game's own DLSS-G (CapForGame)
     static bool DriverMultipliesReflexCap()
     {
         return _driverMultipliesReflexCap != nullptr && _driverMultipliesReflexCap() != 0;

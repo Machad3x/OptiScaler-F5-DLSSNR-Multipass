@@ -432,7 +432,7 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
     if (in.fgActive && in.fsrFgOutput)
         fps /= 2;
     else if (split && in.side == XefgLatency::Reflex && in.realNvapi && in.driverMultipliesCap)
-        ; // DLSS-G behind XeFG's API: the driver multiplies the interval by its own multiplier, as for the game's DLSS-G
+        ; // DLSS-G behind XeFG's API: the driver multiplies the interval itself, as for a game's DLSS-G
     else if (split)
         fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
     else if (in.xefgOutput && in.xellHoldsCap && !in.xellCountsShown) // XeFG's XeLL counts the game's own frames (XL23)
