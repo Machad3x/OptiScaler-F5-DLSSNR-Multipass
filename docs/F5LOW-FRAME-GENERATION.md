@@ -52,6 +52,9 @@ the input then; the log warns that two copies may fault.
 With the DLSS-G generator and FG Input other than DLSSG, OptiScaler also forces the game's own DLSS-G off in
 `slDLSSGSetOptions` (logged once): on RTX 20-40 f5low patches the shared `nvngx_dlssg` only when its own context
 starts, so the game must not turn DLSS-G on. FG Input DLSSG and `KeepGameDlssg=true` leave the game's options alone.
+This is only done when F5Low can run here (NVIDIA GPU, `f5low.dll`, Streamline and `nvngx_dlssg.dll` found), and the
+game's `slAllocateResources` for DLSS-G is skipped too. Streamline 1 games and the Steam overlay path are not covered by
+the force-off, and the game's own FG counter may show 1x while F5Low generates.
 
 ## Options
 

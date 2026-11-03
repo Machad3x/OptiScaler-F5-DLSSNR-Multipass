@@ -120,6 +120,13 @@ int main()
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Own, F5Low::Generator::Dlssg), "DLSS-G") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unavailable, F5Low::Generator::Dlssg), "DLSS-G") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Undecided, F5Low::Generator::Dlssg), "starting") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Own, F5Low::Generator::Intel), "XeFG (Intel library) running") !=
+          nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::HandedOver, F5Low::Generator::Intel),
+                 "XeFG (Intel library) running") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unavailable, F5Low::Generator::Intel), "unavailable") !=
+          nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Undecided, F5Low::Generator::Intel), "starting") != nullptr);
 
     if (fails == 0)
         printf("f5low_output_smoke: PASS\n");

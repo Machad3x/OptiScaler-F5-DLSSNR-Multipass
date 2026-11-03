@@ -148,9 +148,12 @@ inline const char* IntelFilesMissing(bool libxessFound, bool libxellFound)
 // Streamline F5Low's nvngx_dlssg (redirect); on RTX 20-40 f5low patches that module only when its own context starts,
 // so the game must not turn its DLSS-G on. Not with FG Input DLSSG (it needs the game's options), nor with
 // KeepGameDlssg, and never for the other generators.
-inline bool ForceGameDlssgOff(bool f5lowOutput, Generator generator, bool fgInputDlssg, bool keepGameDlssg)
+// present: f5low.dll is in the plugins folder; canRun: F5Low can run here with DLSS-G (NVIDIA GPU, Streamline and
+// nvngx_dlssg.dll found), so the game never loses its DLSS-G when F5Low cannot take over.
+inline bool ForceGameDlssgOff(bool f5lowOutput, Generator generator, bool fgInputDlssg, bool keepGameDlssg,
+                              bool present, bool canRun)
 {
-    return f5lowOutput && generator == Generator::Dlssg && !fgInputDlssg && !keepGameDlssg;
+    return f5lowOutput && generator == Generator::Dlssg && !fgInputDlssg && !keepGameDlssg && present && canRun;
 }
 
 // The most interpolated frames F5Low offers: what its library reports (at least 1), capped by [XeFG]
@@ -209,6 +212,14 @@ inline const char* RunStateLabel(RunState state, Generator generator = Generator
             return "DLSS-G running";
         if (state == RunState::Unavailable)
             return "DLSS-G unavailable, no frames generated";
+    }
+
+    if (generator == Generator::Intel)
+    {
+        if (state == RunState::Own || state == RunState::HandedOver)
+            return "XeFG (Intel library) running";
+        if (state == RunState::Unavailable)
+            return "XeFG (Intel library) unavailable, no frames generated";
     }
 
     switch (state)

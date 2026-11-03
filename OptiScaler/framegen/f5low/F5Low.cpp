@@ -7,6 +7,7 @@
 #include <Util.h>
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
+#include <proxies/XeLL_Proxy.h>
 
 #include <atomic>
 #include <filesystem>
@@ -231,14 +232,24 @@ std::string F5Low::IntelFilesMissing()
 {
     std::error_code ec;
     const std::filesystem::path folder(Config::Instance()->MainDllPath.value_or(L""));
-    return ::F5Low::IntelFilesMissing(!IntelLibraryPath().empty(),
-                                      std::filesystem::is_regular_file(folder / L"libxell.dll", ec));
-}
-
-bool F5Low::ForcesGameDlssgOff()
-{
-    const auto& s = Latched();
-    return ::F5Low::ForceGameDlssgOff(s.f5lowOutput, s.generator, s.inputDlssg, s.keepGameDlssg);
+    // Where XeLL_Proxy and f5low.dll look: the module already loaded, the configured XeLLLibrary (file or folder),
+    // next to libxess_fg.dll, OptiScaler's folder
+    bool xell = XeLLProxy::Module() != nullptr;
+    if (!xell)
+    {
+        if (const auto configured = Config::Instance()->XeLLLibrary.value_or(L""); !configured.empty())
+        {
+            std::filesystem::path p(configured);
+            xell = std::filesystem::is_directory(p, ec) ? std::filesystem::is_regular_file(p / L"libxell.dll", ec)
+                                                        : std::filesystem::is_regular_file(p, ec);
+        }
+    }
+    if (!xell)
+        if (const auto intel = IntelLibraryPath(); !intel.empty())
+            xell = std::filesystem::is_regular_file(std::filesystem::path(intel).parent_path() / L"libxell.dll", ec);
+    if (!xell)
+        xell = std::filesystem::is_regular_file(folder / L"libxell.dll", ec);
+    return ::F5Low::IntelFilesMissing(!IntelLibraryPath().empty(), xell);
 }
 
 std::string F5Low::DlssgFilesMissing()
@@ -276,6 +287,19 @@ bool CanRunDlssg()
     cached.store(can ? 1 : 0, std::memory_order_release);
     return can;
 }
+} // namespace
+
+bool F5Low::ForcesGameDlssgOff()
+{
+    const auto& s = Latched();
+    // The rule without canRun first, so CanRunDlssg (which caches) is only asked when it matters
+    if (!::F5Low::ForceGameDlssgOff(s.f5lowOutput, s.generator, s.inputDlssg, s.keepGameDlssg, s.f5lowPresent, true))
+        return false;
+    return CanRunDlssg();
+}
+
+namespace
+{
 } // namespace
 
 void F5Low::PrepareDlssg(HMODULE f5low)

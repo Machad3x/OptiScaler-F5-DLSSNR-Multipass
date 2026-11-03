@@ -795,6 +795,16 @@ sl::Result StreamlineHooks::hkslAllocateResources(sl::CommandBuffer* cmdBuffer, 
                                                   const sl::ViewportHandle& viewport)
 {
     LOG_FUNC();
+
+    // F5Low's DLSS-G generator keeps the game's own DLSS-G off, so it gets no resources either
+    if (feature == sl::kFeatureDLSS_G && F5Low::ForcesGameDlssgOff())
+    {
+        static std::atomic<bool> loggedSkip { false };
+        if (!loggedSkip.exchange(true))
+            LOG_INFO("F5Low DLSS-G: skipped the game's slAllocateResources for DLSS-G (its DLSS-G is forced off)");
+        return sl::Result::eOk;
+    }
+
     auto result = o_slAllocateResources(cmdBuffer, feature, viewport);
     return result;
 }
@@ -1386,6 +1396,7 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
         if (!loggedF5lowOff.exchange(true))
             LOG_INFO("F5Low DLSS-G: the game's own DLSS-G is forced off (F5Low's DLSS-G generator makes the frames)");
         newOptions.mode = sl::DLSSGMode::eOff;
+        newOptions.flags &= ~sl::DLSSGFlags::eRetainResourcesWhenOff;
         return o_slDLSSGSetOptions(viewport, newOptions);
     }
 
