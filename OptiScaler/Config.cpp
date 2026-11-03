@@ -136,6 +136,7 @@ bool Config::Reload(std::filesystem::path iniPath)
                 if (!valid)
                     LOG_WARN("[F5Low] FrameGenerator '{}' is not available; using the default ({})", value,
                              F5Low::GeneratorLabel(F5Low::kDefaultGenerator));
+                F5LowKeepGameDlssg.set_from_config(readBool("F5Low", "KeepGameDlssg"));
             }
 
             FGStreamlineIgnoreOTA.set_from_config(readBool("FrameGen", "StreamlineIgnoreOTA"));
@@ -2038,6 +2039,7 @@ bool Config::SaveIni()
         }
         ini.SetValue("FrameGen", "FGOutput", FGOutputString.c_str());
         ini.SetValue("F5Low", "FrameGenerator", F5Low::GeneratorText(Instance()->F5LowGenerator.value_for_config()));
+        ini.SetValue("F5Low", "KeepGameDlssg", GetBoolValue(Instance()->F5LowKeepGameDlssg.value_for_config()).c_str());
 
         ini.SetValue("FrameGen", "StreamlineIgnoreOTA",
                      GetBoolValue(Instance()->FGStreamlineIgnoreOTA.value_for_config()).c_str());

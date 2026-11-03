@@ -4951,6 +4951,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
                         { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
                           "Our XeFG frame generation on the NVIDIA tensor cores (f5low.dll)" },
+                        { F5Low::Generator::Dlssg, F5Low::GeneratorLabel(F5Low::Generator::Dlssg),
+                          "NVIDIA's DLSS-G, run by f5low.dll through its own Streamline copy\n"
+                          "Needs an NVIDIA RTX GPU, Streamline and nvngx_dlssg.dll in OptiScaler's streamline folder\n"
+                          "The game's own nvngx_dlssg.dll is kept from loading (two DLSS-G copies fault the GPU)\n"
+                          "Takes effect after a restart" },
                     };
 
                     if (!config->F5LowGenerator.has_value())
@@ -4958,11 +4963,42 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                             config->F5LowGenerator.value_or_default(); // need to have a value before combo
 
                     PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
-                    ShowTooltip(
-                        "What makes the generated frames in F5Low\nDLSS-G and libxess will follow\n\n"
-                        "On every start f5low.dll builds this generator from libxess_fg.dll in memory, in the "
-                        "background (about half a second); it starts by itself when ready. Nothing is written to "
-                        "disk.\nIf it can't, it hands over to Intel's XeFG (up to 4x).");
+                    const auto chosenGenerator = config->F5LowGenerator.value_or_default();
+                    const auto runningGenerator = F5Low::LatchedGenerator();
+
+                    if (chosenGenerator == F5Low::Generator::Dlssg)
+                        ShowTooltip("What makes the generated frames in F5Low\nlibxess will follow\n\n"
+                                    "DLSS-G: NVIDIA's frame generation through a Streamline copy of its own, started "
+                                    "with the game. A change here takes effect after a restart.");
+                    else
+                        ShowTooltip(
+                            "What makes the generated frames in F5Low\nlibxess will follow\n\n"
+                            "On every start f5low.dll builds this generator from libxess_fg.dll in memory, in the "
+                            "background (about half a second); it starts by itself when ready. Nothing is written to "
+                            "disk.\nIf it can't, it hands over to Intel's XeFG (up to 4x).\n"
+                            "A change here takes effect after a restart.");
+
+                    // The running generator stays as it was at startup
+                    if (chosenGenerator != runningGenerator)
+                        ImGui::TextColored(
+                            toneMapColor(ImVec4(1.0f, 0.8f, 0.0f, 1.f)), "Restart the game to switch to %s (now: %s)",
+                            F5Low::GeneratorLabel(chosenGenerator), F5Low::GeneratorLabel(runningGenerator));
+
+                    if (chosenGenerator == F5Low::Generator::Dlssg)
+                    {
+                        if (const auto missing = F5Low::DlssgFilesMissing(); !missing.empty())
+                            ImGui::TextColored(toneMapColor(ImVec4(1.0f, 0.2f, 0.2f, 1.0f)), "%s", missing.c_str());
+
+                        if (config->FGInput.value_or_default() == FGInput::DLSSG)
+                        {
+                            ImGui::PushTextWrapPos(0.0f);
+                            ImGui::TextColored(toneMapColor(ImVec4(1.0f, 0.8f, 0.0f, 1.f)),
+                                               "FG Input DLSSG: the game's own DLSS-G stays loaded next to F5Low's; "
+                                               "this has faulted the GPU in some games. Use FG Input Upscaler, or "
+                                               "Frame Generator XeFG Tensor");
+                            ImGui::PopTextWrapPos();
+                        }
+                    }
 
                     const auto f5lowStatus = F5Low::QueryStatus();
                     ImGui::TextColored(toneMapColor(f5lowStatus.state == F5Low::RunState::Own
@@ -4973,7 +5009,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                                        "%s",
                                        f5lowStatus.state == F5Low::RunState::Undecided && !f5lowStatus.reason.empty()
                                            ? ("starting: " + f5lowStatus.reason).c_str()
-                                           : F5Low::RunStateLabel(f5lowStatus.state));
+                                           : F5Low::RunStateLabel(f5lowStatus.state, runningGenerator));
                     if (!f5lowStatus.reason.empty())
                         ShowTooltip(f5lowStatus.reason.c_str());
                 }

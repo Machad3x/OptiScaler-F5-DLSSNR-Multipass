@@ -6,18 +6,68 @@
 #include <imgui/ImGuiNotify.hpp>
 #include <Util.h>
 #include <proxies/Ntdll_Proxy.h>
+#include <proxies/KernelBase_Proxy.h>
 
 #include <atomic>
 #include <filesystem>
+#include <mutex>
+#include <set>
 #include <vector>
 
 namespace
 {
 std::atomic<bool> startupNvidia { false };
+std::atomic<bool> startupNvidiaKnown { false };
 std::atomic<HMODULE> loadedModule { nullptr }; // the f5low.dll LoadLibraryForOutput loaded
+
+// What the ini said when the session started. The block on the game's nvngx_dlssg.dll and the generator handed to
+// f5low.dll both use this one copy, so a menu change cannot make them disagree; it takes effect after a restart (so
+// does a switch of FG Output: only one of XeFG and F5Low loads per session anyway).
+struct Settings
+{
+    bool f5lowOutput = false;
+    F5Low::Generator generator = F5Low::kDefaultGenerator;
+    bool keepGameDlssg = false;
+    bool inputDlssg = false;
+    bool f5lowPresent = false;  // f5low.dll is in the plugins folder: F5Low can run, so the block costs nothing
+    std::wstring privateFolder; // <plugins>\f5low_streamline, absolute
+};
+
+const Settings& Latched()
+{
+    static const Settings settings = []
+    {
+        auto* config = Config::Instance();
+        Settings out;
+        out.f5lowOutput = config->FGOutput.value_or_default() == FGOutput::F5Low;
+        out.generator = config->F5LowGenerator.value_or_default();
+        out.keepGameDlssg = config->F5LowKeepGameDlssg.value_or_default();
+        out.inputDlssg = config->FGInput.value_or_default() == FGInput::DLSSG;
+
+        std::error_code ec;
+        const auto library = std::filesystem::absolute(F5Low::LibraryPath(), ec);
+        out.f5lowPresent = std::filesystem::is_regular_file(library, ec);
+        out.privateFolder = (library.parent_path() / F5Low::kPrivateStreamlineFolder).lexically_normal().wstring();
+        return out;
+    }();
+    return settings;
 }
 
-void F5Low::SetStartupNvidia(bool nvidia) { startupNvidia.store(nvidia, std::memory_order_release); }
+std::filesystem::path StreamlineFolder()
+{
+    return std::filesystem::path(Config::Instance()->MainDllPath.value_or(L"")) / L"streamline";
+}
+} // namespace
+
+void F5Low::LatchSettings() { (void) Latched(); }
+
+F5Low::Generator F5Low::LatchedGenerator() { return Latched().generator; }
+
+void F5Low::SetStartupNvidia(bool nvidia)
+{
+    startupNvidia.store(nvidia, std::memory_order_release);
+    startupNvidiaKnown.store(true, std::memory_order_release);
+}
 
 std::wstring F5Low::LibraryPath()
 {
@@ -29,7 +79,8 @@ F5Low::Availability F5Low::Available()
 {
     std::error_code ec;
     return CheckAvailable(startupNvidia.load(std::memory_order_acquire),
-                          std::filesystem::is_regular_file(LibraryPath(), ec), !IntelLibraryPath().empty());
+                          std::filesystem::is_regular_file(LibraryPath(), ec), !IntelLibraryPath().empty(),
+                          Latched().generator != Generator::Dlssg);
 }
 
 F5Low::Status F5Low::QueryStatus()
@@ -141,15 +192,179 @@ HMODULE F5Low::LoadLibraryForOutput()
     {
         loadedModule.store(module, std::memory_order_release);
         LOG_INFO("F5Low: loaded {}", wstring_to_string(path));
+
+        // f5low reads these when it prepares DLSS-G, so they are set before that call
+        ApplyGenerator();
+        PrepareDlssg(module);
     }
     return module;
 }
 
 void F5Low::ApplyGenerator()
 {
-    const auto generator = Config::Instance()->F5LowGenerator.value_or_default();
+    const auto generator = Latched().generator;
     const wchar_t* value = GeneratorEnvValue(generator);
+
+    // f5low reads F5LOW_GENERATOR first, so a variable left over from the user cannot disagree with OptiScaler
     SetEnvironmentVariableW(kGeneratorEnv, value);
-    LOG_INFO("F5Low: Frame Generator {} ({}={})", GeneratorLabel(generator), wstring_to_string(kGeneratorEnv),
-             wstring_to_string(value));
+    SetEnvironmentVariableW(kGeneratorEnvNew, value);
+    SetEnvironmentVariableW(kStreamlineDirEnv, StreamlineFolder().c_str());
+
+    // f5low.dll refuses DLSS-G when it sees a foreign nvngx_dlssg, unless told that is wanted
+    const auto& s = Latched();
+    const bool allowForeign = generator == Generator::Dlssg && (s.keepGameDlssg || s.inputDlssg);
+    SetEnvironmentVariableW(kAllowForeignEnv, allowForeign ? L"1" : nullptr);
+    LOG_INFO("F5Low: Frame Generator {} ({}={}, {}={})", GeneratorLabel(generator), wstring_to_string(kGeneratorEnvNew),
+             wstring_to_string(value), wstring_to_string(kStreamlineDirEnv),
+             wstring_to_string(StreamlineFolder().wstring()));
+
+    if (generator == Generator::Dlssg)
+        if (const auto missing = DlssgFilesMissing(); !missing.empty())
+            LOG_WARN("F5Low: {}", missing);
+}
+
+std::string F5Low::DlssgFilesMissing()
+{
+    const auto folder = StreamlineFolder();
+    std::error_code ec;
+    return ::F5Low::DlssgFilesMissing(std::filesystem::is_regular_file(folder / L"sl.interposer.dll", ec),
+                                      std::filesystem::is_regular_file(folder / L"nvngx_dlssg.dll", ec));
+}
+
+namespace
+{
+bool detail_IsDriverStore(const std::wstring& path)
+{
+    std::wstring lower = path;
+    for (auto& c : lower)
+        c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c - L'A' + L'a') : (c == L'/' ? L'\\' : c);
+    return lower.find(L"\\driverstore\\") != std::wstring::npos ||
+           lower.find(L"\\models\\dlssg\\") != std::wstring::npos;
+}
+
+// Whether F5Low runs here with the DLSS-G generator: what turns F5Low off in dllmain (NVIDIA GPU, f5low.dll) plus
+// Streamline and nvngx_dlssg.dll in OptiScaler's streamline folder. Not decidable before the startup NVIDIA check
+// ran (nothing of the game loads before it); the answer is kept from then on.
+bool CanRunDlssg()
+{
+    static std::atomic<int> cached { -1 };
+    if (const int known = cached.load(std::memory_order_acquire); known >= 0)
+        return known == 1;
+
+    if (!startupNvidiaKnown.load(std::memory_order_acquire))
+        return false;
+
+    const bool can = F5Low::Available().available && F5Low::DlssgFilesMissing().empty();
+    cached.store(can ? 1 : 0, std::memory_order_release);
+    return can;
+}
+} // namespace
+
+void F5Low::PrepareDlssg(HMODULE f5low)
+{
+    if (f5low == nullptr || Latched().generator != Generator::Dlssg || !CanRunDlssg())
+        return;
+
+    using PFN_f5lowPrepareDlssg = uint32_t(__cdecl*)();
+    const auto prepare = (PFN_f5lowPrepareDlssg) GetProcAddress(f5low, "f5lowPrepareDlssg");
+    if (prepare == nullptr)
+    {
+        LOG_INFO("F5Low: this f5low.dll has no f5lowPrepareDlssg (older build); DLSS-G is prepared when its context is "
+                 "made");
+        return;
+    }
+
+    LOG_INFO("F5Low: f5lowPrepareDlssg returned {}", prepare());
+}
+
+HMODULE F5Low::FilterGameDlssg(const std::wstring& modulePath, bool dataOnly)
+{
+    // Loads that only map the file as data do not start a second DLSS-G
+    if (dataOnly)
+        return nullptr;
+
+    // The ini values as the session started, not State: the game can load its Streamline before FG Output is applied
+    const auto& s = Latched();
+
+    // No f5low.dll: F5Low cannot run, and the game would lose its DLSS-G for nothing
+    if (!s.f5lowPresent)
+        return nullptr;
+
+    // Most loads are some other module: settle that before touching the file system
+    if (GameDlssgLoadRule(s.f5lowOutput, s.generator, s.keepGameDlssg, s.inputDlssg, modulePath, {}) ==
+        GameDlssgLoad::Allow)
+        return nullptr;
+
+    if (!CanRunDlssg())
+        return nullptr;
+
+    // Is our private copy loaded? (no reference taken for this look)
+    const std::wstring ourPath = (std::filesystem::path(s.privateFolder) / L"nvngx_dlssg.dll").wstring();
+    HMODULE ours = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, ourPath.c_str(), &ours);
+
+    std::error_code ec;
+    const bool ourFile = ours != nullptr || std::filesystem::is_regular_file(ourPath, ec);
+
+    const auto verdict = GameDlssgLoadRule(s.f5lowOutput, s.generator, s.keepGameDlssg, s.inputDlssg, modulePath,
+                                           s.privateFolder, ours != nullptr, ourFile);
+    if (verdict == GameDlssgLoad::Allow)
+        return nullptr;
+
+    static std::mutex mutex;
+    static std::set<std::wstring> logged;
+    bool first = false;
+    {
+        std::scoped_lock lock(mutex);
+        first = logged.insert(modulePath).second;
+    }
+
+    if (verdict == GameDlssgLoad::AllowWarn)
+    {
+        if (first)
+            LOG_WARN("F5Low DLSS-G: the game's own nvngx_dlssg.dll loads ({}) because FG Input is DLSSG; two DLSS-G "
+                     "copies may fault the GPU",
+                     wstring_to_string(modulePath));
+        return nullptr;
+    }
+
+    // What was asked for, for the log: the driver's copy is not the game's
+    const bool driverStore = detail_IsDriverStore(modulePath);
+    const char* whose = driverStore ? "the NVIDIA driver's" : "the game's own";
+
+    if (verdict == GameDlssgLoad::Redirect)
+    {
+        // The load gets our module, with the reference a load would have taken. Not loaded yet: load it by its full
+        // path (the nested load comes back through the hooks and is allowed there: it is inside the private folder).
+        HMODULE shared = nullptr;
+        if (ours == nullptr)
+        {
+            thread_local bool loading = false;
+            if (!loading)
+            {
+                loading = true;
+                shared = NtdllProxy::LoadLibraryExW_Ldr(ourPath.c_str(), nullptr, 0);
+                loading = false;
+            }
+        }
+        else
+        {
+            GetModuleHandleExW(0, ourPath.c_str(), &shared);
+        }
+
+        if (shared != nullptr)
+        {
+            if (first)
+                LOG_INFO("F5Low DLSS-G: handed F5Low's nvngx_dlssg.dll (310.9 path) to {} nvngx_dlssg load ({})", whose,
+                         wstring_to_string(modulePath));
+            return shared;
+        }
+        // Could not load ours: fail as for a block
+    }
+
+    if (first)
+        LOG_WARN("F5Low DLSS-G: kept {} nvngx_dlssg.dll from loading ({}): two DLSS-G copies fault the GPU", whose,
+                 wstring_to_string(modulePath));
+
+    return kBlockedLoad;
 }

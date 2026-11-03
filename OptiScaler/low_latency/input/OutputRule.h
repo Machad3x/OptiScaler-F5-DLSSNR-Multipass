@@ -431,10 +431,13 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
 
     if (in.fgActive && in.fsrFgOutput)
         fps /= 2;
-    else if (split && in.side == XefgLatency::Reflex && in.realNvapi && in.driverMultipliesCap)
-        ; // DLSS-G behind XeFG's API: the driver multiplies the interval itself, as for a game's DLSS-G
     else if (split)
-        fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
+    {
+        // Per rendered frame, except DLSS-G behind XeFG's API: the driver multiplies the interval itself (as for a
+        // game's DLSS-G), so the shown cap stays and no later rule may divide it
+        if (!(in.side == XefgLatency::Reflex && in.realNvapi && in.driverMultipliesCap))
+            fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
+    }
     else if (in.xefgOutput && in.xellHoldsCap && !in.xellCountsShown) // XeFG's XeLL counts the game's own frames (XL23)
         fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
     else if (in.dlssgFramesToGenerate > 0 && !in.realNvapi && !in.outputIsXell)
