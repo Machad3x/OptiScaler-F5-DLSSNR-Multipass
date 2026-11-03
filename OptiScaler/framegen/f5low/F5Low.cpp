@@ -9,6 +9,8 @@
 
 #include <atomic>
 #include <filesystem>
+#include <mutex>
+#include <set>
 #include <vector>
 
 namespace
@@ -152,4 +154,65 @@ void F5Low::ApplyGenerator()
     SetEnvironmentVariableW(kGeneratorEnv, value);
     LOG_INFO("F5Low: Frame Generator {} ({}={})", GeneratorLabel(generator), wstring_to_string(kGeneratorEnv),
              wstring_to_string(value));
+
+    if (generator == Generator::Dlssg)
+        if (const auto missing = DlssgFilesMissing(); !missing.empty())
+            LOG_WARN("F5Low: {}", missing);
+}
+
+std::string F5Low::DlssgFilesMissing()
+{
+    const std::filesystem::path folder =
+        std::filesystem::path(Config::Instance()->MainDllPath.value_or(L"")) / L"streamline";
+    std::error_code ec;
+    return ::F5Low::DlssgFilesMissing(std::filesystem::is_regular_file(folder / L"sl.interposer.dll", ec),
+                                      std::filesystem::is_regular_file(folder / L"nvngx_dlssg.dll", ec));
+}
+
+bool F5Low::KeepsGameDlssgOut(const std::wstring& modulePath)
+{
+    auto* config = Config::Instance();
+
+    // The ini values, not State: the game can load its Streamline before FG Output is applied
+    const bool f5lowOutput = config->FGOutput.value_or_default() == FGOutput::F5Low;
+    const auto generator = config->F5LowGenerator.value_or_default();
+    const bool keep = config->F5LowKeepGameDlssg.value_or_default();
+    const bool inputDlssg = config->FGInput.value_or_default() == FGInput::DLSSG;
+
+    // Most loads are some other module: settle that before touching the file system
+    if (GameDlssgLoadRule(f5lowOutput, generator, keep, inputDlssg, modulePath, {}) == GameDlssgLoad::Allow)
+        return false;
+
+    std::filesystem::path pluginFolder(config->PluginPath.value_or(L""));
+    if (pluginFolder.empty())
+        pluginFolder = L"plugins";
+    if (pluginFolder.is_relative())
+        pluginFolder = std::filesystem::path(config->MainDllPath.value_or(L"")) / pluginFolder;
+    const std::wstring privateFolder = (pluginFolder / kPrivateStreamlineFolder).lexically_normal().wstring();
+
+    const auto verdict = GameDlssgLoadRule(f5lowOutput, generator, keep, inputDlssg, modulePath, privateFolder);
+    if (verdict == GameDlssgLoad::Allow)
+        return false;
+
+    static std::mutex mutex;
+    static std::set<std::wstring> logged;
+    bool first = false;
+    {
+        std::scoped_lock lock(mutex);
+        first = logged.insert(modulePath).second;
+    }
+
+    if (first)
+    {
+        if (verdict == GameDlssgLoad::Block)
+            LOG_WARN("F5Low DLSS-G: kept the game's own nvngx_dlssg.dll from loading ({}): two DLSS-G copies fault the "
+                     "GPU",
+                     wstring_to_string(modulePath));
+        else
+            LOG_WARN("F5Low DLSS-G: the game's own nvngx_dlssg.dll loads ({}) because FG Input is DLSSG; two DLSS-G "
+                     "copies may fault the GPU",
+                     wstring_to_string(modulePath));
+    }
+
+    return verdict == GameDlssgLoad::Block;
 }

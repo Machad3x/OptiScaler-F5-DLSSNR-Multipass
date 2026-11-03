@@ -21,11 +21,23 @@
 ## Turning it on
 
 1. Open the OptiScaler menu, Frame Generation: pick an **FG Input** and set **FG Output** to **F5Low**.
-2. **Frame Generator** appears under it: **XeFG Tensor** (our XeFG frame generation on the tensor cores) is the
-   only choice for now. DLSS-G and libxess will follow.
+2. **Frame Generator** appears under it: **XeFG Tensor** (our XeFG frame generation on the tensor cores) or
+   **DLSS-G (NVIDIA)**. libxess will follow.
 3. Save Settings and restart the game.
 
-In the ini: `[FrameGen] FGOutput=f5low`, `[F5Low] FrameGenerator=auto` (= xefg_tensor).
+In the ini: `[FrameGen] FGOutput=f5low`, `[F5Low] FrameGenerator=auto` (= xefg_tensor) or `dlssg`.
+
+### DLSS-G as the Frame Generator
+
+`dlssg` needs an NVIDIA RTX GPU, and Streamline (`sl.interposer.dll` and the `sl.*` plugins) plus `nvngx_dlssg.dll` in
+OptiScaler's `streamline` folder. f5low.dll runs NVIDIA's DLSS-G through a private copy of them in
+`plugins\f5low_streamline`. The menu shows what is missing.
+
+A game that ships its own `nvngx_dlssg.dll` would load a second DLSS-G next to it, and the GPU faulted at level load in
+a game that did. So while FG Output is F5Low and the generator is DLSS-G, OptiScaler keeps every `nvngx_dlssg.dll`
+outside `f5low_streamline` from loading and says so in the log ("kept the game's own nvngx_dlssg.dll from loading").
+`[F5Low] KeepGameDlssg=true` turns that off. It is also not done when FG Input is DLSSG, because the game's DLSS-G is
+the input then; the log warns that two copies may fault.
 
 ## Options
 

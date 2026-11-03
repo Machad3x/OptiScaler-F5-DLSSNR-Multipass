@@ -1201,6 +1201,9 @@ class Config
     CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
     // [F5Low] FrameGenerator: who makes the frames in FG Output F5Low
     CustomOptional<F5Low::Generator> F5LowGenerator { F5Low::kDefaultGenerator };
+    // [F5Low] KeepGameDlssg: with the DLSS-G generator the game's own nvngx_dlssg.dll is kept from loading (two DLSS-G
+    // copies fault the GPU); true lets it load
+    CustomOptional<bool> F5LowKeepGameDlssg { false };
     // Keeps Streamline from picking up the driver's OTA/downloaded plugins; only files in
     // OptiScaler/streamline are used for sl.* plugins and nvngx_dlssg.dll
     CustomOptional<bool> FGStreamlineIgnoreOTA { false };

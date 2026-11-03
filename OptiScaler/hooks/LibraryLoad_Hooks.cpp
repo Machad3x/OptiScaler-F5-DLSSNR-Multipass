@@ -31,6 +31,7 @@
 #include <hooks/Amdxc64_Hooks.h>
 
 #include <misc/IdentifyGpu.h>
+#include <framegen/f5low/F5Low.h>
 #include <low_latency/input/input_uell.h>
 
 // #define LOG_LIB_OPERATIONS
@@ -148,6 +149,10 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
         if (streamline || otaFg || filename == L"nvngx_dlssg.dll")
             return nullptr; // not handled: preserve the original loader/unlocker's path
     }
+
+    // F5Low runs DLSS-G in a Streamline of its own: a second nvngx_dlssg.dll, the game's, faults the GPU
+    if (F5Low::KeepsGameDlssgOut(libName))
+        return (HMODULE) 1337;
 
     std::filesystem::path localSlPath(Config::Instance()->MainDllPath.value());
     localSlPath = localSlPath / L"streamline"; // Hardcoded streamline folder

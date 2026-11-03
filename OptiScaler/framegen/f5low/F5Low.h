@@ -44,4 +44,13 @@ HMODULE LoadLibraryForOutput();
 // Tells f5low.dll which generator to run (XEFG_CUDA_GENERATOR) before XeFG's API creates an F5Low context. Only F5Low
 // sets it: the XeFG output with a hand-set XeFGPath to f5low.dll keeps following its own f5low.ini.
 void ApplyGenerator();
+
+// Why the DLSS-G generator cannot run (OptiScaler's streamline folder lacks Streamline or nvngx_dlssg.dll); empty when
+// it can.
+std::string DlssgFilesMissing();
+
+// Whether the load of this module (a bare name or a full path) is the game's own nvngx_dlssg.dll that must stay out
+// while F5Low runs DLSS-G. Decided from the ini values read at startup, so it holds before the game loads Streamline.
+// Logs once per path.
+bool KeepsGameDlssgOut(const std::wstring& modulePath);
 } // namespace F5Low

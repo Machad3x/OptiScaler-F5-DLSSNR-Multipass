@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include <string_view>
 
 // FG Output F5Low: our f5low.dll from the plugins folder (it implements XeFG's API, so OptiScaler drives it
@@ -23,16 +24,16 @@ inline constexpr wchar_t kGeneratorEnv[] = L"XEFG_CUDA_GENERATOR";
 // The full path of Intel's libxess_fg.dll that f5low.dll hands over to (and later builds on).
 inline constexpr wchar_t kIntelLibraryEnv[] = L"XEFG_CUDA_INTEL_LIBRARY";
 
-// [F5Low] FrameGenerator. Only XeFG Tensor exists so far; DLSS-G and libxess are planned (f5low.dll's
-// Generator=dlssg / intel).
+// [F5Low] FrameGenerator: XeFG Tensor and NVIDIA's DLSS-G. libxess is planned (f5low.dll's Generator=intel).
 enum class Generator
 {
     XefgTensor, // f5low.dll's own generator on the tensor cores (Generator=own)
+    Dlssg,      // NVIDIA DLSS-G through f5low.dll's private Streamline copy (Generator=dlssg)
 };
 
 inline constexpr Generator kDefaultGenerator = Generator::XefgTensor;
 
-// nullopt: the default. valid turns false for text that is not a generator; planned generators read as not valid yet.
+// nullopt: the default. valid turns false for text that is not a generator; a planned generator reads as not valid yet.
 inline std::optional<Generator> ParseGenerator(std::string_view text, bool& valid)
 {
     const auto equals = [text](std::string_view word)
@@ -54,6 +55,8 @@ inline std::optional<Generator> ParseGenerator(std::string_view text, bool& vali
         return std::nullopt;
     if (equals("xefg_tensor"))
         return Generator::XefgTensor;
+    if (equals("dlssg"))
+        return Generator::Dlssg;
     valid = false;
     return std::nullopt;
 }
@@ -67,6 +70,8 @@ inline const char* GeneratorText(std::optional<Generator> generator)
     {
     case Generator::XefgTensor:
         return "xefg_tensor";
+    case Generator::Dlssg:
+        return "dlssg";
     }
     return "auto";
 }
@@ -78,6 +83,8 @@ inline const char* GeneratorLabel(Generator generator)
     {
     case Generator::XefgTensor:
         return "XeFG Tensor";
+    case Generator::Dlssg:
+        return "DLSS-G (NVIDIA)";
     }
     return "?";
 }
@@ -89,8 +96,21 @@ inline const wchar_t* GeneratorEnvValue(Generator generator)
     {
     case Generator::XefgTensor:
         return L"own";
+    case Generator::Dlssg:
+        return L"dlssg";
     }
     return L"own";
+}
+
+// DLSS-G runs through f5low.dll's own Streamline copy, made from the files in OptiScaler's streamline folder
+// (sl.interposer.dll and the sl.* plugins, plus nvngx_dlssg.dll). Empty when they are there, else why not.
+inline const char* DlssgFilesMissing(bool interposerFound, bool dlssgFound)
+{
+    if (!interposerFound)
+        return "DLSS-G needs Streamline (sl.interposer.dll and the sl.* plugins) in OptiScaler's streamline folder";
+    if (!dlssgFound)
+        return "DLSS-G needs nvngx_dlssg.dll in OptiScaler's streamline folder";
+    return "";
 }
 
 // The most interpolated frames F5Low offers: what its library reports (at least 1), capped by [XeFG]
@@ -157,5 +177,62 @@ inline const char* RunStateLabel(RunState state)
     default:
         return "state unknown (older f5low.dll)";
     }
+}
+
+// F5Low with the DLSS-G generator runs a Streamline of its own, in plugins\f5low_streamline. A game's own
+// nvngx_dlssg.dll loaded next to it makes two DLSS-G instances, and the GPU faulted at level load in a game that did
+// so. So that file (any folder but f5low_streamline) is kept from loading, unless the game's DLSS-G is the FG Input.
+inline constexpr wchar_t kPrivateStreamlineFolder[] = L"f5low_streamline";
+
+enum class GameDlssgLoad
+{
+    Allow,
+    Block,
+    AllowWarn // allowed, but two DLSS-G copies may fault: the game's DLSS-G is the FG Input
+};
+
+namespace detail
+{
+// Lower case, one kind of separator
+inline std::wstring Normalised(std::wstring_view text)
+{
+    std::wstring out(text);
+    for (auto& c : out)
+    {
+        if (c >= L'A' && c <= L'Z')
+            c = static_cast<wchar_t>(c - L'A' + L'a');
+        else if (c == L'/')
+            c = L'\\';
+    }
+    return out;
+}
+} // namespace detail
+
+// modulePath: what the load asked for (a bare name or a full path). privateFolder: the full path of f5low_streamline,
+// empty when unknown (then every copy counts as the game's).
+inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bool keepGameDlssg, bool fgInputDlssg,
+                                       std::wstring_view modulePath, std::wstring_view privateFolder)
+{
+    if (!f5lowOutput || generator != Generator::Dlssg || keepGameDlssg)
+        return GameDlssgLoad::Allow;
+
+    const std::wstring path = detail::Normalised(modulePath);
+    const size_t slash = path.find_last_of(L'\\');
+    const std::wstring_view file =
+        slash == std::wstring::npos ? std::wstring_view(path) : std::wstring_view(path).substr(slash + 1);
+    if (file != L"nvngx_dlssg.dll" && file != L"nvngx_dlssg")
+        return GameDlssgLoad::Allow;
+
+    if (!privateFolder.empty())
+    {
+        std::wstring folder = detail::Normalised(privateFolder);
+        while (!folder.empty() && folder.back() == L'\\')
+            folder.pop_back();
+        folder += L'\\';
+        if (path.size() > folder.size() && path.compare(0, folder.size(), folder) == 0)
+            return GameDlssgLoad::Allow; // f5low.dll's own copy
+    }
+
+    return fgInputDlssg ? GameDlssgLoad::AllowWarn : GameDlssgLoad::Block;
 }
 } // namespace F5Low

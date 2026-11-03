@@ -4951,6 +4951,10 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     static const std::vector<MenuOption<F5Low::Generator>> generatorOptions = {
                         { F5Low::Generator::XefgTensor, F5Low::GeneratorLabel(F5Low::Generator::XefgTensor),
                           "Our XeFG frame generation on the NVIDIA tensor cores (f5low.dll)" },
+                        { F5Low::Generator::Dlssg, F5Low::GeneratorLabel(F5Low::Generator::Dlssg),
+                          "NVIDIA's DLSS-G, run by f5low.dll through its own Streamline copy\n"
+                          "Needs an NVIDIA RTX GPU, Streamline and nvngx_dlssg.dll in OptiScaler's streamline folder\n"
+                          "The game's own nvngx_dlssg.dll is kept from loading (two DLSS-G copies fault the GPU)" },
                     };
 
                     if (!config->F5LowGenerator.has_value())
@@ -4959,10 +4963,16 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
                     PopulateCombo("Frame Generator", config->F5LowGenerator, generatorOptions);
                     ShowTooltip(
-                        "What makes the generated frames in F5Low\nDLSS-G and libxess will follow\n\n"
+                        "What makes the generated frames in F5Low\nlibxess will follow\n\n"
                         "On every start f5low.dll builds this generator from libxess_fg.dll in memory, in the "
                         "background (about half a second); it starts by itself when ready. Nothing is written to "
                         "disk.\nIf it can't, it hands over to Intel's XeFG (up to 4x).");
+
+                    if (config->F5LowGenerator.value_or_default() == F5Low::Generator::Dlssg)
+                    {
+                        if (const auto missing = F5Low::DlssgFilesMissing(); !missing.empty())
+                            ImGui::TextColored(toneMapColor(ImVec4(1.0f, 0.2f, 0.2f, 1.0f)), "%s", missing.c_str());
+                    }
 
                     const auto f5lowStatus = F5Low::QueryStatus();
                     ImGui::TextColored(toneMapColor(f5lowStatus.state == F5Low::RunState::Own

@@ -39,7 +39,8 @@ int main()
     CHECK(!F5Low::ParseGenerator("", valid).has_value() && valid);
     CHECK(F5Low::ParseGenerator("xefg_tensor", valid) == F5Low::Generator::XefgTensor && valid);
     CHECK(F5Low::ParseGenerator("XeFG_Tensor", valid) == F5Low::Generator::XefgTensor && valid);
-    CHECK(!F5Low::ParseGenerator("dlssg", valid).has_value() && !valid);   // planned, not there yet
+    CHECK(F5Low::ParseGenerator("dlssg", valid) == F5Low::Generator::Dlssg && valid);
+    CHECK(F5Low::ParseGenerator("DLSSG", valid) == F5Low::Generator::Dlssg && valid);
     CHECK(!F5Low::ParseGenerator("libxess", valid).has_value() && !valid); // planned, not there yet
     CHECK(!F5Low::ParseGenerator("junk", valid).has_value() && !valid);
     CHECK(strcmp(F5Low::GeneratorText(std::nullopt), "auto") == 0);
@@ -51,6 +52,14 @@ int main()
                   F5Low::Generator::XefgTensor &&
               ok);
     }
+    CHECK(strcmp(F5Low::GeneratorText(F5Low::Generator::Dlssg), "dlssg") == 0);
+    {
+        bool ok = false;
+        CHECK(F5Low::ParseGenerator(F5Low::GeneratorText(F5Low::Generator::Dlssg), ok) == F5Low::Generator::Dlssg &&
+              ok);
+    }
+    CHECK(strcmp(F5Low::GeneratorLabel(F5Low::Generator::Dlssg), "DLSS-G (NVIDIA)") == 0);
+    CHECK(wcscmp(F5Low::GeneratorEnvValue(F5Low::Generator::Dlssg), L"dlssg") == 0);
     CHECK(strcmp(F5Low::GeneratorLabel(F5Low::Generator::XefgTensor), "XeFG Tensor") == 0);
     CHECK(wcscmp(F5Low::GeneratorEnvValue(F5Low::Generator::XefgTensor), L"own") == 0);
 
@@ -61,6 +70,11 @@ int main()
     CHECK(F5Low::MaxInterpolations(0, 5) == 1); // nothing reported reads as 1
     CHECK(F5Low::MaxInterpolations(5, 9) == 5); // ini out of range is clamped
     CHECK(F5Low::MaxInterpolations(5, 0) == 1);
+
+    // DLSS-G needs Streamline and nvngx_dlssg.dll in OptiScaler's streamline folder
+    CHECK(strcmp(F5Low::DlssgFilesMissing(true, true), "") == 0);
+    CHECK(strstr(F5Low::DlssgFilesMissing(false, true), "Streamline") != nullptr);
+    CHECK(strstr(F5Low::DlssgFilesMissing(true, false), "nvngx_dlssg.dll") != nullptr);
 
     // Availability
     CHECK(F5Low::CheckAvailable(true, true).available);
