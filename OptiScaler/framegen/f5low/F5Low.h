@@ -49,6 +49,11 @@ void LatchSettings();
 // The Frame Generator this session runs (what LatchSettings kept), not what the menu shows now.
 Generator LatchedGenerator();
 
+// With the DLSS-G generator: asks the loaded f5low.dll (f5lowPrepareDlssg) to make its private copy and load its
+// nvngx_dlssg before the game's Streamline starts, so the redirect always has our module. Older f5low.dll without the
+// export: logged, nothing else.
+void PrepareDlssg(HMODULE f5low);
+
 // Tells f5low.dll which generator to run (F5LOW_GENERATOR and XEFG_CUDA_GENERATOR, so a leftover user variable cannot
 // disagree) and where OptiScaler's streamline folder is (F5LOW_STREAMLINE_DIR), before XeFG's API creates an F5Low
 // context. Only F5Low sets it: the XeFG output with a hand-set XeFGPath to f5low.dll keeps following its own f5low.ini.

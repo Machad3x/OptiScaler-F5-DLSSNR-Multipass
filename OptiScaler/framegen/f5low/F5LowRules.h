@@ -244,10 +244,12 @@ inline bool IsInsideFolder(std::wstring_view path, std::wstring_view folderPath)
 // modulePath: what the load asked for (a bare name or a full path). privateFolder: the full path of f5low_streamline,
 // empty when unknown (then every copy counts as the game's). privateCopyLoaded: a module named nvngx_dlssg.dll is
 // already loaded from privateFolder: a bare-name load then gets that one from the loader (intended: it is let
-// through), and a load of the game's copy by path is redirected to it instead of failing.
+// through), and a load of the game's copy by path is redirected to it instead of failing. privateFileExists: our file
+// is there but not loaded yet: the redirect loads it. A hard block would make NGX mark DLSS-G unavailable for
+// every Streamline in the process, f5low's included, so Block is only for when we have no file to hand out.
 inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bool keepGameDlssg, bool fgInputDlssg,
                                        std::wstring_view modulePath, std::wstring_view privateFolder,
-                                       bool privateCopyLoaded = false)
+                                       bool privateCopyLoaded = false, bool privateFileExists = false)
 {
     if (!f5lowOutput || generator != Generator::Dlssg || keepGameDlssg)
         return GameDlssgLoad::Allow;
@@ -270,6 +272,6 @@ inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bo
     if (fgInputDlssg)
         return GameDlssgLoad::AllowWarn;
 
-    return privateCopyLoaded ? GameDlssgLoad::Redirect : GameDlssgLoad::Block;
+    return privateCopyLoaded || privateFileExists ? GameDlssgLoad::Redirect : GameDlssgLoad::Block;
 }
 } // namespace F5Low

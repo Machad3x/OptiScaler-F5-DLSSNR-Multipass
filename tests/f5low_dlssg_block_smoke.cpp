@@ -27,9 +27,9 @@ static const wchar_t* kOtaPath =
 
 // f5lowOutput, generator, keep, fgInputDlssg
 static GameDlssgLoad Rule(bool f5low, Generator generator, bool keep, bool inputDlssg, const wchar_t* module,
-                          const wchar_t* folder = kPrivate, bool privateLoaded = false)
+                          const wchar_t* folder = kPrivate, bool privateLoaded = false, bool fileExists = false)
 {
-    return F5Low::GameDlssgLoadRule(f5low, generator, keep, inputDlssg, module, folder, privateLoaded);
+    return F5Low::GameDlssgLoadRule(f5low, generator, keep, inputDlssg, module, folder, privateLoaded, fileExists);
 }
 
 int main()
@@ -113,6 +113,17 @@ int main()
     // ... the other DLSS models are not DLSS-G
     CHECK(Rule(true, Generator::Dlssg, false, false,
                L"C:\\ProgramData\\NVIDIA\\NGX\\models\\dlss\\versions\\1\\files\\a.bin") == GameDlssgLoad::Allow);
+
+    // Our file exists but is not loaded yet: the load is redirected (it gets loaded); Block only when neither
+    CHECK(Rule(true, Generator::Dlssg, false, false, kGamePath, kPrivate, false, true) == GameDlssgLoad::Redirect);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kOtaPath, kPrivate, false, true) == GameDlssgLoad::Redirect);
+    CHECK(Rule(true, Generator::Dlssg, false, false,
+               L"C:\\Windows\\System32\\DriverStore\\FileRepository\\nvmdi.inf_x\\nvngx_dlssg.dll", kPrivate,
+               false, true) == GameDlssgLoad::Redirect);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kGamePath, kPrivate, false, false) == GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::Dlssg, false, true, kGamePath, kPrivate, false, true) == GameDlssgLoad::AllowWarn);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kPrivateDll, kPrivate, false, true) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Dlssg, true, false, kGamePath, kPrivate, false, true) == GameDlssgLoad::Allow);
 
     // Path helper
     CHECK(F5Low::IsInsideFolder(kPrivateDll, kPrivate));
