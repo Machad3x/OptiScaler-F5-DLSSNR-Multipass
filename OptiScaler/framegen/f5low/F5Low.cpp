@@ -298,10 +298,6 @@ bool F5Low::ForcesGameDlssgOff()
     return CanRunDlssg();
 }
 
-namespace
-{
-} // namespace
-
 void F5Low::PrepareDlssg(HMODULE f5low)
 {
     if (f5low == nullptr || Latched().generator != Generator::Dlssg || !CanRunDlssg())
