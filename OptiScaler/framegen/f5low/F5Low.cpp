@@ -6,6 +6,7 @@
 #include <imgui/ImGuiNotify.hpp>
 #include <Util.h>
 #include <proxies/Ntdll_Proxy.h>
+#include <proxies/KernelBase_Proxy.h>
 
 #include <atomic>
 #include <filesystem>
@@ -17,7 +18,48 @@ namespace
 {
 std::atomic<bool> startupNvidia { false };
 std::atomic<HMODULE> loadedModule { nullptr }; // the f5low.dll LoadLibraryForOutput loaded
+
+// What the ini said when the session started. The block on the game's nvngx_dlssg.dll and the generator handed to
+// f5low.dll both use this one copy, so a menu change cannot make them disagree; it takes effect after a restart.
+struct Settings
+{
+    bool f5lowOutput = false;
+    F5Low::Generator generator = F5Low::kDefaultGenerator;
+    bool keepGameDlssg = false;
+    bool inputDlssg = false;
+    bool f5lowPresent = false;  // f5low.dll is in the plugins folder: F5Low can run, so the block costs nothing
+    std::wstring privateFolder; // <plugins>\f5low_streamline, absolute
+};
+
+const Settings& Latched()
+{
+    static const Settings settings = []
+    {
+        auto* config = Config::Instance();
+        Settings out;
+        out.f5lowOutput = config->FGOutput.value_or_default() == FGOutput::F5Low;
+        out.generator = config->F5LowGenerator.value_or_default();
+        out.keepGameDlssg = config->F5LowKeepGameDlssg.value_or_default();
+        out.inputDlssg = config->FGInput.value_or_default() == FGInput::DLSSG;
+
+        std::error_code ec;
+        const auto library = std::filesystem::absolute(F5Low::LibraryPath(), ec);
+        out.f5lowPresent = std::filesystem::is_regular_file(library, ec);
+        out.privateFolder = (library.parent_path() / F5Low::kPrivateStreamlineFolder).lexically_normal().wstring();
+        return out;
+    }();
+    return settings;
 }
+
+std::filesystem::path StreamlineFolder()
+{
+    return std::filesystem::path(Config::Instance()->MainDllPath.value_or(L"")) / L"streamline";
+}
+} // namespace
+
+void F5Low::LatchSettings() { (void) Latched(); }
+
+F5Low::Generator F5Low::LatchedGenerator() { return Latched().generator; }
 
 void F5Low::SetStartupNvidia(bool nvidia) { startupNvidia.store(nvidia, std::memory_order_release); }
 
@@ -31,7 +73,8 @@ F5Low::Availability F5Low::Available()
 {
     std::error_code ec;
     return CheckAvailable(startupNvidia.load(std::memory_order_acquire),
-                          std::filesystem::is_regular_file(LibraryPath(), ec), !IntelLibraryPath().empty());
+                          std::filesystem::is_regular_file(LibraryPath(), ec), !IntelLibraryPath().empty(),
+                          Latched().generator != Generator::Dlssg);
 }
 
 F5Low::Status F5Low::QueryStatus()
@@ -149,11 +192,16 @@ HMODULE F5Low::LoadLibraryForOutput()
 
 void F5Low::ApplyGenerator()
 {
-    const auto generator = Config::Instance()->F5LowGenerator.value_or_default();
+    const auto generator = Latched().generator;
     const wchar_t* value = GeneratorEnvValue(generator);
+
+    // f5low reads F5LOW_GENERATOR first, so a variable left over from the user cannot disagree with OptiScaler
     SetEnvironmentVariableW(kGeneratorEnv, value);
-    LOG_INFO("F5Low: Frame Generator {} ({}={})", GeneratorLabel(generator), wstring_to_string(kGeneratorEnv),
-             wstring_to_string(value));
+    SetEnvironmentVariableW(kGeneratorEnvNew, value);
+    SetEnvironmentVariableW(kStreamlineDirEnv, StreamlineFolder().c_str());
+    LOG_INFO("F5Low: Frame Generator {} ({}={}, {}={})", GeneratorLabel(generator), wstring_to_string(kGeneratorEnvNew),
+             wstring_to_string(value), wstring_to_string(kStreamlineDirEnv),
+             wstring_to_string(StreamlineFolder().wstring()));
 
     if (generator == Generator::Dlssg)
         if (const auto missing = DlssgFilesMissing(); !missing.empty())
@@ -162,8 +210,7 @@ void F5Low::ApplyGenerator()
 
 std::string F5Low::DlssgFilesMissing()
 {
-    const std::filesystem::path folder =
-        std::filesystem::path(Config::Instance()->MainDllPath.value_or(L"")) / L"streamline";
+    const auto folder = StreamlineFolder();
     std::error_code ec;
     return ::F5Low::DlssgFilesMissing(std::filesystem::is_regular_file(folder / L"sl.interposer.dll", ec),
                                       std::filesystem::is_regular_file(folder / L"nvngx_dlssg.dll", ec));
@@ -171,26 +218,34 @@ std::string F5Low::DlssgFilesMissing()
 
 bool F5Low::KeepsGameDlssgOut(const std::wstring& modulePath)
 {
-    auto* config = Config::Instance();
+    // The ini values as the session started, not State: the game can load its Streamline before FG Output is applied
+    const auto& s = Latched();
 
-    // The ini values, not State: the game can load its Streamline before FG Output is applied
-    const bool f5lowOutput = config->FGOutput.value_or_default() == FGOutput::F5Low;
-    const auto generator = config->F5LowGenerator.value_or_default();
-    const bool keep = config->F5LowKeepGameDlssg.value_or_default();
-    const bool inputDlssg = config->FGInput.value_or_default() == FGInput::DLSSG;
-
-    // Most loads are some other module: settle that before touching the file system
-    if (GameDlssgLoadRule(f5lowOutput, generator, keep, inputDlssg, modulePath, {}) == GameDlssgLoad::Allow)
+    // No f5low.dll: F5Low cannot run, and the game would lose its DLSS-G for nothing
+    if (!s.f5lowPresent)
         return false;
 
-    std::filesystem::path pluginFolder(config->PluginPath.value_or(L""));
-    if (pluginFolder.empty())
-        pluginFolder = L"plugins";
-    if (pluginFolder.is_relative())
-        pluginFolder = std::filesystem::path(config->MainDllPath.value_or(L"")) / pluginFolder;
-    const std::wstring privateFolder = (pluginFolder / kPrivateStreamlineFolder).lexically_normal().wstring();
+    // Most loads are some other module: settle that before touching the file system
+    if (GameDlssgLoadRule(s.f5lowOutput, s.generator, s.keepGameDlssg, s.inputDlssg, modulePath, {}) ==
+        GameDlssgLoad::Allow)
+        return false;
 
-    const auto verdict = GameDlssgLoadRule(f5lowOutput, generator, keep, inputDlssg, modulePath, privateFolder);
+    auto verdict =
+        GameDlssgLoadRule(s.f5lowOutput, s.generator, s.keepGameDlssg, s.inputDlssg, modulePath, s.privateFolder);
+
+    // A bare name gets the module of that name that is already loaded: ours, when f5low.dll preloaded it
+    if (verdict != GameDlssgLoad::Allow && modulePath.find_first_of(L"\\/") == std::wstring::npos)
+    {
+        const auto getModuleHandle = KernelBaseProxy::GetModuleHandleW_();
+        if (const HMODULE loaded = getModuleHandle != nullptr ? getModuleHandle(L"nvngx_dlssg.dll") : nullptr)
+        {
+            wchar_t loadedPath[MAX_PATH * 2] {};
+            if (GetModuleFileNameW(loaded, loadedPath, (DWORD) std::size(loadedPath)) > 0)
+                verdict = GameDlssgLoadRule(s.f5lowOutput, s.generator, s.keepGameDlssg, s.inputDlssg, modulePath,
+                                            s.privateFolder, IsInsideFolder(loadedPath, s.privateFolder));
+        }
+    }
+
     if (verdict == GameDlssgLoad::Allow)
         return false;
 

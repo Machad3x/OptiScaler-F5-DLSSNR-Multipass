@@ -21,12 +21,15 @@ using F5Low::GameDlssgLoad;
 
 static const wchar_t* kPrivate = L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline";
 static const wchar_t* kGamePath = L"C:\\Games\\Game\\bin\\nvngx_dlssg.dll";
+static const wchar_t* kPrivateDll = L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline\\nvngx_dlssg.dll";
+static const wchar_t* kOtaPath =
+    L"C:\\ProgramData\\NVIDIA\\NGX\\models\\dlssg\\versions\\310.9.0\\files\\160_abc.bin";
 
 // f5lowOutput, generator, keep, fgInputDlssg
 static GameDlssgLoad Rule(bool f5low, Generator generator, bool keep, bool inputDlssg, const wchar_t* module,
-                          const wchar_t* folder = kPrivate)
+                          const wchar_t* folder = kPrivate, bool privateLoaded = false)
 {
-    return F5Low::GameDlssgLoadRule(f5low, generator, keep, inputDlssg, module, folder);
+    return F5Low::GameDlssgLoadRule(f5low, generator, keep, inputDlssg, module, folder, privateLoaded);
 }
 
 int main()
@@ -39,13 +42,13 @@ int main()
     CHECK(Rule(true, Generator::Dlssg, false, false, L"nvngx_dlssg.dll") == GameDlssgLoad::Block);
     CHECK(Rule(true, Generator::Dlssg, false, false, L"nvngx_dlssg") == GameDlssgLoad::Block);
     CHECK(Rule(true, Generator::Dlssg, false, false,
-               L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline\\nvngx_dlssg.dll") == GameDlssgLoad::Allow);
+               kPrivateDll) == GameDlssgLoad::Allow);
 
     // A folder that only starts with the same letters is not the private one
     CHECK(Rule(true, Generator::Dlssg, false, false,
                L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline_old\\nvngx_dlssg.dll") == GameDlssgLoad::Block);
-    // Nor the folder itself named like the file
-    CHECK(Rule(true, Generator::Dlssg, false, false, kPrivate) == GameDlssgLoad::Allow); // not a dlssg file name
+    // The folder itself is not a module named nvngx_dlssg: nothing to keep out
+    CHECK(Rule(true, Generator::Dlssg, false, false, kPrivate) == GameDlssgLoad::Allow);
     // OptiScaler's own streamline folder holds the source copy: not the private one
     CHECK(Rule(true, Generator::Dlssg, false, false, L"C:\\Games\\Game\\OptiScaler\\streamline\\nvngx_dlssg.dll") ==
           GameDlssgLoad::Block);
@@ -66,7 +69,7 @@ int main()
     CHECK(Rule(true, Generator::Dlssg, false, true, kGamePath) == GameDlssgLoad::AllowWarn);
     CHECK(Rule(true, Generator::Dlssg, false, true, L"nvngx_dlssg.dll") == GameDlssgLoad::AllowWarn);
     CHECK(Rule(true, Generator::Dlssg, false, true,
-               L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline\\nvngx_dlssg.dll") == GameDlssgLoad::Allow);
+               kPrivateDll) == GameDlssgLoad::Allow);
     CHECK(Rule(true, Generator::Dlssg, true, true, kGamePath) == GameDlssgLoad::Allow);
     CHECK(Rule(true, Generator::XefgTensor, false, true, kGamePath) == GameDlssgLoad::Allow);
 
@@ -76,12 +79,41 @@ int main()
     CHECK(Rule(true, Generator::Dlssg, false, false,
                L"c:/games/game/optiscaler/PLUGINS/F5LOW_STREAMLINE/NVNGX_DLSSG.dll") == GameDlssgLoad::Allow);
     CHECK(Rule(true, Generator::Dlssg, false, false,
-               L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline\\nvngx_dlssg.dll", L"c:/games/game/optiscaler/plugins/f5low_streamline/") ==
+               kPrivateDll, L"c:/games/game/optiscaler/plugins/f5low_streamline/") ==
           GameDlssgLoad::Allow);
+
+    // A bare name is let through only when the private copy is already loaded (the loader hands that one out)
+    CHECK(Rule(true, Generator::Dlssg, false, false, L"nvngx_dlssg.dll", kPrivate, true) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Dlssg, false, false, L"NVNGX_DLSSG", kPrivate, true) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Dlssg, false, false, L"nvngx_dlssg.dll", kPrivate, false) == GameDlssgLoad::Block);
+    // ... a full path to the game's copy is blocked even then
+    CHECK(Rule(true, Generator::Dlssg, false, false, kGamePath, kPrivate, true) == GameDlssgLoad::Block);
+    // ... and with FG Input DLSSG a bare name warns when ours is not loaded
+    CHECK(Rule(true, Generator::Dlssg, false, true, L"nvngx_dlssg.dll", kPrivate, false) == GameDlssgLoad::AllowWarn);
+
+    // The driver's downloaded DLSS-G (any file under models\dlssg): blocked like the game's copy
+    CHECK(Rule(true, Generator::Dlssg, false, false, kOtaPath) == GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::Dlssg, false, false, L"c:/programdata/nvidia/ngx/models/DLSSG/x.dll") ==
+          GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kOtaPath, kPrivate, true) == GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::XefgTensor, false, false, kOtaPath) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Dlssg, true, false, kOtaPath) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Dlssg, false, true, kOtaPath) == GameDlssgLoad::AllowWarn);
+    CHECK(Rule(false, Generator::Dlssg, false, false, kOtaPath) == GameDlssgLoad::Allow);
+    // ... the other DLSS models are not DLSS-G
+    CHECK(Rule(true, Generator::Dlssg, false, false,
+               L"C:\\ProgramData\\NVIDIA\\NGX\\models\\dlss\\versions\\1\\files\\a.bin") == GameDlssgLoad::Allow);
+
+    // Path helper
+    CHECK(F5Low::IsInsideFolder(kPrivateDll, kPrivate));
+    CHECK(F5Low::IsInsideFolder(kPrivateDll, L"C:/Games/Game/OptiScaler/plugins/F5LOW_STREAMLINE/"));
+    CHECK(!F5Low::IsInsideFolder(kGamePath, kPrivate));
+    CHECK(!F5Low::IsInsideFolder(kPrivate, kPrivate));
+    CHECK(!F5Low::IsInsideFolder(kPrivateDll, L""));
 
     // Unknown private folder: every copy counts as the game's
     CHECK(Rule(true, Generator::Dlssg, false, false,
-               L"C:\\Games\\Game\\OptiScaler\\plugins\\f5low_streamline\\nvngx_dlssg.dll", L"") == GameDlssgLoad::Block);
+               kPrivateDll, L"") == GameDlssgLoad::Block);
 
     if (fails == 0)
         printf("f5low_dlssg_block_smoke: PASS\n");

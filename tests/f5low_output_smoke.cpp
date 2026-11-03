@@ -86,6 +86,11 @@ int main()
     CHECK(!F5Low::CheckAvailable(true, true, false).available);
     CHECK(strstr(F5Low::CheckAvailable(true, true, false).reason, "libxess_fg.dll") != nullptr);
     CHECK(F5Low::CheckAvailable(true, true, true).available);
+    // DLSS-G does not use libxess_fg.dll
+    CHECK(F5Low::CheckAvailable(true, true, false, false).available);
+    CHECK(!F5Low::CheckAvailable(true, false, false, false).available);
+    CHECK(!F5Low::CheckAvailable(false, true, false, false).available);
+    CHECK(F5Low::CheckAvailable(true, true, false, false).reason[0] == 0);
 
     // f5low.dll's status export
     CHECK(F5Low::RunStateFromCode(0) == F5Low::RunState::Undecided);
@@ -97,6 +102,10 @@ int main()
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unknown), "older") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::NotLoaded), "not loaded") != nullptr);
     CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::HandedOver), "Intel") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Own), "own frame generator") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Own, F5Low::Generator::Dlssg), "DLSS-G") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Unavailable, F5Low::Generator::Dlssg), "DLSS-G") != nullptr);
+    CHECK(strstr(F5Low::RunStateLabel(F5Low::RunState::Undecided, F5Low::Generator::Dlssg), "starting") != nullptr);
 
     if (fails == 0)
         printf("f5low_output_smoke: PASS\n");

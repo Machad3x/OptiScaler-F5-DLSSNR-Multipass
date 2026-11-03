@@ -63,6 +63,10 @@ static inline bool IsInsideWindowsDirectory(const std::string& path)
     return false;
 }
 
+// CheckLoad's answer for a module that must not load (LoadLibraryCheckW's "skip" marker): the callers fail the load
+static const HMODULE kBlockedLoad = (HMODULE) 1337;
+
+// nullptr: not handled, load as asked
 static inline HMODULE CheckLoad(const std::wstring& name)
 {
     do
@@ -86,7 +90,7 @@ static inline HMODULE CheckLoad(const std::wstring& name)
 
         // skip loading of dll
         if (moduleHandle == (HMODULE) 1337)
-            break;
+            return kBlockedLoad;
 
         if (moduleHandle != nullptr)
         {
@@ -447,6 +451,12 @@ HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
 
     auto result = CheckLoad(name);
 
+    if (result == kBlockedLoad)
+    {
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return NULL;
+    }
+
     if (result != nullptr)
         return ObserveLoadedXeFG(name, result);
 
@@ -468,6 +478,12 @@ HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
 
     auto result = CheckLoad(name);
 
+    if (result == kBlockedLoad)
+    {
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return NULL;
+    }
+
     if (result != nullptr)
         return ObserveLoadedXeFG(name, result);
 
@@ -487,6 +503,12 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
 #endif
 
     auto result = CheckLoad(name);
+
+    if (result == kBlockedLoad)
+    {
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return NULL;
+    }
 
     if (result != nullptr)
         return ObserveLoadedXeFG(name, result);
@@ -509,6 +531,12 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
 
     auto result = CheckLoad(name);
 
+    if (result == kBlockedLoad)
+    {
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return NULL;
+    }
+
     if (result != nullptr)
         return ObserveLoadedXeFG(name, result);
 
@@ -528,6 +556,12 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
 #endif
 
     auto result = CheckLoad(name);
+
+    if (result == kBlockedLoad)
+    {
+        SetLastError(ERROR_MOD_NOT_FOUND);
+        return NULL;
+    }
 
     if (result != nullptr)
         return ObserveLoadedXeFG(name, result);

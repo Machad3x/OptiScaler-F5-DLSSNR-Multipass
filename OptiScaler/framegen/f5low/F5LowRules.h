@@ -21,6 +21,11 @@ inline constexpr wchar_t kLibraryFile[] = L"f5low.dll";
 // f5low.dll reads this with GetEnvironmentVariable when it creates each context; it wins over its own ini.
 inline constexpr wchar_t kGeneratorEnv[] = L"XEFG_CUDA_GENERATOR";
 
+// The same choice under f5low.dll's current name, which it reads first; and the Streamline folder for the DLSS-G
+// generator.
+inline constexpr wchar_t kGeneratorEnvNew[] = L"F5LOW_GENERATOR";
+inline constexpr wchar_t kStreamlineDirEnv[] = L"F5LOW_STREAMLINE_DIR";
+
 // The full path of Intel's libxess_fg.dll that f5low.dll hands over to (and later builds on).
 inline constexpr wchar_t kIntelLibraryEnv[] = L"XEFG_CUDA_INTEL_LIBRARY";
 
@@ -122,7 +127,7 @@ inline int MaxInterpolations(unsigned reported, int configured)
     return library < cap ? library : cap;
 }
 
-// Whether F5Low can be offered, and why not (menu tooltip, log). XeFG Tensor needs CUDA, so an NVIDIA GPU.
+// Whether F5Low can be offered, and why not (menu tooltip, log). Both generators need an NVIDIA GPU (CUDA, DLSS-G).
 struct Availability
 {
     bool available = false;
@@ -131,14 +136,15 @@ struct Availability
 
 // intelLibraryFound: libxess_fg.dll next to OptiScaler.dll, at XeFGPath or next to f5low.dll. f5low.dll builds its
 // frame generator from it on first use and hands over to it where its own generator cannot run, so without it F5Low has
-// nothing to run on.
-inline Availability CheckAvailable(bool nvidia, bool libraryFound, bool intelLibraryFound = true)
+// nothing to run on. The DLSS-G generator does not use it (needsIntelLibrary false).
+inline Availability CheckAvailable(bool nvidia, bool libraryFound, bool intelLibraryFound = true,
+                                   bool needsIntelLibrary = true)
 {
     if (!nvidia)
-        return { false, "F5Low frame generation needs an NVIDIA GPU (XeFG Tensor runs on CUDA)" };
+        return { false, "F5Low frame generation needs an NVIDIA GPU (XeFG Tensor runs on CUDA, DLSS-G on RTX)" };
     if (!libraryFound)
         return { false, "f5low.dll is not in the plugins folder" };
-    if (!intelLibraryFound)
+    if (needsIntelLibrary && !intelLibraryFound)
         return { false, "libxess_fg.dll is missing (F5Low builds its frame generator from it)" };
     return { true, "" };
 }
@@ -160,8 +166,16 @@ inline RunState RunStateFromCode(int code)
 }
 
 // The FG page line for a state.
-inline const char* RunStateLabel(RunState state)
+inline const char* RunStateLabel(RunState state, Generator generator = Generator::XefgTensor)
 {
+    if (generator == Generator::Dlssg)
+    {
+        if (state == RunState::Own)
+            return "DLSS-G running";
+        if (state == RunState::Unavailable)
+            return "DLSS-G unavailable, no frames generated";
+    }
+
     switch (state)
     {
     case RunState::NotLoaded:
@@ -181,7 +195,8 @@ inline const char* RunStateLabel(RunState state)
 
 // F5Low with the DLSS-G generator runs a Streamline of its own, in plugins\f5low_streamline. A game's own
 // nvngx_dlssg.dll loaded next to it makes two DLSS-G instances, and the GPU faulted at level load in a game that did
-// so. So that file (any folder but f5low_streamline) is kept from loading, unless the game's DLSS-G is the FG Input.
+// so. So that file (any folder but f5low_streamline), and the driver-downloaded DLSS-G (...\models\dlssg\), are kept
+// from loading, unless the game's DLSS-G is the FG Input.
 inline constexpr wchar_t kPrivateStreamlineFolder[] = L"f5low_streamline";
 
 enum class GameDlssgLoad
@@ -208,10 +223,25 @@ inline std::wstring Normalised(std::wstring_view text)
 }
 } // namespace detail
 
+// Whether a path is a file inside a folder (any depth).
+inline bool IsInsideFolder(std::wstring_view path, std::wstring_view folderPath)
+{
+    const std::wstring file = detail::Normalised(path);
+    std::wstring folder = detail::Normalised(folderPath);
+    while (!folder.empty() && folder.back() == L'\\')
+        folder.pop_back();
+    if (folder.empty())
+        return false;
+    folder += L'\\';
+    return file.size() > folder.size() && file.compare(0, folder.size(), folder) == 0;
+}
+
 // modulePath: what the load asked for (a bare name or a full path). privateFolder: the full path of f5low_streamline,
-// empty when unknown (then every copy counts as the game's).
+// empty when unknown (then every copy counts as the game's). privateCopyLoaded: a module named nvngx_dlssg.dll is
+// already loaded from privateFolder, so a bare-name load gets that one from the loader and is let through.
 inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bool keepGameDlssg, bool fgInputDlssg,
-                                       std::wstring_view modulePath, std::wstring_view privateFolder)
+                                       std::wstring_view modulePath, std::wstring_view privateFolder,
+                                       bool privateCopyLoaded = false)
 {
     if (!f5lowOutput || generator != Generator::Dlssg || keepGameDlssg)
         return GameDlssgLoad::Allow;
@@ -220,18 +250,16 @@ inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bo
     const size_t slash = path.find_last_of(L'\\');
     const std::wstring_view file =
         slash == std::wstring::npos ? std::wstring_view(path) : std::wstring_view(path).substr(slash + 1);
-    if (file != L"nvngx_dlssg.dll" && file != L"nvngx_dlssg")
+    const bool dlssgFile = file == L"nvngx_dlssg.dll" || file == L"nvngx_dlssg";
+    const bool driverCopy = path.find(L"\\models\\dlssg\\") != std::wstring::npos; // the driver's OTA download
+    if (!dlssgFile && !driverCopy)
         return GameDlssgLoad::Allow;
 
-    if (!privateFolder.empty())
-    {
-        std::wstring folder = detail::Normalised(privateFolder);
-        while (!folder.empty() && folder.back() == L'\\')
-            folder.pop_back();
-        folder += L'\\';
-        if (path.size() > folder.size() && path.compare(0, folder.size(), folder) == 0)
-            return GameDlssgLoad::Allow; // f5low.dll's own copy
-    }
+    if (IsInsideFolder(path, privateFolder))
+        return GameDlssgLoad::Allow; // f5low.dll's own copy
+
+    if (dlssgFile && slash == std::wstring::npos && privateCopyLoaded)
+        return GameDlssgLoad::Allow; // a bare name: the loader hands out the loaded private copy
 
     return fgInputDlssg ? GameDlssgLoad::AllowWarn : GameDlssgLoad::Block;
 }
