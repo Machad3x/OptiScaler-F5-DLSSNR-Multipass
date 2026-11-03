@@ -550,9 +550,24 @@ int main()
             in.realNvapi = true;
             c = CapForGame(in);
             CHECK(c.outputHoldsCap && c.fps == 75.0f);
+            // ... no later rule divides it, XeLL's cap-per-rendered rule included
+            const bool xellCounts = in.xellCountsShown;
+            const bool xellHolds = in.xellHoldsCap;
+            in.xellCountsShown = false;
+            in.xellHoldsCap = true;
+            CHECK(CapForGame(in).fps == 75.0f);
+            in.xellCountsShown = xellCounts;
+            in.xellHoldsCap = xellHolds;
             in.realNvapi = false;
             CHECK(CapForGame(in).fps == 25.0f);
             in.realNvapi = real;
+            // ... Anti-Lag 2 is not Reflex: it still divides
+            const auto side = in.side;
+            in.side = XefgLatency::AntiLag2;
+            in.realNvapi = true;
+            CHECK(CapForGame(in).fps == 25.0f);
+            in.realNvapi = real;
+            in.side = side;
             in.driverMultipliesCap = false;
         }
 
