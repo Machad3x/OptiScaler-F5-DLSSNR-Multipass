@@ -1592,6 +1592,7 @@ void InputCommon::update()
         in.blocked = blocked;
         in.xefgShownPerRendered = native::lowlatency::XefgShownPerRendered();
         in.xellCountsShown = native::lowlatency::XellCountsShown();
+        in.driverMultipliesCap = native::lowlatency::DriverMultipliesReflexCap();
         in.dlssgFramesToGenerate = ReflexHooks::dlssgFrameCountToGenerate();
         in.outputIsXell = activeOutput == LowLatencyMode::XeLL;
         in.outputIsFrameCap = frameCapOutput;
