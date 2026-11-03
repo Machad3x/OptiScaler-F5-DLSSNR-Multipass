@@ -329,6 +329,7 @@ CapInputs FrameCapInputs(Api api)
     in.xefgGenerating = XefgGenerating();
     in.shownPerRendered = XefgShownPerRendered();
     in.xellCountsShown = XellCountsShown();
+    in.driverMultipliesCap = DriverMultipliesReflexCap();
     in.xefgVsync = state.fgPresentVsync.load(std::memory_order_relaxed);
     in.fakenvapiXell = in.method == Method::Fakenvapi && InputCommon::current_mode() == LowLatencyMode::XeLL;
 
@@ -1029,6 +1030,8 @@ XefgLatency XefgSide()
 }
 
 bool XellCountsShown() { return XeFGProxy::XellCountsShownFrames(); }
+
+bool DriverMultipliesReflexCap() { return XeFGProxy::DriverMultipliesReflexCap(); }
 
 uint32_t XefgShownPerRendered()
 {

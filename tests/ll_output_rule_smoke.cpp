@@ -542,6 +542,20 @@ int main()
         in.xefgShownPerRendered = 3;
         CHECK(CapForGame(in).fps == 25.0f);
 
+        // ... DLSS-G behind XeFG's API (xefg_cuda Generator=dlssg): the driver multiplies the interval by DLSS-G's
+        // multiplier itself, so the shown cap goes in; fakenvapi does not multiply
+        {
+            const bool real = in.realNvapi;
+            in.driverMultipliesCap = true;
+            in.realNvapi = true;
+            c = CapForGame(in);
+            CHECK(c.outputHoldsCap && c.fps == 75.0f);
+            in.realNvapi = false;
+            CHECK(CapForGame(in).fps == 25.0f);
+            in.realNvapi = real;
+            in.driverMultipliesCap = false;
+        }
+
         // ... not when the game's Reflex is off, nor for a game that only marks frames
         in.gameLowLatencyOn = false;
         CHECK(!CapForGame(in).outputHoldsCap);
