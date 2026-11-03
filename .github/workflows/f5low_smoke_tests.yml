@@ -5,23 +5,19 @@ on:
     paths:
       - 'OptiScaler/framegen/f5low/**'
       - 'OptiScaler/framegen/FGOutput.h'
+      - 'OptiScaler/framegen/xefg/XeFGFrameId.h'
       - 'OptiScaler/low_latency/**'
-      - 'OptiScaler/native/NativeLowLatencyRule.h'
-      - 'OptiScaler/native/XefgReflexRule.h'
-      - 'tests/f5low_*_smoke.cpp'
-      - 'tests/ll_output_rule_smoke.cpp'
-      - 'tests/nr_native_low_latency_smoke.cpp'
+      - 'OptiScaler/native/**'
+      - 'tests/**'
       - '.github/workflows/f5low_smoke_tests.yml'
   pull_request:
     paths:
       - 'OptiScaler/framegen/f5low/**'
       - 'OptiScaler/framegen/FGOutput.h'
+      - 'OptiScaler/framegen/xefg/XeFGFrameId.h'
       - 'OptiScaler/low_latency/**'
-      - 'OptiScaler/native/NativeLowLatencyRule.h'
-      - 'OptiScaler/native/XefgReflexRule.h'
-      - 'tests/f5low_*_smoke.cpp'
-      - 'tests/ll_output_rule_smoke.cpp'
-      - 'tests/nr_native_low_latency_smoke.cpp'
+      - 'OptiScaler/native/**'
+      - 'tests/**'
       - '.github/workflows/f5low_smoke_tests.yml'
   workflow_dispatch:
 

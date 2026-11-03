@@ -26,6 +26,10 @@ inline constexpr wchar_t kGeneratorEnv[] = L"XEFG_CUDA_GENERATOR";
 inline constexpr wchar_t kGeneratorEnvNew[] = L"F5LOW_GENERATOR";
 inline constexpr wchar_t kStreamlineDirEnv[] = L"F5LOW_STREAMLINE_DIR";
 
+// Set to 1 when the game's own DLSS-G is meant to stay loaded next to f5low's (KeepGameDlssg, or FG Input DLSSG);
+// f5low.dll refuses DLSS-G when it sees a foreign nvngx_dlssg otherwise.
+inline constexpr wchar_t kAllowForeignEnv[] = L"F5LOW_DLSSG_ALLOW_FOREIGN";
+
 // The full path of Intel's libxess_fg.dll that f5low.dll hands over to (and later builds on).
 inline constexpr wchar_t kIntelLibraryEnv[] = L"XEFG_CUDA_INTEL_LIBRARY";
 
@@ -203,6 +207,7 @@ enum class GameDlssgLoad
 {
     Allow,
     Block,
+    Redirect, // hand the load our private copy, which is already loaded
     AllowWarn // allowed, but two DLSS-G copies may fault: the game's DLSS-G is the FG Input
 };
 
@@ -238,7 +243,8 @@ inline bool IsInsideFolder(std::wstring_view path, std::wstring_view folderPath)
 
 // modulePath: what the load asked for (a bare name or a full path). privateFolder: the full path of f5low_streamline,
 // empty when unknown (then every copy counts as the game's). privateCopyLoaded: a module named nvngx_dlssg.dll is
-// already loaded from privateFolder, so a bare-name load gets that one from the loader and is let through.
+// already loaded from privateFolder: a bare-name load then gets that one from the loader (intended: it is let
+// through), and a load of the game's copy by path is redirected to it instead of failing.
 inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bool keepGameDlssg, bool fgInputDlssg,
                                        std::wstring_view modulePath, std::wstring_view privateFolder,
                                        bool privateCopyLoaded = false)
@@ -261,6 +267,9 @@ inline GameDlssgLoad GameDlssgLoadRule(bool f5lowOutput, Generator generator, bo
     if (dlssgFile && slash == std::wstring::npos && privateCopyLoaded)
         return GameDlssgLoad::Allow; // a bare name: the loader hands out the loaded private copy
 
-    return fgInputDlssg ? GameDlssgLoad::AllowWarn : GameDlssgLoad::Block;
+    if (fgInputDlssg)
+        return GameDlssgLoad::AllowWarn;
+
+    return privateCopyLoaded ? GameDlssgLoad::Redirect : GameDlssgLoad::Block;
 }
 } // namespace F5Low

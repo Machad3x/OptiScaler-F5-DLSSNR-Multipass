@@ -36,7 +36,10 @@ OptiScaler's `streamline` folder. f5low.dll runs NVIDIA's DLSS-G through a priva
 A game that ships its own `nvngx_dlssg.dll` would load a second DLSS-G next to it, and the GPU faulted at level load in
 a game that did. So while FG Output is F5Low and the generator is DLSS-G, OptiScaler keeps every `nvngx_dlssg.dll`
 outside `f5low_streamline` from loading and says so in the log ("kept the game's own nvngx_dlssg.dll from loading").
-`[F5Low] KeepGameDlssg=true` turns that off. It is also not done when FG Input is DLSSG, because the game's DLSS-G is
+When F5Low's own copy is already loaded, a load of the game's copy by path (or of the driver's) is handed that one
+instead, and a plain `nvngx_dlssg.dll` load by the game's Streamline gets it from the loader: the game shares F5Low's
+DLSS-G, which is intended. The block only applies when F5Low can run here (NVIDIA GPU, `f5low.dll`, Streamline and
+`nvngx_dlssg.dll` in OptiScaler's `streamline` folder). `[F5Low] KeepGameDlssg=true` turns the block off. It is also not done when FG Input is DLSSG, because the game's DLSS-G is
 the input then; the log warns that two copies may fault.
 
 ## Options

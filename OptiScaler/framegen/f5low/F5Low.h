@@ -58,8 +58,16 @@ void ApplyGenerator();
 // it can.
 std::string DlssgFilesMissing();
 
-// Whether the load of this module (a bare name or a full path) is the game's own nvngx_dlssg.dll that must stay out
-// while F5Low runs DLSS-G. Decided from the ini values latched at startup, so it holds before the game loads
-// Streamline. Never when f5low.dll is missing (F5Low cannot run then). Logs once per path.
-bool KeepsGameDlssgOut(const std::wstring& modulePath);
+// What a load of this module (a bare name or a full path) gets while F5Low runs DLSS-G: nullptr to load it as asked,
+// kBlockedLoad when it is the game's own (or the driver's) nvngx_dlssg that must stay out, or our private copy's handle
+// (a reference taken) when that one is already loaded: the game then shares it, as a bare-name load of nvngx_dlssg.dll
+// does through the loader (intended). Decided from the ini values latched at startup, so it holds before the game
+// loads Streamline. Never for dataOnly loads (AS_DATAFILE and the like), when F5Low cannot run here (NVIDIA GPU,
+// f5low.dll, Streamline and nvngx_dlssg.dll in OptiScaler's streamline folder), or while that is not known yet.
+// Logs once per path.
+HMODULE FilterGameDlssg(const std::wstring& modulePath, bool dataOnly);
+
+// LoadLibraryCheckW's answer for FilterGameDlssg's block. Not the 1337 of the older blocks (overlays and so on): only
+// this one fails the load on the kernel32 path too.
+inline const HMODULE kBlockedLoad = reinterpret_cast<HMODULE>(static_cast<uintptr_t>(1338));
 } // namespace F5Low

@@ -124,7 +124,7 @@ static HMODULE OurXeCopyFor(const char* what, LPCWSTR lpLibFullPath, HMODULE our
     return result;
 }
 
-HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibFullPath)
+HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibFullPath, bool dataOnly)
 {
     if (auto isolated = StreamlineHooks::LoadIsolatedGamePlugin(lpLibFullPath))
         return isolated;
@@ -150,9 +150,11 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
             return nullptr; // not handled: preserve the original loader/unlocker's path
     }
 
-    // F5Low runs DLSS-G in a Streamline of its own: a second nvngx_dlssg.dll, the game's, faults the GPU
-    if (F5Low::KeepsGameDlssgOut(libName))
-        return (HMODULE) 1337;
+    // F5Low runs DLSS-G in a Streamline of its own: a second nvngx_dlssg.dll, the game's, faults the GPU. It is kept
+    // out (kBlockedLoad), or the load is handed F5Low's copy when that one is loaded already. A bare-name load by the
+    // game's Streamline, once ours is loaded, gets our module from the loader: intended.
+    if (const auto filtered = F5Low::FilterGameDlssg(libName, dataOnly))
+        return filtered;
 
     std::filesystem::path localSlPath(Config::Instance()->MainDllPath.value());
     localSlPath = localSlPath / L"streamline"; // Hardcoded streamline folder

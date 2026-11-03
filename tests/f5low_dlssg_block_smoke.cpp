@@ -87,7 +87,17 @@ int main()
     CHECK(Rule(true, Generator::Dlssg, false, false, L"NVNGX_DLSSG", kPrivate, true) == GameDlssgLoad::Allow);
     CHECK(Rule(true, Generator::Dlssg, false, false, L"nvngx_dlssg.dll", kPrivate, false) == GameDlssgLoad::Block);
     // ... a full path to the game's copy is blocked even then
-    CHECK(Rule(true, Generator::Dlssg, false, false, kGamePath, kPrivate, true) == GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kGamePath, kPrivate, true) == GameDlssgLoad::Redirect);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kGamePath, kPrivate, false) == GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::Dlssg, false, false, L"c:/games/game/bin/NVNGX_DLSSG.DLL", kPrivate, true) ==
+          GameDlssgLoad::Redirect);
+    // ... FG Input DLSSG, KeepGameDlssg and another generator never redirect
+    CHECK(Rule(true, Generator::Dlssg, false, true, kGamePath, kPrivate, true) == GameDlssgLoad::AllowWarn);
+    CHECK(Rule(true, Generator::Dlssg, true, false, kGamePath, kPrivate, true) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::XefgTensor, false, false, kGamePath, kPrivate, true) == GameDlssgLoad::Allow);
+    CHECK(Rule(false, Generator::Dlssg, false, false, kGamePath, kPrivate, true) == GameDlssgLoad::Allow);
+    // ... a load of the private copy by path is plainly allowed
+    CHECK(Rule(true, Generator::Dlssg, false, false, kPrivateDll, kPrivate, true) == GameDlssgLoad::Allow);
     // ... and with FG Input DLSSG a bare name warns when ours is not loaded
     CHECK(Rule(true, Generator::Dlssg, false, true, L"nvngx_dlssg.dll", kPrivate, false) == GameDlssgLoad::AllowWarn);
 
@@ -95,7 +105,7 @@ int main()
     CHECK(Rule(true, Generator::Dlssg, false, false, kOtaPath) == GameDlssgLoad::Block);
     CHECK(Rule(true, Generator::Dlssg, false, false, L"c:/programdata/nvidia/ngx/models/DLSSG/x.dll") ==
           GameDlssgLoad::Block);
-    CHECK(Rule(true, Generator::Dlssg, false, false, kOtaPath, kPrivate, true) == GameDlssgLoad::Block);
+    CHECK(Rule(true, Generator::Dlssg, false, false, kOtaPath, kPrivate, true) == GameDlssgLoad::Redirect);
     CHECK(Rule(true, Generator::XefgTensor, false, false, kOtaPath) == GameDlssgLoad::Allow);
     CHECK(Rule(true, Generator::Dlssg, true, false, kOtaPath) == GameDlssgLoad::Allow);
     CHECK(Rule(true, Generator::Dlssg, false, true, kOtaPath) == GameDlssgLoad::AllowWarn);

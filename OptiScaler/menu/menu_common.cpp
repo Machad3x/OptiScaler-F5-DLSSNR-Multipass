@@ -4993,9 +4993,9 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                         {
                             ImGui::PushTextWrapPos(0.0f);
                             ImGui::TextColored(toneMapColor(ImVec4(1.0f, 0.8f, 0.0f, 1.f)),
-                                               "FG Input DLSSG keeps the game's own DLSS-G loaded next to F5Low's: two "
-                                               "DLSS-G copies can fault the GPU. Use FG Input Upscaler, or Frame "
-                                               "Generator XeFG Tensor");
+                                               "FG Input DLSSG: the game's own DLSS-G stays loaded next to F5Low's; "
+                                               "this has faulted the GPU in some games. Use FG Input Upscaler, or "
+                                               "Frame Generator XeFG Tensor");
                             ImGui::PopTextWrapPos();
                         }
                     }

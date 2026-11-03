@@ -19,6 +19,7 @@
 
 #include "Amdxc64_Hooks.h"
 #include <framegen/mfgunlock/MfgUnlock.h>
+#include <framegen/f5low/F5Low.h>
 #pragma intrinsic(_ReturnAddress)
 
 namespace
@@ -63,12 +64,15 @@ static inline bool IsInsideWindowsDirectory(const std::string& path)
     return false;
 }
 
-// CheckLoad's answer for a module that must not load (LoadLibraryCheckW's "skip" marker): the callers fail the load
-static const HMODULE kBlockedLoad = (HMODULE) 1337;
-
-// nullptr: not handled, load as asked
-static inline HMODULE CheckLoad(const std::wstring& name)
+// nullptr: not handled, load as asked. F5Low::kBlockedLoad: the F5Low DLSS-G block, the callers fail the load.
+// dwFlags: LoadLibraryEx's, 0 for the others
+static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags = 0)
 {
+    // Loads that only map the file as data are not a module start
+    const bool dataOnly =
+        (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) !=
+        0;
+
     do
     {
         if (State::Instance().isShuttingDown || LibraryLoadHooks::IsApiSetName(name))
@@ -86,11 +90,16 @@ static inline HMODULE CheckLoad(const std::wstring& name)
             }
         }
 
-        auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data());
+        auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), dataOnly);
+
+        if (moduleHandle == F5Low::kBlockedLoad)
+            return moduleHandle;
 
         // skip loading of dll
+        // Known inconsistency, left as it was: the older 1337 blocks (overlays and so on) are only enforced on the
+        // ntdll path (STATUS_DLL_NOT_FOUND); here the load still goes through, to reach the hooked ntdll anyway
         if (moduleHandle == (HMODULE) 1337)
-            return kBlockedLoad;
+            break;
 
         if (moduleHandle != nullptr)
         {
@@ -451,7 +460,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
 
     auto result = CheckLoad(name);
 
-    if (result == kBlockedLoad)
+    if (result == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
@@ -478,7 +487,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
 
     auto result = CheckLoad(name);
 
-    if (result == kBlockedLoad)
+    if (result == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
@@ -502,9 +511,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
     // LOG_TRACE("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
 
-    auto result = CheckLoad(name);
+    auto result = CheckLoad(name, dwFlags);
 
-    if (result == kBlockedLoad)
+    if (result == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
@@ -529,9 +538,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
     // LOG_TRACE("{}, caller: {}", nameA.data(), Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
 
-    auto result = CheckLoad(name);
+    auto result = CheckLoad(name, dwFlags);
 
-    if (result == kBlockedLoad)
+    if (result == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
@@ -555,9 +564,9 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
     // LOG_TRACE("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
 
-    auto result = CheckLoad(name);
+    auto result = CheckLoad(name, dwFlags);
 
-    if (result == kBlockedLoad)
+    if (result == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
