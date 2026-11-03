@@ -14,6 +14,7 @@
 #include <menu/menu_overlay_base.h>
 #include <framegen/nvngx/Nvngx_FG.h>
 #include <framegen/dlssg/DlssgTelemetry.h>
+#include <framegen/f5low/F5Low.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <proxies/Streamline_Proxy.h>
 #include <imgui/ImGuiNotify.hpp>
@@ -1373,6 +1374,17 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
     // Disable game's DLSSG when we are trying to create our own instance of DLSSG
     if (state.activeFgInput != FGInput::DLSSG && state.activeFgOutput == FGOutput::DLSSG)
     {
+        newOptions.mode = sl::DLSSGMode::eOff;
+        return o_slDLSSGSetOptions(viewport, newOptions);
+    }
+
+    // F5Low's DLSS-G generator: the game's Streamline runs F5Low's nvngx_dlssg (redirect), which f5low patches only
+    // when its own context starts, so the game's DLSS-G stays off (unless FG Input is DLSSG or KeepGameDlssg is set)
+    if (F5Low::ForcesGameDlssgOff())
+    {
+        static std::atomic<bool> loggedF5lowOff { false };
+        if (!loggedF5lowOff.exchange(true))
+            LOG_INFO("F5Low DLSS-G: the game's own DLSS-G is forced off (F5Low's DLSS-G generator makes the frames)");
         newOptions.mode = sl::DLSSGMode::eOff;
         return o_slDLSSGSetOptions(viewport, newOptions);
     }

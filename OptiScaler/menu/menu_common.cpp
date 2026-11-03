@@ -4956,6 +4956,10 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                           "Needs an NVIDIA RTX GPU, Streamline and nvngx_dlssg.dll in OptiScaler's streamline folder\n"
                           "The game's own nvngx_dlssg.dll is kept from loading (two DLSS-G copies fault the GPU)\n"
                           "Takes effect after a restart" },
+                        { F5Low::Generator::Intel, F5Low::GeneratorLabel(F5Low::Generator::Intel),
+                          "Intel's own XeFG makes the frames, F5Low paces them, up to 6x (unlocked in memory)\n"
+                          "Needs libxess_fg.dll and libxell.dll in OptiScaler's folder\n"
+                          "Takes effect after a restart" },
                     };
 
                     if (!config->F5LowGenerator.has_value())
@@ -4966,13 +4970,18 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                     const auto chosenGenerator = config->F5LowGenerator.value_or_default();
                     const auto runningGenerator = F5Low::LatchedGenerator();
 
-                    if (chosenGenerator == F5Low::Generator::Dlssg)
-                        ShowTooltip("What makes the generated frames in F5Low\nlibxess will follow\n\n"
+                    if (chosenGenerator == F5Low::Generator::Intel)
+                        ShowTooltip("What makes the generated frames in F5Low\n\n"
+                                    "XeFG (Intel library): Intel's own XeFG makes the frames, F5Low paces them, up "
+                                    "to 6x (unlocked in memory). Needs libxess_fg.dll and libxell.dll in "
+                                    "OptiScaler's folder. A change here takes effect after a restart.");
+                    else if (chosenGenerator == F5Low::Generator::Dlssg)
+                        ShowTooltip("What makes the generated frames in F5Low\n\n"
                                     "DLSS-G: NVIDIA's frame generation through a Streamline copy of its own, started "
                                     "with the game. A change here takes effect after a restart.");
                     else
                         ShowTooltip(
-                            "What makes the generated frames in F5Low\nlibxess will follow\n\n"
+                            "What makes the generated frames in F5Low\n\n"
                             "On every start f5low.dll builds this generator from libxess_fg.dll in memory, in the "
                             "background (about half a second); it starts by itself when ready. Nothing is written to "
                             "disk.\nIf it can't, it hands over to Intel's XeFG (up to 4x).\n"
@@ -4999,6 +5008,10 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                             ImGui::PopTextWrapPos();
                         }
                     }
+
+                    if (chosenGenerator == F5Low::Generator::Intel)
+                        if (const auto missing = F5Low::IntelFilesMissing(); !missing.empty())
+                            ImGui::TextColored(toneMapColor(ImVec4(1.0f, 0.2f, 0.2f, 1.0f)), "%s", missing.c_str());
 
                     const auto f5lowStatus = F5Low::QueryStatus();
                     ImGui::TextColored(toneMapColor(f5lowStatus.state == F5Low::RunState::Own

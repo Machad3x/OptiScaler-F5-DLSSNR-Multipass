@@ -221,6 +221,24 @@ void F5Low::ApplyGenerator()
     if (generator == Generator::Dlssg)
         if (const auto missing = DlssgFilesMissing(); !missing.empty())
             LOG_WARN("F5Low: {}", missing);
+
+    if (generator == Generator::Intel)
+        if (const auto missing = IntelFilesMissing(); !missing.empty())
+            LOG_WARN("F5Low: {}", missing);
+}
+
+std::string F5Low::IntelFilesMissing()
+{
+    std::error_code ec;
+    const std::filesystem::path folder(Config::Instance()->MainDllPath.value_or(L""));
+    return ::F5Low::IntelFilesMissing(!IntelLibraryPath().empty(),
+                                      std::filesystem::is_regular_file(folder / L"libxell.dll", ec));
+}
+
+bool F5Low::ForcesGameDlssgOff()
+{
+    const auto& s = Latched();
+    return ::F5Low::ForceGameDlssgOff(s.f5lowOutput, s.generator, s.inputDlssg, s.keepGameDlssg);
 }
 
 std::string F5Low::DlssgFilesMissing()

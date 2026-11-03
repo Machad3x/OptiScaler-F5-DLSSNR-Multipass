@@ -33,16 +33,17 @@ inline constexpr wchar_t kAllowForeignEnv[] = L"F5LOW_DLSSG_ALLOW_FOREIGN";
 // The full path of Intel's libxess_fg.dll that f5low.dll hands over to (and later builds on).
 inline constexpr wchar_t kIntelLibraryEnv[] = L"XEFG_CUDA_INTEL_LIBRARY";
 
-// [F5Low] FrameGenerator: XeFG Tensor and NVIDIA's DLSS-G. libxess is planned (f5low.dll's Generator=intel).
+// [F5Low] FrameGenerator: XeFG Tensor, NVIDIA's DLSS-G and Intel's own XeFG library.
 enum class Generator
 {
     XefgTensor, // f5low.dll's own generator on the tensor cores (Generator=own)
     Dlssg,      // NVIDIA DLSS-G through f5low.dll's private Streamline copy (Generator=dlssg)
+    Intel,      // Intel's own libxess_fg.dll + libxell.dll from OptiScaler's folder, paced by f5low (Generator=intel)
 };
 
 inline constexpr Generator kDefaultGenerator = Generator::XefgTensor;
 
-// nullopt: the default. valid turns false for text that is not a generator; a planned generator reads as not valid yet.
+// nullopt: the default. valid turns false for text that is not a generator.
 inline std::optional<Generator> ParseGenerator(std::string_view text, bool& valid)
 {
     const auto equals = [text](std::string_view word)
@@ -66,6 +67,8 @@ inline std::optional<Generator> ParseGenerator(std::string_view text, bool& vali
         return Generator::XefgTensor;
     if (equals("dlssg"))
         return Generator::Dlssg;
+    if (equals("intel"))
+        return Generator::Intel;
     valid = false;
     return std::nullopt;
 }
@@ -81,6 +84,8 @@ inline const char* GeneratorText(std::optional<Generator> generator)
         return "xefg_tensor";
     case Generator::Dlssg:
         return "dlssg";
+    case Generator::Intel:
+        return "intel";
     }
     return "auto";
 }
@@ -94,6 +99,8 @@ inline const char* GeneratorLabel(Generator generator)
         return "XeFG Tensor";
     case Generator::Dlssg:
         return "DLSS-G (NVIDIA)";
+    case Generator::Intel:
+        return "XeFG (Intel library)";
     }
     return "?";
 }
@@ -107,6 +114,8 @@ inline const wchar_t* GeneratorEnvValue(Generator generator)
         return L"own";
     case Generator::Dlssg:
         return L"dlssg";
+    case Generator::Intel:
+        return L"intel";
     }
     return L"own";
 }
@@ -120,6 +129,28 @@ inline const char* DlssgFilesMissing(bool interposerFound, bool dlssgFound)
     if (!dlssgFound)
         return "DLSS-G needs nvngx_dlssg.dll in OptiScaler's streamline folder";
     return "";
+}
+
+// The Intel generator runs Intel's own libxess_fg.dll and libxell.dll from OptiScaler's folder (any GPU vendor runs
+// them; f5low unlocks up to 6x in memory and paces the frames). Empty when both are there, else why not.
+inline const char* IntelFilesMissing(bool libxessFound, bool libxellFound)
+{
+    if (!libxessFound && !libxellFound)
+        return "XeFG (Intel library) needs libxess_fg.dll and libxell.dll in OptiScaler's folder";
+    if (!libxessFound)
+        return "XeFG (Intel library) needs libxess_fg.dll in OptiScaler's folder";
+    if (!libxellFound)
+        return "XeFG (Intel library) needs libxell.dll in OptiScaler's folder";
+    return "";
+}
+
+// Whether the game's own DLSS-G is forced off in slDLSSGSetOptions. F5Low's DLSS-G generator hands the game's
+// Streamline F5Low's nvngx_dlssg (redirect); on RTX 20-40 f5low patches that module only when its own context starts,
+// so the game must not turn its DLSS-G on. Not with FG Input DLSSG (it needs the game's options), nor with
+// KeepGameDlssg, and never for the other generators.
+inline bool ForceGameDlssgOff(bool f5lowOutput, Generator generator, bool fgInputDlssg, bool keepGameDlssg)
+{
+    return f5lowOutput && generator == Generator::Dlssg && !fgInputDlssg && !keepGameDlssg;
 }
 
 // The most interpolated frames F5Low offers: what its library reports (at least 1), capped by [XeFG]

@@ -67,6 +67,19 @@ int main()
 
     // FG Input DLSSG needs the game's DLSS-G: allowed, with a warning (also the bare name)
     CHECK(Rule(true, Generator::Dlssg, false, true, kGamePath) == GameDlssgLoad::AllowWarn);
+
+    // The Intel generator never blocks or redirects the game's nvngx_dlssg
+    CHECK(Rule(true, Generator::Intel, false, false, kGamePath) == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Intel, false, false, L"nvngx_dlssg.dll") == GameDlssgLoad::Allow);
+    CHECK(Rule(true, Generator::Intel, false, true, kGamePath) == GameDlssgLoad::Allow);
+
+    // The game's own DLSS-G is forced off only with F5Low + DLSS-G generator, FG Input not DLSSG, KeepGameDlssg off
+    CHECK(F5Low::ForceGameDlssgOff(true, Generator::Dlssg, false, false));
+    CHECK(!F5Low::ForceGameDlssgOff(true, Generator::Dlssg, true, false));  // FG Input DLSSG needs the game's options
+    CHECK(!F5Low::ForceGameDlssgOff(true, Generator::Dlssg, false, true));  // KeepGameDlssg
+    CHECK(!F5Low::ForceGameDlssgOff(false, Generator::Dlssg, false, false)); // FG Output not F5Low
+    CHECK(!F5Low::ForceGameDlssgOff(true, Generator::Intel, false, false));
+    CHECK(!F5Low::ForceGameDlssgOff(true, Generator::XefgTensor, false, false));
     CHECK(Rule(true, Generator::Dlssg, false, true, L"nvngx_dlssg.dll") == GameDlssgLoad::AllowWarn);
     CHECK(Rule(true, Generator::Dlssg, false, true,
                kPrivateDll) == GameDlssgLoad::Allow);
