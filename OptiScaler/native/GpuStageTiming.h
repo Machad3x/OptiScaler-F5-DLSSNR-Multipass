@@ -55,12 +55,12 @@ class Stats
         {
             const double ms = (double) (ticks[s + 1] - ticks[s]) * msPerTick;
             _sum[s] += ms;
-            _max[s] = (std::max)(_max[s], ms);
+            _max[s] = (std::max) (_max[s], ms);
         }
 
         const double total = (double) (ticks[kStamps - 1] - ticks[0]) * msPerTick;
         _totalSum += total;
-        _totalMax = (std::max)(_totalMax, total);
+        _totalMax = (std::max) (_totalMax, total);
         ++_frames;
     }
 

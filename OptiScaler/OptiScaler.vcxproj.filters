@@ -494,6 +494,9 @@
     <ClInclude Include="native\GpuStageTiming.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\FpsLog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="motion\OpticalFlow_Dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
