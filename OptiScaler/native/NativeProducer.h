@@ -157,7 +157,9 @@ class NativeProducer
     ID3D12QueryHeap* _timeHeap = nullptr;
     ID3D12Resource* _timeReadback[kRing] = {};
     bool _timePending[kRing] = {};
+    bool _timeConsumerRan[kRing] = {}; // the slot's frame ran the consumer (NR or the virtual upscaler)
     UINT64 _timeFrequency = 0;
+    ID3D12CommandQueue* _timeQueue = nullptr; // the queue _timeFrequency was read from (compared only, not held)
     gputiming::Stats _gpuStats;
     uint32_t _width = 0;
     uint32_t _height = 0;

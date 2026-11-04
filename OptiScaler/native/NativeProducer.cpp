@@ -132,6 +132,14 @@ bool NativeProducer::Init(ID3D12Device* device)
                                                        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                                        IID_PPV_ARGS(&readback))))
             {
+                // Untimed: nothing of it is kept
+                for (auto& made : _timeReadback)
+                    if (made != nullptr)
+                    {
+                        made->Release();
+                        made = nullptr;
+                    }
+
                 _timeHeap->Release();
                 _timeHeap = nullptr;
                 break;
@@ -246,14 +254,22 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         }
     }
 
-    // The timestamps of the frames the GPU has finished since, the same way
-    if (_timeFrequency == 0 && _timeHeap != nullptr && queue != nullptr &&
-        FAILED(queue->GetTimestampFrequency(&_timeFrequency)))
-        _timeFrequency = 0;
-
-    for (UINT s = 0; s < kRing; ++s)
+    // The timestamps of the frames the GPU has finished since, the same way. The tick rate is the queue's: read again
+    // when the producer runs on another one.
+    if (_timeHeap != nullptr && queue != nullptr && queue != _timeQueue)
     {
-        if (!_timePending[s] || _fence->GetCompletedValue() < _values[s])
+        _timeQueue = queue;
+
+        if (FAILED(queue->GetTimestampFrequency(&_timeFrequency)))
+            _timeFrequency = 0;
+    }
+
+    // A removed device's fence reads UINT64_MAX: nothing it reports as done was really timed
+    const UINT64 completed = _fence->GetCompletedValue();
+
+    for (UINT s = 0; s < kRing && completed != UINT64_MAX; ++s)
+    {
+        if (!_timePending[s] || completed < _values[s])
             continue;
 
         _timePending[s] = false;
@@ -266,7 +282,7 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
             std::copy(data, data + gputiming::kStamps, ticks.begin());
             const D3D12_RANGE none { 0, 0 };
             _timeReadback[s]->Unmap(0, &none);
-            _gpuStats.Add(ticks, _timeFrequency);
+            _gpuStats.Add(ticks, _timeFrequency, _timeConsumerRan[s]);
         }
     }
 
@@ -503,6 +519,7 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         _values[slot] = _signalled;
         _cutPending[slot] = cutCopied;
         _timePending[slot] = timed;
+        _timeConsumerRan[slot] = result.nativeRan;
         ++_frame;
 
         output.done = SyncPoint { _fence, _signalled };

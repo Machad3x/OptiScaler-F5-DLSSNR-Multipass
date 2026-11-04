@@ -4,15 +4,11 @@
 
 #include <native/Dx12FrameSource.h>
 #include <native/FlowDiagnosticUi.h>
-#include <native/FpsLog.h>
 #include <native/NativeDriver.h>
 
 #include <Config.h>
 #include <dlssnr/DlssNr_StreamlinePicture.h>
 #include <dlssnr/DlssNrFeature_Dx12.h>
-#include <dlssnr/DlssNr_NativeMode.h>
-#include <framegen/FGOutput.h>
-#include <framegen/xefg/XeFG_ShownRate.h>
 
 #include <menu/menu_overlay_dx.h>
 #include <resource_tracking/GenericDepth_Dx12.h>
@@ -29,67 +25,6 @@ namespace
 
 native::NativeDriver g_driver("Native motion", "");
 native::Dx12FrameSource g_source;
-native::fpslog::Tracker g_fps;
-
-const char* ModeName(DlssNrNativeMode::Shown shown)
-{
-    switch (shown)
-    {
-    case DlssNrNativeMode::Shown::NrOnly:
-        return "NR only";
-    case DlssNrNativeMode::Shown::NrAndFrameGeneration:
-        return "NR + frame generation";
-    case DlssNrNativeMode::Shown::MotionOnly:
-        return "motion only";
-    default:
-        return "Off";
-    }
-}
-
-const char* OutputName(FGOutput output)
-{
-    switch (output)
-    {
-    case FGOutput::FSRFG:
-        return "FSR FG";
-    case FGOutput::DLSSG:
-        return "DLSS-G";
-    case FGOutput::XeFG:
-        return "XeFG";
-    case FGOutput::F5Low:
-        return "F5Low";
-    default:
-        return "none";
-    }
-}
-
-// The frame rate after each change of a setting that moves it (native/FpsLog.h), whatever the Optical F5Low mode: one
-// game present here.
-void LogFps()
-{
-    auto* config = Config::Instance();
-    auto& state = State::Instance();
-    native::fpslog::Settings settings;
-    settings.nr = config->DlssNrEnabled.value_or_default();
-    settings.modelScale = config->DlssNrWorkingScale.value_or_default();
-    settings.upscalerPass = config->DlssNrNativeUpscalerPass.value_or_default();
-    settings.mode = ModeName(DlssNrNativeMode::FromKeys(
-        { config->DlssNrNativeDepthFinder.value_or_default(), config->DlssNrNativeMotion.value_or_default(),
-          config->DlssNrNativeInput.value_or_default(), config->DlssNrNativeUpscaler.value_or_default() }));
-    settings.fgOutput = OutputName(state.activeFgOutput);
-    auto* fg = state.currentFG;
-    settings.fgMultiplier =
-        fg != nullptr && fg->IsActive() && !fg->IsPaused() ? fg->GetInterpolatedFrameCount() + 1 : 1;
-    settings.capFps = config->FramerateLimit.value_or_default();
-
-    std::optional<uint64_t> shown;
-
-    if (UsesXeFGApi(state.activeFgOutput) && fg != nullptr)
-        shown = state.xefgShown.load(std::memory_order_relaxed) >> xefg::kShownPresentBits;
-
-    if (auto line = g_fps.OnPresent(Util::MillisecondsNow(), settings, shown, xefg::kShownFrameMask))
-        LOG_INFO("{}", *line);
-}
 
 // Under frame generation the menu's present hook sees the real swap chain after frame generation ran, on its presenter's
 // thread and queue; FGPresent drives the step instead. The menu's hook stands aside while FGPresent ran within this many of
@@ -181,8 +116,6 @@ ImTextureID FlowTexture(ID3D12Resource* texture)
 
 void RunFrame(IDXGISwapChain* swapChain, ID3D12CommandQueue* queue, ID3D12Device* device)
 {
-    LogFps();
-
     if (!g_driver.Enabled())
         return;
 
