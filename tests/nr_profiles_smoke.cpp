@@ -74,9 +74,22 @@ static void Keys()
     Check(IsKept("Passes") && IsKept("passes") && IsKept("PASSES"), "keys match case-insensitively (as the ini does)");
     Check(IsKept("Pass4Style") && IsKept("Pass30AutoMask") && IsKept("Pass17LocalTone"), "passes 4-30 kept");
     Check(!IsKept("Pass31Style") && !IsKept("Pass3x") && !IsKept("Pass4") && !IsKept("Pass04Style"), "not a pass key");
-    Check(IsKept("WhitePointSource") && IsKept("NativeMotion") && IsKept("ColourEncoding") &&
-              IsKept("FinishedPicture") && IsKept("SpatialCenterX"),
+    Check(IsKept("WhitePointSource") && IsKept("NativeDepthWidth") && IsKept("NativeMotionProfile") &&
+              IsKept("ColourEncoding") && IsKept("FinishedPicture") && IsKept("SpatialCenterX"),
           "the game's own settings kept (a profile is shared for one game)");
+    for (const char* mode :
+         { "NativeDepthFinder", "NativeMotion", "NativeInput", "NativeUpscaler", "NativeFrameGenerationOnly" })
+        Check(!IsKept(mode) && IsLeftOut(mode), std::string("Optical F5Low mode key left out: ") + mode);
+    Check(Filter({ { "NativeMotion", "false" }, { "NativeUpscaler", "false" }, { "Passes", "2" } }).size() == 1,
+          "an older profile's mode keys are not read");
+
+    const Section other { { "Passes", "3" }, { "NativeDepthWidth", "1280" }, { "NativeMotionProfile", "anime" } };
+    const Section here { { "Passes", "1" }, { "NativeDepthWidth", "auto" }, { "NativeDepthOffsetX", "4" },
+                         { "NativeMotion", "true" } };
+    const Section mixed = KeepNative(other, here);
+    Check(mixed.at("Passes") == "3" && mixed.at("NativeDepthWidth") == "auto" && mixed.at("NativeDepthOffsetX") == "4" &&
+              !mixed.count("NativeMotionProfile") && !mixed.count("NativeMotion"),
+          "another game's profile: this game's Optical F5Low tuning, the profile's look");
     Check(!IsKept("Enabled") && !IsKept("MultiViewScreens") && !IsKept("ToggleKey") && !IsKept("DisplayPaperWhiteNits") && !IsKept("HoldFrame") &&
               !IsKept("NativeDebugView") && !IsKept("Compare"),
           "the player's own and session keys left out");
@@ -84,7 +97,8 @@ static void Keys()
 
     Check(SameGame("NBA2K27.exe", "nba2k27.EXE") && SameGame("", "x.exe") && !SameGame("Cyberpunk2077.exe", "x.exe"),
           "same game by exe name, a file without one counts as this game's");
-    Check(NativeChanged({ { "NativeMotion", "true" } }, {}) && !NativeChanged({ { "NativeMotion", "auto" } }, {}) &&
+    Check(NativeChanged({ { "NativeDepthWidth", "1280" } }, {}) &&
+              !NativeChanged({ { "NativeDepthWidth", "auto" } }, {}) && !NativeChanged({ { "NativeMotion", "true" } }, {}) &&
               !NativeChanged({ { "Passes", "3" } }, { { "Passes", "2" } }),
           "only a Native key change counts as an Optical F5Low change");
 

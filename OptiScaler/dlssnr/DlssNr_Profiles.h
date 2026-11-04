@@ -6,10 +6,11 @@
 //
 // A profile is made to be shared for one game: it keeps how NR looks and what it costs (what the preset rows set,
 // passes, colour, output, input style, reuse, LUT) and the game's own settings (exposure, colour encoding, Finished
-// Picture, Optical F5Low, edge compression). It records the game it was saved in, and the menu warns when it is loaded
-// in another. It leaves out what is the player's own or only for the session: on/off, the toggle key, the display's
-// paper white, debug and compare views, diagnostics. Every key Config::SaveIni writes is in exactly one of the two
-// lists; the test fails on a new key that is in neither.
+// Picture, Optical F5Low tuning, edge compression). It records the game it was saved in, and the menu warns when it is
+// loaded in another; there the Optical F5Low tuning stays as it is (KeepNative). It leaves out what is the player's own
+// or only for the session: on/off, the toggle key, the display's paper white, the Optical F5Low mode, debug and compare
+// views, diagnostics. Every key Config::SaveIni writes is in exactly one of the two lists; the test fails on a new key
+// that is in neither.
 
 #include <algorithm>
 #include <cctype>
@@ -139,9 +140,8 @@ inline constexpr std::string_view kKeptKeys[] = {
     "ScanInverted",
     "ScanMeter",
     "ColourEncoding",
-    // the game's: Optical F5Low, the native path and the Vulkan route (a change may need a restart: the pages say
-    // which)
-    "NativeDepthFinder",
+    // the game's: Optical F5Low tuning, the native path and the Vulkan route (a change may need a restart: the pages
+    // say which). The mode itself is left out.
     "NativeDepthVkCopyUsage",
     "NativeDepthResolveInList",
     "NativeDxvkVulkan",
@@ -154,11 +154,7 @@ inline constexpr std::string_view kKeptKeys[] = {
     "NativeDepthOffsetY",
     "NativeMotionProfile",
     "NativeMotionProfileCustom",
-    "NativeMotion",
-    "NativeInput",
-    "NativeUpscaler",
     "NativeUpscalerPass",
-    "NativeFrameGenerationOnly",
     "NativeLowLatencyBoost",
     "NativeLowLatencyDxvkGameThread",
     // the game's: edge compression, laid out for its picture
@@ -182,6 +178,14 @@ inline constexpr std::string_view kLeftOutKeys[] = {
     // the rig's, not the look: which view of a multi-monitor layout NR works on
     "MultiViewScreens",
     "SecondaryFeatures",
+    // how OptiScaler is hooked into the game, not the look: the Optical F5Low mode (Off / NR only / NR + frame
+    // generation) and the game's-upscaler route. A profile saved with the mode off would otherwise turn off the
+    // upscaler and frame generation the mode feeds; one from an older build still has them, and they are not read.
+    "NativeDepthFinder",
+    "NativeMotion",
+    "NativeInput",
+    "NativeUpscaler",
+    "NativeFrameGenerationOnly",
     // old keys kept for older builds: NativeLowLatency is [Framerate] LowLatencyInput's, InputStyle and
     // InputStyleStrength are written from the input style card (whose keys are kept), WhitePointFromExposure became
     // WhitePointSource
@@ -439,5 +443,25 @@ inline bool NativeChanged(const Section& before, const Section& after)
     };
 
     return !Same(native(before), native(after));
+}
+
+inline bool IsNativeKey(std::string_view key) { return key.size() >= 6 && EqualNoCase(key.substr(0, 6), "Native"); }
+
+// A profile saved in another game, with this game's Optical F5Low tuning in place of its own: depth size, offsets and
+// motion profile are laid out for the game they were found in.
+inline Section KeepNative(const Section& profile, const Section& current)
+{
+    Section out;
+    for (const auto& [key, value] : profile)
+    {
+        if (!IsNativeKey(key))
+            out.emplace(key, value);
+    }
+    for (const auto& [key, value] : current)
+    {
+        if (IsNativeKey(key) && IsKept(key))
+            out.emplace(key, value);
+    }
+    return out;
 }
 } // namespace DlssNrProfiles
