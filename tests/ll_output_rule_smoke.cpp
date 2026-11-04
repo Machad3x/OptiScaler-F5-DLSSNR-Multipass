@@ -542,6 +542,35 @@ int main()
         in.xefgShownPerRendered = 3;
         CHECK(CapForGame(in).fps == 25.0f);
 
+        // ... DLSS-G behind XeFG's API (xefg_cuda Generator=dlssg): the driver multiplies the interval by DLSS-G's
+        // multiplier itself, so the shown cap goes in; fakenvapi does not multiply
+        {
+            const bool real = in.realNvapi;
+            in.driverMultipliesCap = true;
+            in.realNvapi = true;
+            c = CapForGame(in);
+            CHECK(c.outputHoldsCap && c.fps == 75.0f);
+            // ... no later rule divides it, XeLL's cap-per-rendered rule included
+            const bool xellCounts = in.xellCountsShown;
+            const bool xellHolds = in.xellHoldsCap;
+            in.xellCountsShown = false;
+            in.xellHoldsCap = true;
+            CHECK(CapForGame(in).fps == 75.0f);
+            in.xellCountsShown = xellCounts;
+            in.xellHoldsCap = xellHolds;
+            in.realNvapi = false;
+            CHECK(CapForGame(in).fps == 25.0f);
+            in.realNvapi = real;
+            // ... Anti-Lag 2 is not Reflex: it still divides
+            const auto side = in.side;
+            in.side = XefgLatency::AntiLag2;
+            in.realNvapi = true;
+            CHECK(CapForGame(in).fps == 25.0f);
+            in.realNvapi = real;
+            in.side = side;
+            in.driverMultipliesCap = false;
+        }
+
         // ... not when the game's Reflex is off, nor for a game that only marks frames
         in.gameLowLatencyOn = false;
         CHECK(!CapForGame(in).outputHoldsCap);

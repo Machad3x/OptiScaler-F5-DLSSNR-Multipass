@@ -14,6 +14,7 @@
 #include <Util.h>
 #include <menu/menu_common.h>
 #include <menu/MenuPages.h>
+#include <menu/MenuCard.h>
 #include <resource_tracking/GenericDepth_Dx12.h>
 #include <resource_tracking/GenericDepth_Dx11.h>
 #include <native/NativeDriverDx12.h>
@@ -28,6 +29,7 @@
 #include <nvapi/fakenvapi.h>
 
 #include <imgui/imgui.h>
+#include <imgui/imgui_internal.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <shaders/dlssnr/DlssNr_GameScale.h>
 #include <shaders/dlssnr/DlssNr_Spatial.h>
@@ -44,6 +46,7 @@
 #include "DlssNr_NativeMode.h"
 #include "DlssNr_TierPlacement.h"
 #include "DlssNr_LutStatus.h"
+#include "DlssNr_LutChain.h"
 #include "DlssNrDetailReuseHost.h"
 
 #include <string>
@@ -513,27 +516,8 @@ static void HelpMarker(const char* tip)
     }
 }
 
-// A section of a Neural Rendering page as a card (ScopedCollapsingHeader: border, padding, themed header), with the
-// page's control width inside it: a card is a child window, which starts with its own default item width.
-class NrCard
-{
-  public:
-    NrCard(const char* label, float menuResScale, bool open = true)
-        : _header(label, open ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None)
-    {
-        ImGui::PushItemWidth(220.0f * menuResScale);
-    }
-
-    NrCard(const NrCard&) = delete;
-    NrCard& operator=(const NrCard&) = delete;
-
-    ~NrCard() { ImGui::PopItemWidth(); }
-
-    bool IsOpen() const { return _header.IsHeaderOpen(); }
-
-  private:
-    ScopedCollapsingHeader _header;
-};
+// The Neural Rendering pages' cards are the shared menu cards (menu/MenuCard.h).
+using NrCard = MenuCard;
 
 // A slider that only writes its value when the handle is released.
 //
@@ -1359,6 +1343,9 @@ static void RenderStatusLine(const NrCommon& nr)
     else if (views.active && ms.has_value())
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Running on %u of %zu views - %.2f ms elapsed (last view)",
                            DlssNr::Views::CountRuns(views.mask), views.count, ms.value());
+    else if (!nr.vulkan && DlssNr::StoodDownForRebuilds())
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                           "Stood down: the game keeps switching formats or sizes. Runs again once it settles.");
     else if (!DlssNr::IsRunning() && !nr.vulkan)
         ImGui::TextDisabled("NR is not running. See Status & Presets.");
     else if (ms.has_value())
@@ -1366,6 +1353,17 @@ static void RenderStatusLine(const NrCommon& nr)
                            nr.vulkan ? " natively on Vulkan" : "", ms.value());
     else
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Running.");
+
+    if (!nr.vulkan && nr.enabled)
+    {
+        unsigned aside = 0, own = 0;
+        DlssNr::GameFeatureStatus(aside, own);
+        if (aside + own > 0)
+            ImGui::TextDisabled("The game uses %u more DLSS feature(s) (a preview or second camera): %s.", aside + own,
+                                own == 0     ? "left as they are"
+                                : aside == 0 ? "each with a model of its own"
+                                             : "some with a model of their own, the rest left as they are");
+    }
 }
 
 // The mode in effect, as the Optical F5Low page and the summary line name it.
@@ -3355,7 +3353,7 @@ static void RenderLutSection(Config* config)
     const std::string current = config->DlssNrLutFile.value_or_default();
     const std::string preview = current.empty() ? "(none)" : std::filesystem::path(current).filename().string();
 
-    if (ImGui::BeginCombo("LUT", preview.c_str()))
+    if (ImGui::BeginCombo("Input LUT", preview.c_str()))
     {
         const bool noneSelected = current.empty();
         if (ImGui::Selectable("(none)", noneSelected))
@@ -3380,7 +3378,8 @@ static void RenderLutSection(Config* config)
         lutFiles = ScanLutFolder();
 
     HelpMarker("Applies a colour grade (.cube LUT) to the picture NR works from. Put files in OptiScaler\\LUTs and "
-               "press Rescan. Strong grades also affect exposure, skin detection and reuse.");
+               "press Rescan. Strong grades also affect exposure, skin detection and reuse. To grade NR's result "
+               "instead, use the F5LUT page.");
 
     if (!current.empty())
     {
@@ -3423,6 +3422,286 @@ static void RenderLutSection(Config* config)
             ImGui::PopStyleColor();
         }
         StatusSlotEnd(lutSlot, 5);
+        ImGui::TreePop();
+    }
+}
+
+// The Look input combo's text: the setting, and for Auto what it found ("Auto: ARRI LogC4 AWG4 (header)"); a layer that
+// is handed its space by the LUT above, or a space it cannot be handed, says so. `found` is null before a bake reports.
+static std::string LookInputPreview(int setting, const DlssNr::LayerInput* found)
+{
+    using DlssNr::LutSpace;
+    const bool automatic = setting == DlssNr::kLookInputAuto;
+    std::string text = automatic                            ? "Auto"
+                       : setting == (int) LutSpace::Display ? "None (the picture)"
+                                                            : DlssNr::LutSpaceName((LutSpace) setting);
+    if (found == nullptr)
+        return text;
+
+    if (automatic)
+        text += found->space == LutSpace::Display
+                    ? std::string(": the picture")
+                    : std::string(": ") + DlssNr::LutSpaceName(found->space) +
+                          (found->gamut != found->space ? std::string(" in ") + DlssNr::LutGamutName(found->gamut)
+                                                        : std::string()) +
+                          (*found->from ? std::string(" (") + found->from + ")" : "");
+    if (found->space != LutSpace::Display && !found->converted)
+        text += found->given == found->space ? ", from the LUT above"
+                                             : std::string(", but gets ") + DlssNr::LutSpaceName(found->given);
+    else if (found->space == LutSpace::Display && found->given != LutSpace::Display)
+        text += std::string(", but gets ") + DlssNr::LutSpaceName(found->given);
+    return text;
+}
+
+// F5LUT: a stack of up to four .cube LUTs graded onto the picture NR returns, or the upscaler's output with NR off
+// (memory/plans/2026-10-31-nr-lut-chain.md, 2026-11-01-f5lut-image-page.md). Unlike the Input LUT the model never sees
+// this grade. The settings are dense (an empty slot is an absent layer), so every
+// edit rewrites the list from its non-empty layers and the rows are always the layers in order plus, at most, one empty
+// row waiting for a file.
+static void RenderPostLutSection(Config* config)
+{
+    static std::vector<std::filesystem::path> lutFiles = ScanLutFolder();
+    static bool addRow = false; // an empty row after the last layer, shown until it gets a file or is removed
+
+    constexpr int kMax = Config::kPostLutLayers;
+    struct Layer
+    {
+        std::string file;
+        float strength;
+        int input; // look input, DlssNr::kLookInputAuto or a DlssNr::LutSpace
+    };
+    std::vector<Layer> layers;
+    for (int i = 0; i < kMax; ++i)
+        if (!config->DlssNrPostLutFile[i].value_or_default().empty())
+            layers.push_back({ config->DlssNrPostLutFile[i].value_or_default(),
+                               config->DlssNrPostLutStrength[i].value_or_default(),
+                               config->DlssNrPostLutInput[i].value_or_default() });
+
+    const auto store = [&]()
+    {
+        for (int i = 0; i < kMax; ++i)
+        {
+            config->DlssNrPostLutFile[i] = i < (int) layers.size() ? layers[i].file : std::string();
+            config->DlssNrPostLutStrength[i] = i < (int) layers.size() ? layers[i].strength : 1.0f;
+            config->DlssNrPostLutInput[i] = i < (int) layers.size() ? layers[i].input : DlssNr::kLookInputAuto;
+        }
+    };
+    const auto status = DlssNr::ReadPostLutStatus();
+
+    // The empty row follows a layer, so it goes with the last one (and at the cap there is no room for it).
+    if (addRow && (layers.empty() || (int) layers.size() >= kMax))
+        addRow = false;
+
+    const int rows = std::max(1, (int) layers.size() + (addRow ? 1 : 0));
+    int removeRow = -1;
+    int moveRow = -1;
+    int moveBy = 0;
+
+    // Every row's buttons start in one column, past the widest label any row can have, and a button that does not apply
+    // to a row (up on the first, down on the last) is shown disabled rather than left out, so nothing shifts between
+    // rows. The move buttons are drawn arrows (the menu font has no ▲ ▼ glyphs), as tall as the small x beside them.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float buttonsX = ImGui::GetCursorPosX() + ImGui::CalcItemWidth() + style.ItemInnerSpacing.x +
+                           ImGui::CalcTextSize("LUT strength 4").x + style.ItemSpacing.x;
+    const ImVec2 arrowSize(ImGui::GetFontSize() + style.FramePadding.x * 2.0f, ImGui::GetFontSize());
+
+    for (int row = 0; row < rows; ++row)
+    {
+        const bool filled = row < (int) layers.size();
+        const std::string id = std::to_string(row + 1);
+        const std::string current = filled ? layers[row].file : std::string();
+        const std::string preview = current.empty() ? "(none)" : std::filesystem::path(current).filename().string();
+        // "###": the ID stays the row's when its label gains a number.
+        const std::string label = (rows > 1 ? "Post LUT " + id : std::string("Post LUT")) + "###postlut" + id;
+
+        if (ImGui::BeginCombo(label.c_str(), preview.c_str()))
+        {
+            if (ImGui::Selectable("(none)", current.empty()) && filled)
+                removeRow = row;
+
+            for (const auto& path : lutFiles)
+            {
+                const std::string pathStr = path.string();
+                if (ImGui::Selectable(path.filename().string().c_str(), pathStr == current))
+                {
+                    if (filled && layers[row].file != pathStr)
+                    {
+                        // a hand-picked input belonged to the old file
+                        layers[row].file = pathStr;
+                        layers[row].input = DlssNr::kLookInputAuto;
+                    }
+                    else
+                        layers.push_back({ pathStr, 1.0f, DlssNr::kLookInputAuto });
+                    addRow = false;
+                    store();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (filled)
+        {
+            ImGui::SameLine(buttonsX);
+            ImGui::BeginDisabled(row == 0);
+            if (ImGui::ArrowButtonEx(("##postlutup" + id).c_str(), ImGuiDir_Up, arrowSize))
+            {
+                moveRow = row;
+                moveBy = -1;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            ImGui::BeginDisabled(row + 1 >= (int) layers.size());
+            if (ImGui::ArrowButtonEx(("##postlutdown" + id).c_str(), ImGuiDir_Down, arrowSize))
+            {
+                moveRow = row;
+                moveBy = 1;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            if (ImGui::SmallButton(("x##postlutremove" + id).c_str()))
+                removeRow = row;
+        }
+        else if (addRow)
+        {
+            ImGui::SameLine(buttonsX);
+            if (ImGui::SmallButton(("x##postlutremove" + id).c_str()))
+                addRow = false;
+        }
+
+        if (filled)
+        {
+            // What the layer reads: Auto shows what it found, from the last bake.
+            const bool reported = status.seen && status.loaded && layers[row].strength > 0.0f;
+            const std::string inputPreview =
+                LookInputPreview(layers[row].input, reported ? &status.inputs[row] : nullptr);
+            const std::string inputLabel =
+                (rows > 1 ? "Look input " + id : std::string("Look input")) + "###postlutinput" + id;
+            if (ImGui::BeginCombo(inputLabel.c_str(), inputPreview.c_str()))
+            {
+                for (int choice = DlssNr::kLookInputAuto; choice < (int) DlssNr::LutSpace::Count; ++choice)
+                {
+                    const char* name = choice == DlssNr::kLookInputAuto ? "Auto"
+                                       : choice == (int) DlssNr::LutSpace::Display
+                                           ? "None (the picture)"
+                                           : DlssNr::LutSpaceName((DlssNr::LutSpace) choice);
+                    if (ImGui::Selectable(name, layers[row].input == choice))
+                    {
+                        layers[row].input = choice;
+                        store();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            float strength = layers[row].strength;
+            const std::string sliderLabel =
+                (rows > 1 ? "LUT strength " + id : std::string("LUT strength")) + "###postlutstrength" + id;
+            if (ImGui::SliderFloat(sliderLabel.c_str(), &strength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                layers[row].strength = strength;
+                store();
+            }
+
+            ImGui::SameLine(buttonsX);
+            if (ImGui::SmallButton(("Reset##postlutstrengthreset" + id).c_str()))
+            {
+                layers[row].strength = 1.0f;
+                store();
+            }
+        }
+
+        // A little air between layers, so each combo + slider pair reads as one.
+        if (row + 1 < rows)
+            ImGui::Spacing();
+    }
+
+    if (removeRow >= 0 && removeRow < (int) layers.size())
+    {
+        layers.erase(layers.begin() + removeRow);
+        store();
+    }
+    else if (moveRow >= 0 && moveRow + moveBy >= 0 && moveRow + moveBy < (int) layers.size())
+    {
+        std::swap(layers[moveRow], layers[moveRow + moveBy]);
+        store();
+    }
+
+    if (layers.size() > 1)
+        ImGui::TextDisabled("Applied top to bottom.");
+
+    // One toolbar under the list: Add LUT (when there is a layer and room for another), Rescan, and the help.
+    if (!layers.empty() && (int) layers.size() < kMax && !addRow)
+    {
+        if (ImGui::SmallButton("Add LUT##postlut"))
+            addRow = true;
+        ImGui::SameLine();
+    }
+    if (ImGui::SmallButton("Rescan##postlut"))
+        lutFiles = ScanLutFolder();
+    ImGui::SameLine();
+    HelpMarker("Applies a colour grade (.cube LUT) to the game's picture. Put files in OptiScaler\\LUTs and press "
+               "Rescan.\n"
+               "With Neural Rendering on, it grades the picture NR returns, so the model never sees it and exposure, "
+               "skin detection and reuse are not affected. With NR before Super Resolution the grade is applied before "
+               "the upscaler; in Finished Picture mode it grades the finished picture, UI included (D3D12; Vulkan does "
+               "not run that mode). With NR off, it grades the OptiScaler upscaler's output, before the game draws its "
+               "HUD (needs an OptiScaler upscaler).\n"
+               "Add LUT adds another after the last one, up to four. They are applied top to bottom (the arrows move a "
+               "layer, x removes it); each strength blends that layer only. Strong grades stack up.\n"
+               "Look input: a LUT made for a camera log space (ARRILogC4AWG4-to-..., S-Log3, ...) needs the picture in "
+               "that space. Auto reads it from the file's header or name and converts the game's picture for it, so no "
+               "conversion LUT is needed in front; an ordinary LUT gets the picture as it is. Exact on Linear HDR "
+               "games, up to paper white on PQ, highlights estimated on SDR. Pick one by hand if Auto guesses wrong; "
+               "None always uses the picture.");
+
+    if (ImGui::TreeNode("Status##postlut"))
+    {
+        const float slot = StatusSlotBegin();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        // Each stage reports every frame it runs, so a report older than a second means neither ran (NR off and no
+        // OptiScaler upscaler, or a frame NR did not compose).
+        const bool current = status.seen && GetTickCount64() - status.reportedMs < 1000;
+        if (layers.empty())
+            ImGui::TextWrapped("No LUT loaded.");
+        else if (!current)
+            ImGui::TextWrapped("Not applied: needs Neural Rendering or an OptiScaler upscaler.");
+        else if (!status.wanted)
+            ImGui::TextWrapped("Waiting for a frame.");
+        else if (status.loaded)
+        {
+            ImGui::TextWrapped("Loaded: %s", status.chain.c_str());
+            ImGui::TextWrapped(status.stage == DlssNr::PostLutStage::AfterNr ? "Graded after NR."
+                                                                             : "Graded on the upscaler's output.");
+        }
+        else if (status.note.empty())
+            ImGui::TextWrapped("Not applied.");
+
+        // The backend's reason (a mode or device that does not run it), or how it runs in this mode.
+        if (!layers.empty() && status.wanted && !status.note.empty())
+            ImGui::TextWrapped("%s", status.note.c_str());
+        ImGui::PopStyleColor();
+
+        if (!status.failedPath.empty() || !status.error.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
+            if (!status.failedPath.empty())
+                ImGui::TextWrapped("%s: %s", std::filesystem::path(status.failedPath).filename().string().c_str(),
+                                   status.error.c_str());
+            else
+                ImGui::TextWrapped("%s", status.error.c_str());
+            ImGui::PopStyleColor();
+        }
+        else if (status.loaded && status.endsIn != DlssNr::LutSpace::Display)
+        {
+            // A conversion LUT with no look after it: the screen shows the flat log signal.
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
+            ImGui::TextWrapped("The stack ends in %s, not a picture: add a look made for it after the last LUT.",
+                               DlssNr::LutSpaceName(status.endsIn));
+            ImGui::PopStyleColor();
+        }
+        StatusSlotEnd(slot, 5);
         ImGui::TreePop();
     }
 }
@@ -3717,6 +3996,37 @@ static void RenderSeveralViews(Config* config, float menuResScale, bool beforeSr
     }
 }
 
+// "Other DLSS features": shown only while the game keeps another DLSS feature alive besides the main one (a 3D
+// character preview next to the world), or once the setting was changed.
+static void RenderOtherFeatures(Config* config, float menuResScale)
+{
+    unsigned aside = 0, own = 0;
+    DlssNr::GameFeatureStatus(aside, own);
+    const uint32_t mode = config->DlssNrSecondaryFeatures.value_or_default();
+
+    if (aside + own == 0 && mode == 0)
+        return;
+
+    NrCard card("Other DLSS features##card", menuResScale);
+    if (!card.IsOpen())
+        return;
+
+    if (aside + own > 0)
+        ImGui::TextWrapped("The game uses %u more DLSS feature(s) besides the main one (a 3D character preview or a "
+                           "second camera).",
+                           aside + own);
+
+    static const char* const kModes[] = { "Leave as they are", "A model of their own", "Share the main model" };
+    int selected = (int) (mode < 3 ? mode : 0);
+    if (ImGui::Combo("Other DLSS features##secondaryfeatures", &selected, kModes, 3))
+        config->DlssNrSecondaryFeatures = (uint32_t) selected;
+    HelpMarker("Leave as they are: NR works on the main picture only; the others stay as DLSS made them.\n"
+               "A model of their own: each gets its own model and history (more GPU time and video memory). It uses "
+               "the main picture's exposure and scene cuts, and Superior Scaling, Reuse detail and the edit cache "
+               "stand aside for it.\nShare the main model: the old behaviour. The pictures take turns in one "
+               "history, which mixes them and, before SR, can rebuild the model on every call (a freeze).");
+}
+
 static void RenderInputPage(Config* config, float menuResScale, const NrCommon& nr)
 {
     ImGui::PushItemWidth(220.0f * menuResScale);
@@ -3729,7 +4039,10 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
     const bool rayReconstruction = activeFeature && activeFeature->GetUpscalerType() == Upscaler::DLSSD;
 
     if (!nr.vulkan)
+    {
         RenderSeveralViews(config, menuResScale, beforeSr);
+        RenderOtherFeatures(config, menuResScale);
+    }
 
     if (NrCard card("Size", menuResScale); card.IsOpen())
     {
@@ -3914,7 +4227,7 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
     if (NrCard card("Compress screen edges (experimental)##card", menuResScale, spatialOn); card.IsOpen())
         RenderEdgeCompression(config, menuResScale, nr);
 
-    if (NrCard card("LUT##card", menuResScale, lutOn); card.IsOpen())
+    if (NrCard card("Input LUT##card", menuResScale, lutOn); card.IsOpen())
         RenderLutSection(config);
 
     ImGui::PopItemWidth();
@@ -3982,7 +4295,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         HelpMarker("Below 100% Model resolution, how NR's result is enlarged.\n"
                    "Classic: the whole output.\n"
                    "Matched residual: only NR's changes; less blur and colour shift.\n"
-                   "NVIDIA residual: only the changes, NVIDIA's way.\n"
+                   "NVIDIA residual: only the changes, NVIDIA's way; with Upscale Method Bilinear, also kept on "
+                   "their side of edges.\n"
                    "Superior Scaling: its own Area downsample, frequency shaping and a private DLSS that steadies NR "
                    "over time, including at 100% with Compress screen edges. Needs DirectX 12 and NVIDIA DLSS; "
                    "where it cannot run, Matched residual is used. At 100% and above, the ordinary modes use the "
@@ -4156,6 +4470,9 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
 
         HelpMarker("Higher: stronger NR colour (above 1 more saturated). 0: keeps the game's colours. Default: 1.");
     }
+
+    // The LUT stack that grades NR's result has its own page (it also runs without NR).
+    ImGui::TextDisabled("Colour grades (.cube LUTs) for NR's result: the F5LUT page, below Neural Rendering.");
 
     ImGui::PopItemWidth();
 }
@@ -4734,6 +5051,13 @@ void UpdateMultiViewHint(Config* config)
                                 "Neural Rendering stood down: this game draws %zu views at once (a multi-monitor "
                                 "layout).\nTick the views it works on: open the menu, Neural Rendering, Input.",
                                 views.count });
+}
+
+void RenderF5LutCard(Config* config, float menuResScale)
+{
+    // Its own page, so the card starts open.
+    if (NrCard card("LUT stack##f5lut", menuResScale); card.IsOpen())
+        RenderPostLutSection(config);
 }
 
 void RenderMenu(Config* config, float menuResScale, MenuPages::Page page)

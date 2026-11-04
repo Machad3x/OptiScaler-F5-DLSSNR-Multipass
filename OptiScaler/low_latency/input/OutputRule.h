@@ -363,6 +363,7 @@ struct GameCapInputs
     bool blocked = false;              // Input Off
     uint32_t xefgShownPerRendered = 1; // native::lowlatency::XefgShownPerRendered
     bool xellCountsShown = true;       // XeFG's XeLL counts shown frames (XeFGProxy::XellCountsShownFrames)
+    bool driverMultipliesCap = false;  // DLSS-G behind XeFG's API (XeFGProxy::DriverMultipliesReflexCap)
     uint8_t dlssgFramesToGenerate = 0; // the game's DLSS FG, seen from its async markers
     bool outputIsXell = false;         // the output runs XeLL (fakenvapi's choice)
     bool outputIsFrameCap = false;     // the output only waits for the cap (Frame cap only)
@@ -431,7 +432,12 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
     if (in.fgActive && in.fsrFgOutput)
         fps /= 2;
     else if (split)
-        fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
+    {
+        // Per rendered frame, except DLSS-G behind XeFG's API: the driver multiplies the interval itself (as for a
+        // game's DLSS-G), so the shown cap stays and no later rule may divide it
+        if (!(in.side == XefgLatency::Reflex && in.realNvapi && in.driverMultipliesCap))
+            fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
+    }
     else if (in.xefgOutput && in.xellHoldsCap && !in.xellCountsShown) // XeFG's XeLL counts the game's own frames (XL23)
         fps = native::lowlatency::CapPerRenderedFrame(fps, in.xefgShownPerRendered);
     else if (in.dlssgFramesToGenerate > 0 && !in.realNvapi && !in.outputIsXell)
