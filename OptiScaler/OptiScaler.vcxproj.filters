@@ -491,6 +491,7 @@
     <ClInclude Include="native\VirtualUpscalerHold.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\FpsLog.h">
     <ClInclude Include="native\GpuStageTiming.h">
       <Filter>Header Files</Filter>
     </ClInclude>
