@@ -29,17 +29,16 @@ struct Settings
     bool upscalerPass = false; // Optical F5Low's "Run the upscaler on the picture"
     const char* mode = "Off";  // the Optical F5Low mode shown on its page
     const char* fgOutput = "none";
-    bool fgEnabled = false;   // frame generation switched on
-    uint32_t fgCount = 1;     // the multiplier asked for (interpolations + 1)
-    bool dynamicMfg = false;  // XeFG's Dynamic MFG picks the count per frame, up to fgCount
-    float capFps = 0.0f;      // FramerateLimit, 0 none
+    bool fgEnabled = false;  // frame generation switched on
+    uint32_t fgCount = 1;    // the multiplier asked for (interpolations + 1)
+    bool dynamicMfg = false; // XeFG's Dynamic MFG picks the count per frame, up to fgCount
+    float capFps = 0.0f;     // FramerateLimit, 0 none
 
     bool operator==(const Settings& o) const
     {
-        return nr == o.nr && modelScale == o.modelScale && modelAuto == o.modelAuto &&
-               upscalerPass == o.upscalerPass && std::string_view(mode) == o.mode &&
-               std::string_view(fgOutput) == o.fgOutput && fgEnabled == o.fgEnabled && fgCount == o.fgCount &&
-               dynamicMfg == o.dynamicMfg && capFps == o.capFps;
+        return nr == o.nr && modelScale == o.modelScale && modelAuto == o.modelAuto && upscalerPass == o.upscalerPass &&
+               std::string_view(mode) == o.mode && std::string_view(fgOutput) == o.fgOutput &&
+               fgEnabled == o.fgEnabled && fgCount == o.fgCount && dynamicMfg == o.dynamicMfg && capFps == o.capFps;
     }
 
     // A value the ini cannot give as a number would never compare equal (a NaN), and log a change every present
@@ -54,7 +53,7 @@ struct Settings
     std::string Describe() const
     {
         const std::string model = modelAuto ? std::string("auto") : std::format("{:.2f}", modelScale);
-        const std::string fg = !fgEnabled ? std::string(" off")
+        const std::string fg = !fgEnabled   ? std::string(" off")
                                : dynamicMfg ? std::format(" up to x{} (Dynamic MFG)", fgCount)
                                             : std::format(" x{}", fgCount);
         return std::format("NR {}, model {}, upscaler pass {}, Optical F5Low {}, frame generation {}{}, cap {}",
@@ -66,11 +65,11 @@ struct Settings
 // What runs this present, for the measurement line only.
 struct Live
 {
-    bool fgRunning = false;               // frame generation active and not paused
-    uint32_t fgMultiplier = 1;            // its count now, when running
-    std::optional<uint64_t> shownTotal;   // XeFG's frames sent to be shown, a running total; nullopt with no XeFG
-    uint64_t shownMask = ~0ull;           // the width shownTotal wraps at
-    int modelPercent = 0;                 // the model resolution NR applied last frame (0: not known)
+    bool fgRunning = false;             // frame generation active and not paused
+    uint32_t fgMultiplier = 1;          // its count now, when running
+    std::optional<uint64_t> shownTotal; // XeFG's frames sent to be shown, a running total; nullopt with no XeFG
+    uint64_t shownMask = ~0ull;         // the width shownTotal wraps at
+    int modelPercent = 0;               // the model resolution NR applied last frame (0: not known)
 };
 
 class Tracker
@@ -93,9 +92,9 @@ class Tracker
             _logged = false;
             Restart(nowMs + kSettleMs);
             return first ? std::nullopt
-                         : std::optional<std::string>(std::format(
-                               "FPS: settings changed to ({}); measuring from {:.0f} s after the change",
-                               settings.Describe(), kSettleMs / 1000.0));
+                         : std::optional<std::string>(
+                               std::format("FPS: settings changed to ({}); measuring from {:.0f} s after the change",
+                                           settings.Describe(), kSettleMs / 1000.0));
         }
 
         if (nowMs < _start)
@@ -138,8 +137,8 @@ class Tracker
         const std::string model =
             live.modelPercent > 0 ? std::format(", model applied {}%", live.modelPercent) : std::string();
 
-        const std::string line = std::format("FPS: game {:.1f}, shown {} over {:.1f} s ({}; {}{})", game, shown, seconds,
-                                             settings.Describe(), running, model);
+        const std::string line = std::format("FPS: game {:.1f}, shown {} over {:.1f} s ({}; {}{})", game, shown,
+                                             seconds, settings.Describe(), running, model);
         _logged = true;
         Restart(nowMs);
         return line;
