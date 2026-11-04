@@ -1750,6 +1750,10 @@ bool Config::LoadDlssNrProfile(const std::filesystem::path& path, std::string& e
             note += (note.empty() ? "" : " ") + problem;
     }
 
+    // Saved in another game: its Optical F5Low tuning was laid out for that game's picture, so this game's stays
+    if (!DlssNrProfiles::SameGame(profile->savedFrom, State::Instance().gameExe))
+        profile->settings = DlssNrProfiles::KeepNative(profile->settings, DlssNrSnapshot());
+
     const size_t defaulted = ApplyDlssNrSection(profile->settings);
     LOG_INFO("NR profile loaded: {} (saved in {}; {} settings, {} at their default)", wstring_to_string(path.wstring()),
              profile->savedFrom.empty() ? "?" : profile->savedFrom, profile->settings.size(), defaulted);
@@ -1873,7 +1877,6 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("ScanInverted", DlssNrScanInverted),
         NR_PROFILE_FIELD("ScanMeter", DlssNrScanMeter),
         NR_PROFILE_FIELD("ColourEncoding", DlssNrColourEncoding),
-        NR_PROFILE_FIELD("NativeDepthFinder", DlssNrNativeDepthFinder),
         NR_PROFILE_FIELD("NativeDepthVkCopyUsage", DlssNrNativeDepthVkCopyUsage),
         NR_PROFILE_FIELD("NativeDepthResolveInList", DlssNrNativeDepthResolveInList),
         NR_PROFILE_FIELD("NativeDxvkVulkan", DlssNrNativeDxvkVulkan),
@@ -1886,11 +1889,7 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("NativeDepthOffsetY", DlssNrNativeDepthOffsetY),
         NR_PROFILE_FIELD("NativeMotionProfile", DlssNrNativeMotionProfile),
         NR_PROFILE_FIELD("NativeMotionProfileCustom", DlssNrNativeMotionProfileCustom),
-        NR_PROFILE_FIELD("NativeMotion", DlssNrNativeMotion),
-        NR_PROFILE_FIELD("NativeInput", DlssNrNativeInput),
-        NR_PROFILE_FIELD("NativeUpscaler", DlssNrNativeUpscaler),
         NR_PROFILE_FIELD("NativeUpscalerPass", DlssNrNativeUpscalerPass),
-        NR_PROFILE_FIELD("NativeFrameGenerationOnly", DlssNrNativeFrameGenerationOnly),
         NR_PROFILE_FIELD("NativeLowLatencyBoost", DlssNrNativeLowLatencyBoost),
         NR_PROFILE_FIELD("NativeLowLatencyDxvkGameThread", DlssNrNativeLowLatencyDxvkGameThread),
         NR_PROFILE_FIELD("SpatialCompression", DlssNrSpatialCompression),

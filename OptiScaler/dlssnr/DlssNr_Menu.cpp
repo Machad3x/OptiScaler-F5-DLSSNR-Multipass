@@ -1897,8 +1897,9 @@ static void RenderProfilesSection(Config* config)
 
     ImGui::SameLine();
     HelpMarker("Saves this game's NR settings under a name and loads them back: the look, passes, quality and reuse, "
-               "and the game's own exposure, colour encoding, Optical F5Low and edge compression settings. Not in a "
-               "profile: Enable Neural Rendering, the toggle key, the display's paper white and the debug views.\n"
+               "and the game's own exposure, colour encoding, Optical F5Low tuning and edge compression settings. Not "
+               "in a profile: Enable Neural Rendering, the toggle key, the display's paper white, the Optical F5Low "
+               "mode and the debug views. A profile saved in another game keeps this game's Optical F5Low tuning.\n"
                "Files are in OptiScaler\\NRProfiles; copy one into the same folder of another install of the game to "
                "share it. Green = the profile's settings are what is in effect.\n"
                "Save Settings (at the bottom) still saves this game's OptiScaler.ini; a profile is a separate file.");
@@ -2023,7 +2024,8 @@ static void RenderProfilesSection(Config* config)
     pick = picked(); // a save or delete above rescans the folder
     if (pick && !SameGame(pick->file.savedFrom, exeName))
         ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
-                           "%s was saved in %s: its exposure and Optical F5Low settings are for that game.",
+                           "%s was saved in %s: its exposure settings are for that game (this game's Optical "
+                           "F5Low tuning stays).",
                            pick->name.c_str(), pick->file.savedFrom.c_str());
     StatusSlotEnd(slot, 2);
 
