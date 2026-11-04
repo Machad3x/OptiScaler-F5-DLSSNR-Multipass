@@ -17,13 +17,13 @@ namespace native::fpslog
 // What moves the frame rate. Compared whole: any field changing starts a new measurement.
 struct Settings
 {
-    bool nr = false;          // Enable Neural Rendering
-    float modelScale = 1.0f;  // [DlssNr] WorkingScale
+    bool nr = false;           // Enable Neural Rendering
+    float modelScale = 1.0f;   // [DlssNr] WorkingScale
     bool upscalerPass = false; // Optical F5Low's "Run the upscaler on the picture"
-    const char* mode = "Off"; // the Optical F5Low mode shown on its page
+    const char* mode = "Off";  // the Optical F5Low mode shown on its page
     const char* fgOutput = "none";
     uint32_t fgMultiplier = 1; // 1: no frame generation running
-    float capFps = 0.0f;      // FramerateLimit, 0 none
+    float capFps = 0.0f;       // FramerateLimit, 0 none
 
     bool operator==(const Settings& o) const
     {
@@ -45,7 +45,7 @@ class Tracker
 {
   public:
     static constexpr double kSettleMs = 1000.0;  // after a change: rebuilds and pauses are not the setting's frame rate
-    static constexpr double kMeasureMs = 5000.0; // the first measurement after a change
+    static constexpr double kMeasureMs = 3000.0; // the first measurement after a change (a step of 5 s is enough)
     static constexpr double kRepeatMs = 30000.0; // then one line this often while nothing changes
 
     // One game present. `shownTotal`: XeFG's frames sent to be shown, a running total (wraps at `shownMask`), nullopt
@@ -61,9 +61,9 @@ class Tracker
             _logged = false;
             Restart(nowMs + kSettleMs);
             return first ? std::nullopt
-                         : std::optional<std::string>(std::format(
-                               "FPS: settings changed to ({}); measuring from {:.0f} s after the change",
-                               settings.Describe(), kSettleMs / 1000.0));
+                         : std::optional<std::string>(
+                               std::format("FPS: settings changed to ({}); measuring from {:.0f} s after the change",
+                                           settings.Describe(), kSettleMs / 1000.0));
         }
 
         if (nowMs < _start)
@@ -95,8 +95,8 @@ class Tracker
         else
             shown = "?";
 
-        const std::string line = std::format("FPS: game {:.1f}, shown {} over {:.1f} s ({})", game, shown, seconds,
-                                             settings.Describe());
+        const std::string line =
+            std::format("FPS: game {:.1f}, shown {} over {:.1f} s ({})", game, shown, seconds, settings.Describe());
         _logged = true;
         Restart(nowMs);
         return line;

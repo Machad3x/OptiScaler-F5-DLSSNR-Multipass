@@ -53,7 +53,7 @@ int main()
     nrOff.nr = false;
     Settings off { .mode = "Off", .fgOutput = "F5Low", .fgMultiplier = 1, .capFps = 75.0f };
 
-    // First settings: no "changed" line; one measurement after settle + 5 s: game 25, shown 75
+    // First settings: no "changed" line; one measurement after settle + 3 s: game 25, shown 75
     {
         Run r;
         r.Play(nrOn, 25.0, 7.0, 3);
@@ -99,6 +99,18 @@ int main()
             measured += Has(l, "FPS: game") ? 1 : 0;
         CHECK(measured == 1);
         CHECK(Has(r.lines.back(), "Optical F5Low Off"));
+    }
+
+    // A step of 5 s, as a player clicks through the menu: each setting gets its own line
+    {
+        Run r;
+        r.Play(nrOn, 60.0, 5.0, 3);
+        r.Play(nrOff, 60.0, 5.0, 3);
+        r.Play(off, 60.0, 5.0, 0);
+        int measured = 0;
+        for (const auto& l : r.lines)
+            measured += Has(l, "FPS: game") ? 1 : 0;
+        CHECK(measured == 3);
     }
 
     // Frame generation on but XeFG reports nothing: shown is unknown, not the game's rate
