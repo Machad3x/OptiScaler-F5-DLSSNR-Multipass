@@ -1175,7 +1175,7 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
         NativeDepthStatus(api);
 
     if (shown == Shown::MotionOnly)
-        ImGui::TextDisabled("Estimating motion only; nothing uses it.");
+        ImGui::TextDisabled("Motion only: nothing uses it, so none of it runs (Idle).");
     else if (shown == Shown::NrAndFrameGeneration || warning == Warning::None)
         NativeMotionStatus(api);
 

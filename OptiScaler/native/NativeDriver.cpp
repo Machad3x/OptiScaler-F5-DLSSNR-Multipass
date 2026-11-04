@@ -31,6 +31,15 @@ void NativeDriver::PauseVirtualUpscaler()
         _virtualUpscaler->Pause();
 }
 
+bool NativeDriver::MotionUsed()
+{
+    auto* cfg = Config::Instance();
+    return DlssNrNativeMode::MotionUsed(
+        { cfg->DlssNrNativeUpscaler.value_or_default(), cfg->DlssNrNativeInput.value_or_default(),
+          cfg->DlssNrEnabled.value_or_default(), cfg->DlssNrFinishedPicture.value_or_default(),
+          cfg->DlssNrNativeDebugView.value_or_default() });
+}
+
 bool NativeDriver::Enabled()
 {
     if (!Config::Instance()->DlssNrNativeMotion.value_or_default())
@@ -69,31 +78,26 @@ void NativeDriver::LogDiagnostics()
 NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPreview, int flowPreviewView)
 {
     RunResult out;
-    // FG has stopped. Do not keep the FG pause label while waiting for a new native frame.
-    if (_status == Status::PausedForNativeFg)
-        _status = Status::Off;
 
     // Nothing reads the motion this frame (NR only with Neural Rendering or Finished Picture off, the motion-only
-    // keys): none of it runs, not even the picture copy. Its history is dropped, so it starts clean when something
-    // wants it.
-    auto* cfg = Config::Instance();
-    const bool motionUsed = DlssNrNativeMode::MotionUsed(
-        { cfg->DlssNrNativeUpscaler.value_or_default(), cfg->DlssNrNativeInput.value_or_default(),
-          cfg->DlssNrEnabled.value_or_default(), cfg->DlssNrFinishedPicture.value_or_default(),
-          cfg->DlssNrNativeDebugView.value_or_default() });
-
-    if (!motionUsed)
+    // keys): none of it runs. The frame source still does its per-present part (Skip: the Vulkan bridge copies the
+    // picture in, held back buffers are let go), the motion history is dropped once, so it starts clean when something
+    // wants it, and the hold on a game upscaler starts over.
+    if (!MotionUsed())
     {
+        source.Skip();
+
         if (_status != Status::Idle)
         {
-            LOG_INFO("{}: idle, nothing uses the motion (Neural Rendering or Finished Picture off, no frame generation "
-                     "feed, no debug pictures)",
+            LOG_INFO("{}: idle, nothing uses the motion (no Neural Rendering on the picture, no frame generation feed, "
+                     "no debug pictures)",
                      _tag);
 
             if (_producer)
                 _producer->Reset();
         }
 
+        _takeover.Update(false, Util::MillisecondsNow());
         ReleaseVirtualUpscaler();
         DlssNr::NativeInputSkipped();
         _nativeRan = false;
@@ -102,6 +106,10 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
     }
 
     if (_status == Status::Idle)
+        _status = Status::Off;
+
+    // FG has stopped. Do not keep the FG pause label while waiting for a new native frame.
+    if (_status == Status::PausedForNativeFg)
         _status = Status::Off;
 
     FrameInput input;
@@ -295,7 +303,8 @@ void NativeDriver::DrawStatus()
         return;
     case Status::Idle:
         ImGui::TextDisabled(
-            "Idle: nothing uses the motion (Neural Rendering or Finished Picture is off), so none of it runs.");
+            "Idle: nothing uses the motion (no Neural Rendering on the picture, no frame generation feed), so none of "
+            "it runs.");
         return;
     case Status::Waiting:
         ImGui::TextDisabled("Standing aside: the game is calling an upscaler.");

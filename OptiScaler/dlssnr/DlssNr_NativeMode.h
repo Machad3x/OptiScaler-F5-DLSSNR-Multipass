@@ -13,7 +13,7 @@ enum class Mode
     NrAndFrameGeneration
 };
 
-// What the keys run. MotionOnly is not a mode: motion is estimated and nothing uses it.
+// What the keys run. MotionOnly is not a mode: nothing uses the motion, so none of it runs (MotionUsed below).
 enum class Shown
 {
     Off,

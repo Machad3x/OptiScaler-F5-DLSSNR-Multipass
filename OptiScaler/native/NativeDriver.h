@@ -54,6 +54,10 @@ class NativeDriver
     // the status goes back to Off).
     bool Enabled();
 
+    // Whether anything reads the motion this frame (DlssNrNativeMode::MotionUsed on the config): without, RunFrame runs
+    // none of it (Status::Idle).
+    static bool MotionUsed();
+
     // Break native flow/NR history before standing aside for the game's native DLSS-G.
     void PauseForNativeFg();
 
