@@ -63,6 +63,9 @@ void NativeDriver::LogDiagnostics()
              "cuts {}, virtual upscaler {}",
              _tag, _diagPresents, _diagReady, _diagWaiting, _diagSubmitted, _diagFlowValid, _diagDepth, _diagTrust,
              _diagNative, _cuts, _virtualUpscaler != nullptr && _virtualUpscaler->Active() ? "active" : "not active");
+
+    if (_producer != nullptr && _producer->GpuStats().Frames() > 0)
+        LOG_INFO("{}: {}", _tag, _producer->GpuStats().Report());
 }
 
 NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPreview, int flowPreviewView)

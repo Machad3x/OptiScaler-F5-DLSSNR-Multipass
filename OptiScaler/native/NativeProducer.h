@@ -11,6 +11,7 @@
 
 #include "DepthAlign_Dx12.h"
 #include "FrameContract.h"
+#include "GpuStageTiming.h"
 
 #include "../motion/OpticalFlow_Dx12.h"
 #include "../motion/TrustMask_Dx12.h"
@@ -122,6 +123,10 @@ class NativeProducer
     TrustMaskDx12* Trust() { return _trust.get(); }
     bool PreviewReady() const { return _previewReady; }
 
+    // The frame step's GPU time by stage (native/GpuStageTiming.h), of the frames the GPU has finished. The owner logs
+    // its Report() now and then, which also starts a new window.
+    gputiming::Stats& GpuStats() { return _gpuStats; }
+
   private:
     static constexpr uint32_t kRing = 3;
     static_assert(DepthAlignDx12::kSlots >= kRing, "a depth alignment descriptor pair per ring slot");
@@ -146,6 +151,14 @@ class NativeProducer
     ID3D12Resource* _cutReadback[kRing] = {};
     bool _cutPending[kRing] = {};
     bool _consumerResetPending = false; // a cut was found and the consumer has not run since
+
+    // Timestamps of each ring slot's list (gputiming::kStamps a slot), resolved to a readback read once the GPU has
+    // finished that slot. Optional: without a query heap (or a queue tick rate) nothing is timed.
+    ID3D12QueryHeap* _timeHeap = nullptr;
+    ID3D12Resource* _timeReadback[kRing] = {};
+    bool _timePending[kRing] = {};
+    UINT64 _timeFrequency = 0;
+    gputiming::Stats _gpuStats;
     uint32_t _width = 0;
     uint32_t _height = 0;
     bool _previewReady = false;

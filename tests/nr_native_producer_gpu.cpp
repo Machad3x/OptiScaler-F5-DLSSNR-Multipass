@@ -552,6 +552,17 @@ int main()
                     r.flowValid && r.trustRan && !r.nativeRan && nr.count == calls + 1);
     }
 
+    printf("GPU timing\n");
+    {
+        // The frames above have finished (each later frame waited for its slot): their stages are timed
+        const uint32_t timed = producer.GpuStats().Frames();
+        const std::string report = producer.GpuStats().Report();
+        printf("    %s\n", report.c_str());
+        ok &= Check("finished frames are timed, by stage", timed > 0 && report.find("motion") != std::string::npos &&
+                                                               report.find("consumer") != std::string::npos);
+        ok &= Check("the report starts a new window", producer.GpuStats().Frames() == 0);
+    }
+
     printf("depth for the flow\n");
     {
         // The flow matches with depth only when it is one copy of the whole scene: one of several copies holds part of it.
