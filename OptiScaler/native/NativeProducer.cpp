@@ -18,6 +18,13 @@ NativeProducer::~NativeProducer()
         if (readback != nullptr)
             readback->Release();
 
+    for (auto& readback : _timeReadback)
+        if (readback != nullptr)
+            readback->Release();
+
+    if (_timeHeap != nullptr)
+        _timeHeap->Release();
+
     if (_list != nullptr)
         _list->Release();
     if (_fence != nullptr)
@@ -109,6 +116,36 @@ bool NativeProducer::Init(ID3D12Device* device)
             _error = "creating the scene-cut readback";
             return false;
         }
+
+    // GPU timing, optional: a failure here only leaves the frame step untimed.
+    D3D12_QUERY_HEAP_DESC timeDesc {};
+    timeDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    timeDesc.Count = kRing * gputiming::kStamps;
+
+    if (SUCCEEDED(device->CreateQueryHeap(&timeDesc, IID_PPV_ARGS(&_timeHeap))))
+    {
+        readbackDesc.Width = gputiming::kStamps * sizeof(UINT64);
+
+        for (auto& readback : _timeReadback)
+        {
+            if (FAILED(device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+                                                       D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                       IID_PPV_ARGS(&readback))))
+            {
+                // Untimed: nothing of it is kept
+                for (auto& made : _timeReadback)
+                    if (made != nullptr)
+                    {
+                        made->Release();
+                        made = nullptr;
+                    }
+
+                _timeHeap->Release();
+                _timeHeap = nullptr;
+                break;
+            }
+        }
+    }
 
     _event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (_event == nullptr)
@@ -217,6 +254,38 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         }
     }
 
+    // The timestamps of the frames the GPU has finished since, the same way. The tick rate is the queue's: read again
+    // when the producer runs on another one.
+    if (_timeHeap != nullptr && queue != nullptr && queue != _timeQueue)
+    {
+        _timeQueue = queue;
+
+        if (FAILED(queue->GetTimestampFrequency(&_timeFrequency)))
+            _timeFrequency = 0;
+    }
+
+    // A removed device's fence reads UINT64_MAX: nothing it reports as done was really timed
+    const UINT64 completed = _fence->GetCompletedValue();
+
+    for (UINT s = 0; s < kRing && completed != UINT64_MAX; ++s)
+    {
+        if (!_timePending[s] || completed < _values[s])
+            continue;
+
+        _timePending[s] = false;
+        const D3D12_RANGE range { 0, gputiming::kStamps * sizeof(UINT64) };
+        UINT64* data = nullptr;
+
+        if (SUCCEEDED(_timeReadback[s]->Map(0, &range, (void**) &data)) && data != nullptr)
+        {
+            std::array<uint64_t, gputiming::kStamps> ticks {};
+            std::copy(data, data + gputiming::kStamps, ticks.begin());
+            const D3D12_RANGE none { 0, 0 };
+            _timeReadback[s]->Unmap(0, &none);
+            _gpuStats.Add(ticks, _timeFrequency, _timeConsumerRan[s]);
+        }
+    }
+
     const HRESULT allocatorHr = _allocators[slot]->Reset();
     const HRESULT listHr = FAILED(allocatorHr) ? allocatorHr : _list->Reset(_allocators[slot], nullptr);
 
@@ -229,6 +298,15 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
     }
 
     ID3D12GraphicsCommandList* list = _list;
+
+    const bool timed = _timeHeap != nullptr && _timeFrequency != 0;
+    const UINT timeBase = slot * gputiming::kStamps;
+    const auto stamp = [&](UINT index)
+    {
+        if (timed)
+            list->EndQuery(_timeHeap, D3D12_QUERY_TYPE_TIMESTAMP, timeBase + index);
+    };
+    stamp(0);
 
     D3D12_RESOURCE_BARRIER barrier {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -270,6 +348,7 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
     const bool recorded =
         _flow->Dispatch(list, input.picture, input.pictureFormat, flowDepth ? input.depth[0] : nullptr,
                         flowDepth ? input.depthView : DXGI_FORMAT_UNKNOWN, input.depthReversed, encoding);
+    stamp(1);
 
     // This frame's cut flag out to the readback, read once the GPU is done with the frame.
     bool cutCopied = false;
@@ -363,6 +442,7 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
     const bool guideView = options.flowPreview && (options.previewView == 0 || options.previewView == 2);
     const bool guidesBuilt = nativeReady && ((options.apply && apply) || guideView) &&
                              _trust->BuildGuides(list, nativeInputs, input.width, input.height);
+    stamp(2);
 
     // The menu's debug view, while the picture is still readable by a compute shader. The depth view shows the game's
     // depth through the alignment, the others what this frame ran on.
@@ -420,6 +500,12 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         }
     }
 
+    stamp(3);
+
+    if (timed)
+        list->ResolveQueryData(_timeHeap, D3D12_QUERY_TYPE_TIMESTAMP, timeBase, gputiming::kStamps, _timeReadback[slot],
+                               0);
+
     const HRESULT closeHr = list->Close();
 
     if (SUCCEEDED(closeHr))
@@ -432,6 +518,8 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         queue->Signal(_fence, ++_signalled);
         _values[slot] = _signalled;
         _cutPending[slot] = cutCopied;
+        _timePending[slot] = timed;
+        _timeConsumerRan[slot] = result.nativeRan;
         ++_frame;
 
         output.done = SyncPoint { _fence, _signalled };
