@@ -526,6 +526,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="dlssnr\DlssNr_ColourEncodingStatus.h" />
     <ClInclude Include="dlssnr\DlssNr_NativeMode.h" />
     <ClInclude Include="dlssnr\DlssNr_LutStatus.h" />
+    <ClInclude Include="dlssnr\DlssNr_SteadyValue.h" />
     <ClInclude Include="dlssnr\DlssNr_LutPack.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ColourEncoding.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ExposureState.h" />
