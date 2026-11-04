@@ -5,6 +5,7 @@
 
 #include <Config.h>
 #include <dlssnr/DlssNrFeature_Dx12.h>
+#include <dlssnr/DlssNr_NativeMode.h>
 
 #include <imgui/imgui.h>
 
@@ -28,6 +29,15 @@ void NativeDriver::PauseVirtualUpscaler()
 {
     if (_virtualUpscaler != nullptr)
         _virtualUpscaler->Pause();
+}
+
+bool NativeDriver::MotionUsed()
+{
+    auto* cfg = Config::Instance();
+    return DlssNrNativeMode::MotionUsed(
+        { cfg->DlssNrNativeUpscaler.value_or_default(), cfg->DlssNrNativeInput.value_or_default(),
+          cfg->DlssNrEnabled.value_or_default(), cfg->DlssNrFinishedPicture.value_or_default(),
+          cfg->DlssNrNativeDebugView.value_or_default() });
 }
 
 bool NativeDriver::Enabled()
@@ -68,6 +78,36 @@ void NativeDriver::LogDiagnostics()
 NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPreview, int flowPreviewView)
 {
     RunResult out;
+
+    // Nothing reads the motion this frame (NR only with Neural Rendering or Finished Picture off, the motion-only
+    // keys): none of it runs. The frame source still does its per-present part (Skip: the Vulkan bridge copies the
+    // picture in, held back buffers are let go), the motion history is dropped once, so it starts clean when something
+    // wants it, and the hold on a game upscaler starts over.
+    if (!MotionUsed())
+    {
+        source.Skip();
+
+        if (_status != Status::Idle)
+        {
+            LOG_INFO("{}: idle, nothing uses the motion (no Neural Rendering on the picture, no frame generation feed, "
+                     "no debug pictures)",
+                     _tag);
+
+            if (_producer)
+                _producer->Reset();
+        }
+
+        _takeover.Update(false, Util::MillisecondsNow());
+        ReleaseVirtualUpscaler();
+        DlssNr::NativeInputSkipped();
+        _nativeRan = false;
+        _status = Status::Idle;
+        return out;
+    }
+
+    if (_status == Status::Idle)
+        _status = Status::Off;
+
     // FG has stopped. Do not keep the FG pause label while waiting for a new native frame.
     if (_status == Status::PausedForNativeFg)
         _status = Status::Off;
@@ -260,6 +300,11 @@ void NativeDriver::DrawStatus()
     {
     case Status::Off:
         ImGui::TextDisabled("Waiting for the first frame.");
+        return;
+    case Status::Idle:
+        ImGui::TextDisabled(
+            "Idle: nothing uses the motion (no Neural Rendering on the picture, no frame generation feed), so none of "
+            "it runs.");
         return;
     case Status::Waiting:
         ImGui::TextDisabled("Standing aside: the game is calling an upscaler.");

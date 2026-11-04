@@ -29,6 +29,7 @@ class NativeDriver
     enum class Status
     {
         Off,
+        Idle,              // nothing uses the motion this frame (DlssNrNativeMode::MotionUsed): none of it runs
         Waiting,           // the game calls an upscaler
         PausedForNativeFg, // lower display buffers may contain generated frames
         Failed,
@@ -52,6 +53,10 @@ class NativeDriver
     // The first thing a present does: false while [DlssNr] NativeMotion is off (the virtual upscaler is released and
     // the status goes back to Off).
     bool Enabled();
+
+    // Whether anything reads the motion this frame (DlssNrNativeMode::MotionUsed on the config): without, RunFrame runs
+    // none of it (Status::Idle).
+    static bool MotionUsed();
 
     // Break native flow/NR history before standing aside for the game's native DLSS-G.
     void PauseForNativeFg();

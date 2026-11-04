@@ -1175,8 +1175,10 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
         NativeDepthStatus(api);
 
     if (shown == Shown::MotionOnly)
-        ImGui::TextDisabled("Estimating motion only; nothing uses it.");
-    else if (shown == Shown::NrAndFrameGeneration || warning == Warning::None)
+        ImGui::TextDisabled("Motion only: nothing uses it, so none of it runs (Idle).");
+    // Also under NR only's own warnings (NR or Finished Picture off): the status then says Idle, nothing of it runs
+    else if (shown == Shown::NrAndFrameGeneration || warning == Warning::None || warning == Warning::NrDisabled ||
+             warning == Warning::NeedsFinishedPicture)
         NativeMotionStatus(api);
 
     StatusSlotEnd(slot, 4);
