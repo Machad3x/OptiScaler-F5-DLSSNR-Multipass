@@ -42,6 +42,7 @@
 #include <shaders/dlssnr/DlssNr_ColourEncoding.h>
 #include <shaders/dlssnr/DlssNr_ProxyCurve.h>
 #include "DlssNr_ColourEncodingStatus.h"
+#include "DlssNr_SteadyValue.h"
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
 #include "DlssNr_TierPlacement.h"
@@ -76,6 +77,14 @@ static bool HaveGameExposure()
 }
 
 static void HelpMarker(const char* tip);
+
+// The status lines' elapsed time, steadied (DlssNr_SteadyValue.h): redrawn every frame it changed its digits every
+// frame, which frame generation blends into an overlapping, unreadable number. One for both status lines (one is up).
+static std::optional<double> SteadyGpuMs(std::optional<double> ms)
+{
+    static DlssNr::SteadyValue steady;
+    return steady.Update(ms, Util::MillisecondsNow());
+}
 
 // Retry after a failure, on whichever backend failed: Direct3D 12 at once, native Vulkan on its next frame.
 static void RetryNr()
@@ -1271,7 +1280,7 @@ static void RenderRunningStatus(Config* config, const NrCommon& nr)
         // nothing in it to hang this off.
         // Either backend's timer. They measure the same thing by different means, and only one
         // of them is running.
-        const auto ms = vulkan ? DlssNr::LastGpuTimeVk() : DlssNr::LastGpuTime();
+        const auto ms = SteadyGpuMs(vulkan ? DlssNr::LastGpuTimeVk() : DlssNr::LastGpuTime());
 
         // With "Apply the model" off the pass STILL RUNS (so Hold-frame A/B can toggle its edit on
         // a frozen frame) -- it only outputs the clean frame.
@@ -1326,7 +1335,7 @@ static std::string ViewText(const DlssNr::Views::Rect& r)
 
 static void RenderStatusLine(const NrCommon& nr)
 {
-    const auto ms = nr.vulkan ? DlssNr::LastGpuTimeVk() : DlssNr::LastGpuTime();
+    const auto ms = SteadyGpuMs(nr.vulkan ? DlssNr::LastGpuTimeVk() : DlssNr::LastGpuTime());
     ScopedMonoFont monoFont {};
     const auto views = nr.vulkan ? DlssNr::Views::Snapshot {} : DlssNr::MultiViewStatus();
 
