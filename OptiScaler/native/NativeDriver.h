@@ -29,6 +29,7 @@ class NativeDriver
     enum class Status
     {
         Off,
+        Idle,              // nothing uses the motion this frame (DlssNrNativeMode::MotionUsed): none of it runs
         Waiting,           // the game calls an upscaler
         PausedForNativeFg, // lower display buffers may contain generated frames
         Failed,
