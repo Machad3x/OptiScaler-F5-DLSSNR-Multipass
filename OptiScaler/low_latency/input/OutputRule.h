@@ -448,5 +448,14 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
 }
 
 // The interval a sleep mode carries for `fps`, 0: no cap
+// Whose async frame marker (NvAPI_D3D12_SetAsyncFrameMarker) it is. The frame generation library OptiScaler loaded (the
+// own generator, Intel's) marks the presents it makes itself: that is neither the game's Reflex (the game did not call
+// Reflex, so OptiScaler stands aside for nobody) nor a marker for the active input to take or drop. Judged by the
+// module the call came from, never by a file name.
+constexpr bool IsFgLibraryMarker(const void* callerModule, const void* fgLibraryModule)
+{
+    return fgLibraryModule != nullptr && callerModule == fgLibraryModule;
+}
+
 constexpr uint32_t IntervalUs(float fps) { return fps > 0.0f ? static_cast<uint32_t>(1'000'000.0f / fps + 0.5f) : 0; }
 } // namespace lloutput
