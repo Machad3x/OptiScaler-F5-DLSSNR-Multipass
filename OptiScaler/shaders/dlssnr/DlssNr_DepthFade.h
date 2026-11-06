@@ -2,7 +2,8 @@
 
 // The depth fade: Neural Rendering's result is kept less where the surface is far away (or very near, or sky). The
 // maths is shared with the shader (precompile/dlssnr_depthfade.hlsli); this header is the settings, the block of
-// constants the shader reads and the state the menu shows. No dependencies, so tests/nr_depth_fade_smoke.cpp can use it.
+// constants the shader reads and the state the menu shows. No dependencies, so tests/nr_depth_fade_smoke.cpp can use
+// it.
 
 #include <algorithm>
 #include <atomic>
@@ -67,10 +68,7 @@ struct DepthRegion
     uint32_t width = 0, height = 0, baseX = 0, baseY = 0;
 };
 
-inline float Finite01(float v, float fallback)
-{
-    return std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : fallback;
-}
+inline float Finite01(float v, float fallback) { return std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : fallback; }
 
 // The shader block for this frame. Without depth (haveDepth false or an empty region) the block is all zero: the
 // fade is off for the frame, which the shader reads as a factor of 1 everywhere, and nothing touches the depth slot.
@@ -108,7 +106,9 @@ inline std::atomic<int> g_state { (int) State::Unknown };
 
 inline void Report(const Settings& s, bool depthUsable)
 {
-    g_state.store((int) (!s.enabled ? State::Unknown : depthUsable ? State::Active : State::NoDepth),
+    g_state.store((int) (!s.enabled    ? State::Unknown
+                         : depthUsable ? State::Active
+                                       : State::NoDepth),
                   std::memory_order_relaxed);
 }
 
