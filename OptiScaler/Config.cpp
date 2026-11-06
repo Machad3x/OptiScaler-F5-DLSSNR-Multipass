@@ -1325,6 +1325,7 @@ void Config::ReadDlssNr()
                                            ? std::clamp(DlssNrPostLutStrength[i].value(), 0.0f, 1.0f)
                                            : 1.0f;
     }
+    DlssNrPostLutStackEnabled.set_from_config(readBool("DlssNr", "PostLutStackEnabled"));
     DlssNrApplyModel.set_from_config(readBool("DlssNr", "ApplyModel"));
     DlssNrHoldFrame.set_from_config(readBool("DlssNr", "HoldFrame"));
 }
@@ -1593,6 +1594,7 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
     out.SetValue("DlssNr", "PostLutEnabled2", GetBoolValue(c.DlssNrPostLutEnabled[1].value_for_config()).c_str());
     out.SetValue("DlssNr", "PostLutEnabled3", GetBoolValue(c.DlssNrPostLutEnabled[2].value_for_config()).c_str());
     out.SetValue("DlssNr", "PostLutEnabled4", GetBoolValue(c.DlssNrPostLutEnabled[3].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutStackEnabled", GetBoolValue(c.DlssNrPostLutStackEnabled.value_for_config()).c_str());
     out.SetValue("DlssNr", "ApplyModel", GetBoolValue(c.DlssNrApplyModel.value_for_config()).c_str());
     out.SetValue("DlssNr", "HoldFrame", GetBoolValue(c.DlssNrHoldFrame.value_for_config()).c_str());
 }
@@ -1865,6 +1867,7 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("PostLutEnabled2", DlssNrPostLutEnabled[1]),
         NR_PROFILE_FIELD("PostLutEnabled3", DlssNrPostLutEnabled[2]),
         NR_PROFILE_FIELD("PostLutEnabled4", DlssNrPostLutEnabled[3]),
+        NR_PROFILE_FIELD("PostLutStackEnabled", DlssNrPostLutStackEnabled),
         NR_PROFILE_FIELD("WhitePointSource", DlssNrWhitePointSource),
         NR_PROFILE_FIELD("GameExposureScale", DlssNrGameExposureScale),
         NR_PROFILE_FIELD("WhitePointTrim", DlssNrWhitePointTrim),

@@ -38,6 +38,7 @@ struct FakePostLutConfig
     Opt<float> DlssNrPostLutStrength[4] { { 0.7f }, { 0.5f }, { 1.0f }, { 1.0f } };
     Opt<int> DlssNrPostLutInput[4] { { -1 }, { 3 }, { -1 }, { -1 } };
     Opt<bool> DlssNrPostLutEnabled[4] { { true }, { false }, { true }, { true } };
+    Opt<bool> DlssNrPostLutStackEnabled { true };
 };
 
 // A lattice from a per-point function, with an optional domain.
@@ -323,6 +324,16 @@ int main(int argc, char** argv)
         cfg.DlssNrPostLutEnabled[1].v = true;
         e = PostLutEntries(cfg);
         CHECK(e[1].strength == 0.5f);
+
+        // The whole stack off: every layer at 0, paths and look inputs kept; on again, each back at its own strength.
+        cfg.DlssNrPostLutStackEnabled.v = false;
+        e = PostLutEntries(cfg);
+        CHECK(e[0].strength == 0.0f && e[1].strength == 0.0f && e[2].strength == 0.0f && e[0].path == "a.cube" &&
+              e[1].input == 3);
+        cfg.DlssNrPostLutStackEnabled.v = true;
+        e = PostLutEntries(cfg);
+        CHECK(e[0].strength == 0.7f && e[1].strength == 0.5f && e[2].strength == 1.0f);
+
         cfg.DlssNrPostLutEnabled[0].v = cfg.DlssNrPostLutEnabled[1].v = cfg.DlssNrPostLutEnabled[2].v = false;
         e = PostLutEntries(cfg);
         CHECK(e[0].strength == 0.0f && e[1].strength == 0.0f && e[2].strength == 0.0f);

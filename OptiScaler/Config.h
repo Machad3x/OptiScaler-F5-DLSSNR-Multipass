@@ -440,6 +440,8 @@ class Config
     // Each layer's on/off: off keeps the layer (file, strength, look input) in the stack without applying it, as if its
     // strength were 0 (DlssNr::PostLutEntries).
     CustomOptional<bool> DlssNrPostLutEnabled[kPostLutLayers] { true, true, true, true };
+    // The whole stack on/off: off is every layer off, each layer's own setting kept.
+    CustomOptional<bool> DlssNrPostLutStackEnabled { true };
 
     // Whether the model's edit is applied. Off keeps the pass running (so Hold frame works) but shows
     // the clean upscaler frame -- for A/B'ing NR on/off on a frozen frame. Default true.

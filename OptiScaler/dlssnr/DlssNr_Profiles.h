@@ -122,6 +122,7 @@ inline constexpr std::string_view kKeptKeys[] = {
     "PostLutEnabled2",
     "PostLutEnabled3",
     "PostLutEnabled4",
+    "PostLutStackEnabled",
     // the game's: exposure and colour encoding
     "WhitePointSource",
     "GameExposureScale",

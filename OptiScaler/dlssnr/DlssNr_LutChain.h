@@ -216,15 +216,19 @@ inline LutSpace ResolveLookInputs(const std::vector<ChainEntry>& entries, const 
 
 // The post-NR stack as Config holds it (templated so this header stays free of Config.h). A layer switched off stays an
 // entry at strength 0: skipped by the bake, and every later layer keeps its index (the menu's rows and the status's
-// look inputs line up by it).
+// look inputs line up by it). The whole stack switched off is every layer off: the files stay parsed, so switching it
+// back on only bakes.
 template <typename ConfigT> inline std::vector<ChainEntry> PostLutEntries(const ConfigT& cfg)
 {
+    const bool stackOn = cfg.DlssNrPostLutStackEnabled.value_or_default();
     std::vector<ChainEntry> entries;
     for (int i = 0; i < ConfigT::kPostLutLayers; ++i)
-        entries.push_back(
-            { cfg.DlssNrPostLutFile[i].value_or_default(),
-              cfg.DlssNrPostLutEnabled[i].value_or_default() ? cfg.DlssNrPostLutStrength[i].value_or_default() : 0.0f,
-              cfg.DlssNrPostLutInput[i].value_or_default() });
+    {
+        const bool on = stackOn && cfg.DlssNrPostLutEnabled[i].value_or_default();
+        entries.push_back({ cfg.DlssNrPostLutFile[i].value_or_default(),
+                            on ? cfg.DlssNrPostLutStrength[i].value_or_default() : 0.0f,
+                            cfg.DlssNrPostLutInput[i].value_or_default() });
+    }
     return entries;
 }
 

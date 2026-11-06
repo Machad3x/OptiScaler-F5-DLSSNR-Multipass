@@ -3504,6 +3504,13 @@ static void RenderPostLutSection(Config* config)
     };
     const auto status = DlssNr::ReadPostLutStatus();
 
+    // The whole page's switch. Off greys the list out and keeps every setting; Status stays readable.
+    bool stackOn = config->DlssNrPostLutStackEnabled.value_or_default();
+    if (ImGui::Checkbox("Enable LUTs##postlutstack", &stackOn))
+        config->DlssNrPostLutStackEnabled = stackOn;
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!stackOn);
+
     // The empty row follows a layer, so it goes with the last one (and at the cap there is no room for it).
     if (addRow && (layers.empty() || (int) layers.size() >= kMax))
         addRow = false;
@@ -3600,7 +3607,8 @@ static void RenderPostLutSection(Config* config)
         if (filled)
         {
             // What the layer reads: Auto shows what it found, from the last bake.
-            const bool reported = status.seen && status.loaded && layers[row].enabled && layers[row].strength > 0.0f;
+            const bool reported =
+                stackOn && status.seen && status.loaded && layers[row].enabled && layers[row].strength > 0.0f;
             const std::string inputPreview =
                 LookInputPreview(layers[row].input, reported ? &status.inputs[row] : nullptr);
             const std::string inputLabel =
@@ -3667,9 +3675,10 @@ static void RenderPostLutSection(Config* config)
     }
     if (ImGui::SmallButton("Rescan##postlut"))
         lutFiles = ScanLutFolder();
+    ImGui::EndDisabled();
     ImGui::SameLine();
     HelpMarker("Applies a colour grade (.cube LUT) to the game's picture. Put files in OptiScaler\\LUTs and press "
-               "Rescan.\n"
+               "Rescan. Enable LUTs switches the whole stack off and on and keeps its settings.\n"
                "With Neural Rendering on, it grades the picture NR returns, so the model never sees it and exposure, "
                "skin detection and reuse are not affected. With NR before Super Resolution the grade is applied before "
                "the upscaler; in Finished Picture mode it grades the finished picture, UI included (D3D12; Vulkan does "
@@ -3693,6 +3702,8 @@ static void RenderPostLutSection(Config* config)
         const bool current = status.seen && GetTickCount64() - status.reportedMs < 1000;
         if (layers.empty())
             ImGui::TextWrapped("No LUT loaded.");
+        else if (!stackOn)
+            ImGui::TextWrapped("Switched off.");
         else if (!current)
             ImGui::TextWrapped("Not applied: needs Neural Rendering or an OptiScaler upscaler.");
         else if (!status.wanted)
@@ -3707,11 +3718,15 @@ static void RenderPostLutSection(Config* config)
             ImGui::TextWrapped("Not applied.");
 
         // The backend's reason (a mode or device that does not run it), or how it runs in this mode.
-        if (!layers.empty() && status.wanted && !status.note.empty())
+        if (stackOn && !layers.empty() && status.wanted && !status.note.empty())
             ImGui::TextWrapped("%s", status.note.c_str());
         ImGui::PopStyleColor();
 
-        if (!status.failedPath.empty() || !status.error.empty())
+        if (!stackOn)
+        {
+            // Switched off on purpose: no warnings about a stack that is not meant to run.
+        }
+        else if (!status.failedPath.empty() || !status.error.empty())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
             if (!status.failedPath.empty())

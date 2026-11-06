@@ -130,6 +130,8 @@ static void Keys()
         const Section kept = Filter({ { file, "a.cube" }, { strength, "0.5" }, { "Bogus", "1" } });
         Check(kept.size() == 2 && kept.count(file) && kept.count(strength), "filter keeps " + file + " and its strength");
     }
+    Check(!IsLeftOut("PostLutStackEnabled") && Filter({ { "PostLutStackEnabled", "false" } }).size() == 1,
+          "a profile keeps the stack's on/off");
     Check(!IsLutFileKey("PostLutStrength1") && !IsLutFileKey("LutStrength") && !IsLutFileKey("PostLutFile5"),
           "only file keys are LUT file keys");
     Check(Same({ { "PostLutFile2", "warm.cube" } }, { { "PostLutFile2", "C:\\Games\\X\\OptiScaler\\LUTs\\warm.cube" } }) &&
