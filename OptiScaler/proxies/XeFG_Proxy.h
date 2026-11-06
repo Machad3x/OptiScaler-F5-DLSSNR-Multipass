@@ -69,8 +69,8 @@ class XeFGProxy
     using PFN_XellCountsRenderedOnly = uint32_t (*)();
     inline static PFN_XellCountsRenderedOnly _xellCountsRenderedOnly = nullptr;
     using PFN_DriverMultipliesReflexCap = uint32_t (*)();
-    using PFN_HostRoutesMarkers = void (*)();
     inline static PFN_DriverMultipliesReflexCap _driverMultipliesReflexCap = nullptr;
+    using PFN_HostRoutesMarkers = void (*)();
     inline static PFN_xefgSwapChainSetSceneChangeThreshold _xefgSwapChainSetSceneChangeThreshold = nullptr;
     inline static PFN_xefgSwapChainGetPipelineBuildStatus _xefgSwapChainGetPipelineBuildStatus = nullptr;
     inline static PFN_xefgSwapChainSetNumInterpolatedFrames _xefgSwapChainSetNumInterpolatedFrames = nullptr;
