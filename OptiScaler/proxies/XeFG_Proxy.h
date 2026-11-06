@@ -70,6 +70,7 @@ class XeFGProxy
     inline static PFN_XellCountsRenderedOnly _xellCountsRenderedOnly = nullptr;
     using PFN_DriverMultipliesReflexCap = uint32_t (*)();
     inline static PFN_DriverMultipliesReflexCap _driverMultipliesReflexCap = nullptr;
+    using PFN_HostRoutesMarkers = void (*)();
     inline static PFN_xefgSwapChainSetSceneChangeThreshold _xefgSwapChainSetSceneChangeThreshold = nullptr;
     inline static PFN_xefgSwapChainGetPipelineBuildStatus _xefgSwapChainGetPipelineBuildStatus = nullptr;
     inline static PFN_xefgSwapChainSetNumInterpolatedFrames _xefgSwapChainSetNumInterpolatedFrames = nullptr;
@@ -241,6 +242,14 @@ class XeFGProxy
                 // Asked once now too: the library logs a warning when an OptiScaler never asks
                 if (_driverMultipliesReflexCap != nullptr)
                     _driverMultipliesReflexCap();
+                // Not Intel's: tells f5low.dll once that this OptiScaler hands the library's async frame markers on as
+                // the library's own, not the game's Reflex calls (IsFgLibraryMarker), so its DriverPacing default can
+                // be automatic. Before any context is made: the contexts are created through the procs looked up below,
+                // and f5low reads the answer when it creates one.
+                if (const auto routesMarkers =
+                        (PFN_HostRoutesMarkers) KernelBaseProxy::GetProcAddress_()(_dll, "f5lowHostRoutesMarkers");
+                    routesMarkers != nullptr)
+                    routesMarkers();
                 _xefgSwapChainSetSceneChangeThreshold =
                     (PFN_xefgSwapChainSetSceneChangeThreshold) KernelBaseProxy::GetProcAddress_()(
                         _dll, "xefgSwapChainSetSceneChangeThreshold");
