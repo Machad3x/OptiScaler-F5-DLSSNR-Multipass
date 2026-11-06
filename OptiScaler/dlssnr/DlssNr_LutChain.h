@@ -214,14 +214,17 @@ inline LutSpace ResolveLookInputs(const std::vector<ChainEntry>& entries, const 
     return current;
 }
 
-// The post-NR stack as Config holds it (templated so this header stays free of Config.h).
+// The post-NR stack as Config holds it (templated so this header stays free of Config.h). A layer switched off stays an
+// entry at strength 0: skipped by the bake, and every later layer keeps its index (the menu's rows and the status's
+// look inputs line up by it).
 template <typename ConfigT> inline std::vector<ChainEntry> PostLutEntries(const ConfigT& cfg)
 {
     std::vector<ChainEntry> entries;
     for (int i = 0; i < ConfigT::kPostLutLayers; ++i)
-        entries.push_back({ cfg.DlssNrPostLutFile[i].value_or_default(),
-                            cfg.DlssNrPostLutStrength[i].value_or_default(),
-                            cfg.DlssNrPostLutInput[i].value_or_default() });
+        entries.push_back(
+            { cfg.DlssNrPostLutFile[i].value_or_default(),
+              cfg.DlssNrPostLutEnabled[i].value_or_default() ? cfg.DlssNrPostLutStrength[i].value_or_default() : 0.0f,
+              cfg.DlssNrPostLutInput[i].value_or_default() });
     return entries;
 }
 
@@ -390,7 +393,7 @@ inline bool DlssNr_LutChainEnsure(DlssNr_LutChainState* state, const std::vector
     }
 
     if (effective == 0)
-        state->error = "every LUT is at strength 0";
+        state->error = "every LUT is off or at strength 0";
 
     return state->Loaded();
 }

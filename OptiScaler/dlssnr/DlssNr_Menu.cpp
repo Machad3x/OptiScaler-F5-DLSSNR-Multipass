@@ -3481,14 +3481,16 @@ static void RenderPostLutSection(Config* config)
     {
         std::string file;
         float strength;
-        int input; // look input, DlssNr::kLookInputAuto or a DlssNr::LutSpace
+        int input;    // look input, DlssNr::kLookInputAuto or a DlssNr::LutSpace
+        bool enabled; // off: kept in the stack, not applied
     };
     std::vector<Layer> layers;
     for (int i = 0; i < kMax; ++i)
         if (!config->DlssNrPostLutFile[i].value_or_default().empty())
             layers.push_back({ config->DlssNrPostLutFile[i].value_or_default(),
                                config->DlssNrPostLutStrength[i].value_or_default(),
-                               config->DlssNrPostLutInput[i].value_or_default() });
+                               config->DlssNrPostLutInput[i].value_or_default(),
+                               config->DlssNrPostLutEnabled[i].value_or_default() });
 
     const auto store = [&]()
     {
@@ -3497,6 +3499,7 @@ static void RenderPostLutSection(Config* config)
             config->DlssNrPostLutFile[i] = i < (int) layers.size() ? layers[i].file : std::string();
             config->DlssNrPostLutStrength[i] = i < (int) layers.size() ? layers[i].strength : 1.0f;
             config->DlssNrPostLutInput[i] = i < (int) layers.size() ? layers[i].input : DlssNr::kLookInputAuto;
+            config->DlssNrPostLutEnabled[i] = i < (int) layers.size() ? layers[i].enabled : true;
         }
     };
     const auto status = DlssNr::ReadPostLutStatus();
@@ -3544,7 +3547,7 @@ static void RenderPostLutSection(Config* config)
                         layers[row].input = DlssNr::kLookInputAuto;
                     }
                     else
-                        layers.push_back({ pathStr, 1.0f, DlssNr::kLookInputAuto });
+                        layers.push_back({ pathStr, 1.0f, DlssNr::kLookInputAuto, true });
                     addRow = false;
                     store();
                 }
@@ -3555,6 +3558,17 @@ static void RenderPostLutSection(Config* config)
         if (filled)
         {
             ImGui::SameLine(buttonsX);
+            bool enabled = layers[row].enabled;
+            if (ImGui::Checkbox(("##postluton" + id).c_str(), &enabled))
+            {
+                layers[row].enabled = enabled;
+                store();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(enabled ? "On: this LUT is applied. Untick to skip it and keep its settings."
+                                          : "Off: this LUT is skipped; its settings are kept. Tick to apply it.");
+
+            ImGui::SameLine();
             ImGui::BeginDisabled(row == 0);
             if (ImGui::ArrowButtonEx(("##postlutup" + id).c_str(), ImGuiDir_Up, arrowSize))
             {
@@ -3586,7 +3600,7 @@ static void RenderPostLutSection(Config* config)
         if (filled)
         {
             // What the layer reads: Auto shows what it found, from the last bake.
-            const bool reported = status.seen && status.loaded && layers[row].strength > 0.0f;
+            const bool reported = status.seen && status.loaded && layers[row].enabled && layers[row].strength > 0.0f;
             const std::string inputPreview =
                 LookInputPreview(layers[row].input, reported ? &status.inputs[row] : nullptr);
             const std::string inputLabel =
@@ -3661,8 +3675,9 @@ static void RenderPostLutSection(Config* config)
                "the upscaler; in Finished Picture mode it grades the finished picture, UI included (D3D12; Vulkan does "
                "not run that mode). With NR off, it grades the OptiScaler upscaler's output, before the game draws its "
                "HUD (needs an OptiScaler upscaler).\n"
-               "Add LUT adds another after the last one, up to four. They are applied top to bottom (the arrows move a "
-               "layer, x removes it); each strength blends that layer only. Strong grades stack up.\n"
+               "Add LUT adds another after the last one, up to four. They are applied top to bottom (the tick box "
+               "switches a layer off and on and keeps its settings, the arrows move it, x removes it); each strength "
+               "blends that layer only. Strong grades stack up.\n"
                "Look input: a LUT made for a camera log space (ARRILogC4AWG4-to-..., S-Log3, ...) needs the picture in "
                "that space. Auto reads it from the file's header or name and converts the game's picture for it, so no "
                "conversion LUT is needed in front; an ordinary LUT gets the picture as it is. Exact on Linear HDR "

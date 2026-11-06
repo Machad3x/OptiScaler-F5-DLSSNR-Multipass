@@ -122,8 +122,11 @@ static void Keys()
     {
         const std::string file = "PostLutFile" + std::to_string(i);
         const std::string strength = "PostLutStrength" + std::to_string(i);
+        const std::string enabled = "PostLutEnabled" + std::to_string(i);
         Check(IsLutFileKey(file) && IsLutFileKey("postlutfile" + std::to_string(i)), "post LUT file key: " + file);
-        Check(!IsLeftOut(file) && !IsLeftOut(strength), "post LUT keys are not left out: " + file);
+        Check(!IsLeftOut(file) && !IsLeftOut(strength) && !IsLeftOut(enabled), "post LUT keys are not left out: " + file);
+        Check(Filter({ { enabled, "false" } }).count(enabled) == 1 && !IsLutFileKey(enabled),
+              "a profile keeps " + enabled);
         const Section kept = Filter({ { file, "a.cube" }, { strength, "0.5" }, { "Bogus", "1" } });
         Check(kept.size() == 2 && kept.count(file) && kept.count(strength), "filter keeps " + file + " and its strength");
     }

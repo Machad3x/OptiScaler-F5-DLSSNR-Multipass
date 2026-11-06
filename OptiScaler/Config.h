@@ -437,6 +437,9 @@ class Config
     // Each layer's look input (Story 6): -1 = Auto (DlssNr::kLookInputAuto), else a DlssNr::LutSpace value, 0 = None.
     // The ini holds words (DlssNr::LookInputKey).
     CustomOptional<int> DlssNrPostLutInput[kPostLutLayers] { -1, -1, -1, -1 };
+    // Each layer's on/off: off keeps the layer (file, strength, look input) in the stack without applying it, as if its
+    // strength were 0 (DlssNr::PostLutEntries).
+    CustomOptional<bool> DlssNrPostLutEnabled[kPostLutLayers] { true, true, true, true };
 
     // Whether the model's edit is applied. Off keeps the pass running (so Hold frame works) but shows
     // the clean upscaler frame -- for A/B'ing NR on/off on a frozen frame. Default true.

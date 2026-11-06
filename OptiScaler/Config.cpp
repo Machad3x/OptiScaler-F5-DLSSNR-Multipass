@@ -1319,6 +1319,7 @@ void Config::ReadDlssNr()
         DlssNrPostLutStrength[i].set_from_config(readFloat("DlssNr", ("PostLutStrength" + n).c_str()));
         DlssNrPostLutInput[i].set_from_config(
             readString("DlssNr", ("PostLutInput" + n).c_str()).transform(DlssNr::LookInputFromKey));
+        DlssNrPostLutEnabled[i].set_from_config(readBool("DlssNr", ("PostLutEnabled" + n).c_str()));
         if (DlssNrPostLutStrength[i].has_value())
             DlssNrPostLutStrength[i] = std::isfinite(DlssNrPostLutStrength[i].value())
                                            ? std::clamp(DlssNrPostLutStrength[i].value(), 0.0f, 1.0f)
@@ -1588,6 +1589,10 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
                  DlssNr::LookInputKey(c.DlssNrPostLutInput[2].value_for_config().value_or(DlssNr::kLookInputAuto)));
     out.SetValue("DlssNr", "PostLutInput4",
                  DlssNr::LookInputKey(c.DlssNrPostLutInput[3].value_for_config().value_or(DlssNr::kLookInputAuto)));
+    out.SetValue("DlssNr", "PostLutEnabled1", GetBoolValue(c.DlssNrPostLutEnabled[0].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutEnabled2", GetBoolValue(c.DlssNrPostLutEnabled[1].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutEnabled3", GetBoolValue(c.DlssNrPostLutEnabled[2].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutEnabled4", GetBoolValue(c.DlssNrPostLutEnabled[3].value_for_config()).c_str());
     out.SetValue("DlssNr", "ApplyModel", GetBoolValue(c.DlssNrApplyModel.value_for_config()).c_str());
     out.SetValue("DlssNr", "HoldFrame", GetBoolValue(c.DlssNrHoldFrame.value_for_config()).c_str());
 }
@@ -1856,6 +1861,10 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("PostLutInput2", DlssNrPostLutInput[1]),
         NR_PROFILE_FIELD("PostLutInput3", DlssNrPostLutInput[2]),
         NR_PROFILE_FIELD("PostLutInput4", DlssNrPostLutInput[3]),
+        NR_PROFILE_FIELD("PostLutEnabled1", DlssNrPostLutEnabled[0]),
+        NR_PROFILE_FIELD("PostLutEnabled2", DlssNrPostLutEnabled[1]),
+        NR_PROFILE_FIELD("PostLutEnabled3", DlssNrPostLutEnabled[2]),
+        NR_PROFILE_FIELD("PostLutEnabled4", DlssNrPostLutEnabled[3]),
         NR_PROFILE_FIELD("WhitePointSource", DlssNrWhitePointSource),
         NR_PROFILE_FIELD("GameExposureScale", DlssNrGameExposureScale),
         NR_PROFILE_FIELD("WhitePointTrim", DlssNrWhitePointTrim),

@@ -23,6 +23,23 @@ static int fails = 0;
 
 using namespace DlssNr;
 
+// Stands in for Config's CustomOptional in the PostLutEntries check.
+template <typename T> struct Opt
+{
+    T v;
+    T value_or_default() const { return v; }
+};
+
+// Config's post-NR stack fields, layer 2 switched off.
+struct FakePostLutConfig
+{
+    static constexpr int kPostLutLayers = 4;
+    Opt<std::string> DlssNrPostLutFile[4] { { "a.cube" }, { "b.cube" }, { "c.cube" }, { "" } };
+    Opt<float> DlssNrPostLutStrength[4] { { 0.7f }, { 0.5f }, { 1.0f }, { 1.0f } };
+    Opt<int> DlssNrPostLutInput[4] { { -1 }, { 3 }, { -1 }, { -1 } };
+    Opt<bool> DlssNrPostLutEnabled[4] { { true }, { false }, { true }, { true } };
+};
+
 // A lattice from a per-point function, with an optional domain.
 template <typename F> static Lut3D Make(int n, F f, float lo = 0.0f, float hi = 1.0f)
 {
@@ -294,6 +311,21 @@ int main(int argc, char** argv)
 
         std::filesystem::remove(pa);
         std::filesystem::remove(pb);
+    }
+
+    // A layer switched off: PostLutEntries hands it on at strength 0 in its own place, so it is skipped by the bake and
+    // the layers after it keep their index; switched on again it is back at its own strength.
+    {
+        FakePostLutConfig cfg;
+        auto e = PostLutEntries(cfg);
+        CHECK(e.size() == 4 && e[0].strength == 0.7f && e[1].path == "b.cube" && e[1].strength == 0.0f &&
+              e[1].input == 3 && e[2].path == "c.cube" && e[2].strength == 1.0f);
+        cfg.DlssNrPostLutEnabled[1].v = true;
+        e = PostLutEntries(cfg);
+        CHECK(e[1].strength == 0.5f);
+        cfg.DlssNrPostLutEnabled[0].v = cfg.DlssNrPostLutEnabled[1].v = cfg.DlssNrPostLutEnabled[2].v = false;
+        e = PostLutEntries(cfg);
+        CHECK(e[0].strength == 0.0f && e[1].strength == 0.0f && e[2].strength == 0.0f);
     }
 
     // Optional: every pair of real LUTs in a folder.
