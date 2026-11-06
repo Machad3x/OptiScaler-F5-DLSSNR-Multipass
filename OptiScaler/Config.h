@@ -375,6 +375,18 @@ class Config
     CustomOptional<float> DlssNrEnvironmentDetail { 1.0f };
     CustomOptional<float> DlssNrEnvironmentColour { 1.0f };
     CustomOptional<bool> DlssNrShowSkinMask { false };
+    // Depth fade: the final resolve keeps less of NR's result on faraway surfaces, very near ones and sky, from the
+    // game's depth (off by default, and a no-op on a frame without depth). Distances are 0..1 on a log scale from the
+    // near plane (see shaders/dlssnr/precompile/dlssnr_depthfade.hlsli); strengths are the share of NR's result kept,
+    // 0..1.
+    CustomOptional<bool> DlssNrDepthFade { false };
+    CustomOptional<float> DlssNrDepthFadeFarStart { 0.5f };
+    CustomOptional<float> DlssNrDepthFadeFarEnd { 0.85f };
+    CustomOptional<float> DlssNrDepthFadeFarStrength { 0.5f };
+    CustomOptional<float> DlssNrDepthFadeNearStart { 0.0f };
+    CustomOptional<float> DlssNrDepthFadeNearEnd { 0.1f };
+    CustomOptional<float> DlssNrDepthFadeNearStrength { 1.0f };
+    CustomOptional<float> DlssNrDepthFadeSkyStrength { 1.0f };
     CustomOptional<float, NoDefault> DlssNrPass2Intensity;
     CustomOptional<float, NoDefault> DlssNrPass2LocalStructure;
     CustomOptional<float, NoDefault> DlssNrPass2LocalTone;

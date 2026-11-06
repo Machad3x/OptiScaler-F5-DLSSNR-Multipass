@@ -79,6 +79,23 @@ cbuffer Params : register(b0)
     uint  gInputEncoding;
     // Resolve only: gOriginal is the game's own texture (still in gInputEncoding), not the encode's kept copy.
     uint  gOriginalIsGameColour;
+    // Resolve only: the depth fade (DlssNr_DepthFade.h, Block, same order). gDepthFadeFlags bit 0 = on and the game's
+    // depth is bound in gDepth, bit 1 = depth runs the other way round (far is 0). The shared Superior resolve blobs
+    // keep the cbuffer they were built with.
+#if !defined(DLSSNR_SUPERIOR_HOST_RESOLVE)
+    uint  gDepthFadeFlags;
+    uint  gDepthFadeWidth;   // the depth's valid region
+    uint  gDepthFadeHeight;
+    uint  gDepthFadeBaseX;
+    uint  gDepthFadeBaseY;
+    float gDepthFadeFarStart;
+    float gDepthFadeFarEnd;
+    float gDepthFadeFarStrength;
+    float gDepthFadeNearStart;
+    float gDepthFadeNearEnd;
+    float gDepthFadeNearStrength;
+    float gDepthFadeSkyStrength;
+#endif
 };
 
 // Only the separate Superior PSOs specialize the shared composition. The default
@@ -329,6 +346,16 @@ RWTexture2D<float4> gKeep     : register(u1);  // encode: the untouched copy. un
 #endif
 SamplerState        gLinear   : register(s0);  // so the edit can be read at a different size
 
+// The game's depth, for the depth fade only (resolve; read with Load, never sampled). t5 is the detail reuse pass's
+// sixth slot and the Superior resolve's, so this declaration is left out of the Superior blobs. Where the fade is off
+// the slot holds a stand-in that is never read.
+#if !defined(DLSSNR_SUPERIOR_HOST_RESOLVE)
+#ifdef VK_MODE
+[[vk::binding(8, 0)]]
+#endif
+Texture2D<float4>   gDepth    : register(t5);
+#endif
+
 // Where the live exposure is read from. D3D12 binds it at t4. Vulkan has no such descriptor, so it
 // travels in the motion slot: the encode and resolve have no use for motion vectors there, and the
 // meter's courier already borrows the same slot. Only ever bound when gUseExposureWhitePoint is set.
@@ -342,6 +369,46 @@ float ExposureSample()
 }
 
 #include "dlssnr_whitepoint.hlsli"
+
+#if !defined(DLSSNR_SUPERIOR_HOST_RESOLVE)
+#include "dlssnr_depthfade.hlsli"
+
+// How much of the model's result the pixel keeps (1 where the fade is off, the game gave no depth, or the depth is not
+// readable at that spot). The depth is read at the texel under the pixel's centre (the pixel's place in the frame
+// scaled to the depth's valid region, which is render size and may be a subrect of a larger texture) and its 8
+// neighbours, and the NEAREST of the nine decides: at a silhouette the pixels just outside the near surface's edge are
+// given its distance, so the fade does not draw a thin ring of unprocessed picture around a character. Sky is only
+// where all nine are at the far plane. A value that is not finite is skipped.
+float DepthFadeKeep(uint2 pixel)
+{
+    if ((gDepthFadeFlags & 1u) == 0u || gDepthFadeWidth == 0u || gDepthFadeHeight == 0u)
+        return 1.0;
+
+    const bool inverted = (gDepthFadeFlags & 2u) != 0u;
+    const int2 size = int2(gDepthFadeWidth, gDepthFadeHeight);
+    const float2 uv = (float2(pixel) + 0.5) / float2(max(gWidth, 1u), max(gHeight, 1u));
+    const int2 centre = clamp(int2(floor(uv * float2(size))), int2(0, 0), size - 1);
+
+    // rest = 1 - (depth with far at 1): the far plane is 0, the near plane 1. The nearest surface has the largest.
+    float rest = -1.0;
+    [unroll] for (int oy = -1; oy <= 1; ++oy)
+    {
+        [unroll] for (int ox = -1; ox <= 1; ++ox)
+        {
+            const int2 texel = clamp(centre + int2(ox, oy), int2(0, 0), size - 1);
+            const float z = gDepth.Load(int3(texel + int2(gDepthFadeBaseX, gDepthFadeBaseY), 0)).r;
+            if (isfinite(z))
+                rest = max(rest, saturate(inverted ? z : 1.0 - z));
+        }
+    }
+
+    if (rest < 0.0)
+        return 1.0;
+
+    return DepthFadeFactor(rest, gDepthFadeFarStart, gDepthFadeFarEnd, gDepthFadeFarStrength, gDepthFadeNearStart,
+                           gDepthFadeNearEnd, gDepthFadeNearStrength, gDepthFadeSkyStrength);
+}
+#endif
 
 // What the debug views (model input, model output, edit) are multiplied by on their way into the game's buffer. The
 // game exposes and tone maps that buffer afterwards, so on a scene-referred frame the 0..1 pictures have to be put back
@@ -1801,6 +1868,16 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         return;
     }
 
+#if !defined(DLSSNR_SUPERIOR_HOST_RESOLVE)
+    if (gDebugView == 4)
+    {
+        // The depth fade's keep factor as grey: white keeps all of NR's result, black none (white everywhere where the
+        // fade is off or the game gave no depth).
+        gTarget[id.xy] = float4(EncodeGameColour(DepthFadeKeep(id.xy).xxx * DebugViewScale()), originalSample.a);
+        return;
+    }
+#endif
+
     // There is no accumulator here, and this is where one used to be.
     //
     // The edit was averaged over time -- blended with its own reprojected history to keep the part
@@ -2128,6 +2205,22 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         if (gShowSkinMask != 0)
             result = mask.xxx * normScale;
     }
+
+#if !defined(DLSSNR_SUPERIOR_HOST_RESOLVE)
+    // The depth fade: a pixel far enough away (or very near, or sky) keeps part of the frame as it arrived. It acts on the
+    // finished edit, after the skin controls and everything before them, so it limits the whole of NR's contribution,
+    // and before the side-by-side / wipe overrides below, which show the frame untouched regardless. Where it is off the
+    // result is not touched at all, so the output is bit-for-bit what it was without this block. The skin mask preview
+    // is a picture of the mask and is left as it is.
+    if ((gDepthFadeFlags & 1u) != 0u && gShowSkinMask == 0)
+    {
+        // A factor of 1 leaves the result alone exactly (a lerp would round it), so a fade that keeps everything here is
+        // not a change either.
+        const float keep = DepthFadeKeep(id.xy);
+        if (keep < 1.0)
+            result = lerp(originalSample.rgb, result, keep);
+    }
+#endif
 
     // The side being shown untouched takes the frame as it arrived, past every step above.
     if (showOriginal)
