@@ -1158,6 +1158,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNr_ExposureCalibrate.cpp" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_LateAge.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_Views.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_Contexts.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_Retire.h" />

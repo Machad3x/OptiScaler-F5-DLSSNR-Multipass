@@ -29,6 +29,7 @@
 #include "DlssNr_Dx12.h"
 #include "DlssNr_SurfaceFormats.h"
 #include "DlssNr_ActiveColor.h"
+#include "DlssNr_LateAge.h"
 #include "DlssNr_Views.h"
 #include "DlssNr_Contexts.h"
 #include "DlssNr_Retire.h"

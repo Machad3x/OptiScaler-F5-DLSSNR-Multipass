@@ -17,6 +17,7 @@ struct Slot
 std::array<Slot, 4> slots;
 ComPtr<ID3D12Device> device;
 uint64_t serial = 0, successes = 0, stillRendering = 0, lastApplicationSuccesses = 0;
+uint64_t lastAppliedSerial = 0; // capture serial of the last picture NR ran on; 0: none yet (DlssNrLateAge::NeedsReset)
 bool loggedCrossQueue = false;
 std::string status = "Waiting for a finished picture.";
 bool reset = true;
@@ -106,6 +107,14 @@ void Cancel()
             slot.pending = false;
     }
     reset = true;
+    lastAppliedSerial = 0;
+}
+
+// Presents OptiScaler's own frame generation shows per game frame: 1 + the generated ones while it generates.
+uint32_t PresentsPerGameFrame()
+{
+    const auto fg = State::Instance().currentFG;
+    return fg != nullptr && fg->IsGenerating() ? 1 + fg->GetInterpolatedFrameCount() : 1;
 }
 
 bool Clone(ComPtr<ID3D12Resource>& copy, ID3D12Resource* source, const D3D12_RESOURCE_DESC& want)
@@ -156,7 +165,7 @@ Slot* Acquire(ID3D12GraphicsCommandList* cmd)
         // Captures of this frame (a game may evaluate more than once) stay.
         const auto now = State::Instance().frameCount;
         for (auto& slot : slots)
-            if (slot.submitted && slot.pending && slot.frame.SubmissionEpoch < now) { slot.pending = false; reset = true; }
+            if (slot.submitted && slot.pending && slot.frame.SubmissionEpoch < now) slot.pending = false;
         Say("Waiting for the previous picture to finish.");
         return nullptr;
     }
@@ -457,16 +466,17 @@ static FinishedPick SelectFinishedInput(ID3D12CommandQueue* queue, const D3D12_R
 {
     const auto epoch = State::Instance().frameCount;
     auto* presentQueue = Late::RealQueue(queue);
+    const auto presentsPerGameFrame = Late::PresentsPerGameFrame();
     for (size_t i = 0; i < Late::slots.size(); ++i)
     {
         auto& slot = Late::slots[i];
         if (!slot.pending || slot.expired || !slot.submitted || (gameFrameHandoff && slot.serial > snapshot))
             continue;
-        if (!gameFrameHandoff && (epoch < slot.frame.SubmissionEpoch || epoch - slot.frame.SubmissionEpoch > 1))
+        // Counted in presents, and frame generation adds some per game frame; a missed game frame is NeedsReset's job
+        if (!gameFrameHandoff && DlssNrLateAge::Stale(epoch, slot.frame.SubmissionEpoch, presentsPerGameFrame))
         {
             slot.expired = true;
             if (slot.submitted) slot.pending = false;
-            Late::reset = true;
             continue;
         }
         inputs[i] = { slot.residualOnly == residualOnly && slot.frame.OutputWidth == desc.Width &&
@@ -603,7 +613,7 @@ static void ApplyFinishedColor(ID3D12Resource* picture, ID3D12CommandQueue* queu
                                 Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
                                 DlssNrExposureState::kNitsPerScrgbUnit)
                           : 0.0f;
-        frame.Reset |= Late::reset;
+        frame.Reset |= Late::reset || DlssNrLateAge::NeedsReset(Late::lastAppliedSerial, slot.serial);
         frame.SubmissionEpoch = epoch;
         if (slot.depth) Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -657,6 +667,8 @@ static void ApplyFinishedColor(ID3D12Resource* picture, ID3D12CommandQueue* queu
     }
     const bool ran = slot.residualOnly ? appliedResidual : g_nr.successfulDispatches > before;
     Late::reset = !ran;
+    if (ran)
+        Late::lastAppliedSerial = slot.serial;
     Late::Say(!Config::Instance()->DlssNrApplyModel.value_or_default() ? "NR changes are hidden."
               : ran ? (slot.residualOnly  ? "Applying the pre-SR changes to the finished picture."
                        : gameFrameHandoff ? "Applying NR before Streamline interpolation."
