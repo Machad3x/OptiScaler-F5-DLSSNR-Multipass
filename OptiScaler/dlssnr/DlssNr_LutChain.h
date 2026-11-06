@@ -235,7 +235,8 @@ template <typename ConfigT> inline std::vector<ChainEntry> PostLutEntries(const 
 } // namespace DlssNr
 
 // The parsed layers, the baked result and the last problem, for one stack. Same contract as DlssNr_LutState: a layer
-// that fails to parse does not blank out a chain that was working, it is reported by `failedLayer` / `error`.
+// that fails to parse does not blank out a chain that was working, it is reported by `failedLayer` / `error`. Layers
+// switched on or off after that do take effect: the chain is baked again without the layer that cannot be read.
 struct DlssNr_LutChainState
 {
     DlssNr_LutState layers[DlssNr::kMaxLutChainLayers];
@@ -246,6 +247,7 @@ struct DlssNr_LutChainState
     // whose strength the pass applies (so moving its slider re-uploads nothing). "on" (strength above 0) stays in, so
     // the one active layer moving to another entry is a new bake.
     std::string key;
+    std::string bakedOn; // which entries were on ('1' or '0', in order) when last baked, read or not
     DlssNr::Lut3D baked;
     float strength = 1.0f;                                    // the strength the pass applies `baked` with
     DlssNr::LayerInput inputs[DlssNr::kMaxLutChainLayers] {}; // each kept entry's look input at the last Ensure
@@ -291,6 +293,7 @@ inline bool DlssNr_LutChainEnsure(DlssNr_LutChainState* state, const std::vector
         for (DlssNr_LutState& layer : state->layers)
             DlssNr_LutEnsureParsed(&layer, "");
         state->key.clear();
+        state->bakedOn.clear();
         state->baked = Lut3D();
         state->strength = 1.0f;
         state->description.clear();
@@ -326,7 +329,8 @@ inline bool DlssNr_LutChainEnsure(DlssNr_LutChainState* state, const std::vector
 
         DlssNr_LutEnsureParsed(&layer, present[i].path);
 
-        if (state->layers[i].failed && state->failedLayer < 0)
+        // A layer that is off is not in the chain, so its file cannot fail the chain (or warn).
+        if (state->layers[i].failed && present[i].strength > 0.0f && state->failedLayer < 0)
         {
             state->failedLayer = (int) i;
             state->failedPath = state->layers[i].attemptedPath;
@@ -334,38 +338,50 @@ inline bool DlssNr_LutChainEnsure(DlssNr_LutChainState* state, const std::vector
         }
     }
 
-    if (state->failedLayer >= 0)
+    std::string onNow;
+    for (const ChainEntry& e : present)
+        onNow += e.strength > 0.0f ? '1' : '0';
+
+    // A file that breaks changes nothing the player asked for, so the last good chain stays. Switching layers on or off
+    // does: that is baked below from the layers that can be read, or the grade would ignore the switch.
+    if (state->failedLayer >= 0 && onNow == state->bakedOn)
     {
-        // The last good chain stays, but which layer read what no longer matches the entries the menu shows.
+        // Which layer read what no longer matches the entries the menu shows.
         for (LayerInput& in : state->inputs)
             in = LayerInput();
         state->endsIn = LutSpace::Display;
         return state->Loaded(); // keep the last good chain
     }
+    state->bakedOn = onNow;
+
+    std::vector<ChainEntry> baking = present;
+    for (size_t i = 0; i < baking.size(); ++i)
+        if (state->layers[i].failed)
+            baking[i].strength = 0.0f;
 
     const size_t effective =
-        (size_t) std::count_if(present.begin(), present.end(), [](const ChainEntry& e) { return e.strength > 0.0f; });
+        (size_t) std::count_if(baking.begin(), baking.end(), [](const ChainEntry& e) { return e.strength > 0.0f; });
 
     const Lut3D* luts[kMaxLutChainLayers] {};
-    for (size_t i = 0; i < present.size(); ++i)
+    for (size_t i = 0; i < baking.size(); ++i)
         luts[i] = state->layers[i].Loaded() ? &state->layers[i].lut : nullptr;
     LayerInput inputs[kMaxLutChainLayers] {};
     // Every call, not only on a bake: a setting that changes no conversion (Auto -> the same space by hand) bakes
     // nothing but still changes what the menu says.
-    state->endsIn = ResolveLookInputs(present, luts, inputs);
+    state->endsIn = ResolveLookInputs(baking, luts, inputs);
     std::copy(inputs, inputs + kMaxLutChainLayers, state->inputs);
     const bool converts =
-        std::any_of(inputs, inputs + present.size(), [](const LayerInput& in) { return in.converted; });
+        std::any_of(inputs, inputs + baking.size(), [](const LayerInput& in) { return in.converted; });
 
     // One layer's strength is the pass's, converted or not (BakeChain); a stack's is in the bake.
     const bool strengthBaked = effective != 1;
     std::string key = converts ? "decode " + std::to_string((int) decode) + "\n" : std::string();
-    for (size_t i = 0; i < present.size(); ++i)
+    for (size_t i = 0; i < baking.size(); ++i)
     {
-        key += present[i].path + "|" + std::to_string(state->writeTimes[i].time_since_epoch().count()) +
-               (present[i].strength > 0.0f ? "|on" : "|off");
+        key += baking[i].path + "|" + std::to_string(state->writeTimes[i].time_since_epoch().count()) +
+               (baking[i].strength > 0.0f ? "|on" : "|off");
         if (strengthBaked)
-            key += "|" + std::to_string(std::clamp(present[i].strength, 0.0f, 1.0f));
+            key += "|" + std::to_string(std::clamp(baking[i].strength, 0.0f, 1.0f));
         if (inputs[i].converted)
             key += "|as " + std::to_string((int) inputs[i].space) + "/" + std::to_string((int) inputs[i].gamut);
         key += "\n";
@@ -374,8 +390,8 @@ inline bool DlssNr_LutChainEnsure(DlssNr_LutChainState* state, const std::vector
     if (key != state->key)
     {
         std::vector<ChainLayer> layers;
-        for (size_t i = 0; i < present.size(); ++i)
-            layers.push_back({ &state->layers[i].lut, present[i].strength, inputs[i].converted, inputs[i].space, decode,
+        for (size_t i = 0; i < baking.size(); ++i)
+            layers.push_back({ &state->layers[i].lut, baking[i].strength, inputs[i].converted, inputs[i].space, decode,
                                inputs[i].gamut });
 
         std::string err;
@@ -386,17 +402,17 @@ inline bool DlssNr_LutChainEnsure(DlssNr_LutChainState* state, const std::vector
         state->baked = ok ? std::move(baked) : Lut3D();
         state->strength = strength;
         state->decode = decode;
-        state->description = DlssNr_DescribeChain(*state, present);
+        state->description = DlssNr_DescribeChain(*state, baking);
     }
     else if (!strengthBaked)
     {
         // A single layer's strength changes without a re-bake: the pass applies it.
-        for (const ChainEntry& e : present)
+        for (const ChainEntry& e : baking)
             if (e.strength > 0.0f)
                 state->strength = std::clamp(e.strength, 0.0f, 1.0f);
     }
 
-    if (effective == 0)
+    if (effective == 0 && state->failedLayer < 0)
         state->error = "every LUT is off or at strength 0";
 
     return state->Loaded();

@@ -8,9 +8,9 @@
 // passes, colour, output, input style, reuse, LUT) and the game's own settings (exposure, colour encoding, Finished
 // Picture, Optical F5Low tuning, edge compression). It records the game it was saved in, and the menu warns when it is
 // loaded in another; there the Optical F5Low tuning stays as it is (KeepNative). It leaves out what is the player's own
-// or only for the session: on/off, the toggle key, the display's paper white, the Optical F5Low mode, debug and compare
-// views, diagnostics. Every key Config::SaveIni writes is in exactly one of the two lists; the test fails on a new key
-// that is in neither.
+// or only for the session: NR's own on/off, the toggle key, the display's paper white, the Optical F5Low mode, debug
+// and compare views, diagnostics. Every key Config::SaveIni writes is in exactly one of the two lists; the test fails
+// on a new key that is in neither.
 
 #include <algorithm>
 #include <cctype>

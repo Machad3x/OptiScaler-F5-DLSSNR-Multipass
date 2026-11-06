@@ -3740,8 +3740,9 @@ static void RenderPostLutSection(Config* config)
         {
             // A conversion LUT with no look after it: the screen shows the flat log signal.
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
-            ImGui::TextWrapped("The stack ends in %s, not a picture: add a look made for it after the last LUT.",
-                               DlssNr::LutSpaceName(status.endsIn));
+            ImGui::TextWrapped(
+                "The stack ends in %s, not a picture: add or switch on a look made for it after this LUT.",
+                DlssNr::LutSpaceName(status.endsIn));
             ImGui::PopStyleColor();
         }
         StatusSlotEnd(slot, 5);
