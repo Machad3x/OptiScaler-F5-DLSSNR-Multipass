@@ -570,9 +570,9 @@ bool ReflexHooks::updateTimingData()
             }
             else
             {
-                // An average of about the last 30 reads (an exponential one); starts again when the data was empty or
-                // changes from reaching the GPU to not (or back)
-                constexpr double alpha = 2.0 / (30.0 + 1.0);
+                // An average of about the last 8 reads, about 4 s at the overlay's 500 ms poll (an exponential one);
+                // starts again when the data was empty or changes from reaching the GPU to not (or back)
+                constexpr double alpha = 2.0 / (8.0 + 1.0);
                 double value = latency.ms;
 
                 if (_inputLatencyValid.load(std::memory_order_relaxed) &&
