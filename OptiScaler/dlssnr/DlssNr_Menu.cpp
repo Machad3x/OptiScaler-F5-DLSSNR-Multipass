@@ -4,6 +4,7 @@
 #include "DlssNr.h"
 #include "DlssNr_ExposureScan.h"
 #include "DlssNr_LookPresets.h"
+#include "DlssNr_NativeBlend.h"
 #include "DlssNr_Profiles.h"
 #include "DlssNr_SuperiorScaling.h"
 #include "DlssNrNative.h"
@@ -857,6 +858,52 @@ static bool ResolutionTierActive(Config* config, const ResolutionTier& tier, boo
            config->DlssNrReducedUpscaleMethod.value_or_default() == tier.upscaleMethod &&
            !config->DlssNrModelResolutionAuto.value_or_default() &&
            std::fabs(config->DlssNrWorkingScale.value_or_default() - tier.workingScale) < 0.005f;
+}
+
+// Native blend (DlssNr_NativeBlend.h): the four settings it owns, read from and written to the config. An unset setting
+// stays unset on the way back (auto, not its default number).
+static DlssNrNativeBlend::Settings BlendSettingsNow(Config* config)
+{
+    return { config->DlssNrFinishedPicture, config->DlssNrReversibleMode, config->DlssNrSkinProtection,
+             config->DlssNrReplaceDetailStrength };
+}
+
+static DlssNrNativeBlend::Resolved BlendResolvedNow(Config* config)
+{
+    return { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrReversibleMode.value_or_default(),
+             config->DlssNrSkinProtection.value_or_default(), config->DlssNrReplaceDetailStrength.value_or_default() };
+}
+
+static DlssNrNativeBlend::State ReadBlendState(Config* config)
+{
+    DlssNrNativeBlend::State state;
+    state.on = config->DlssNrNativeBlend.value_or_default();
+    state.saved = { config->DlssNrNativeBlendWasFinishedPicture, config->DlssNrNativeBlendWasReversibleMode,
+                    config->DlssNrNativeBlendWasSkinProtection, config->DlssNrNativeBlendWasReplaceDetail };
+    return state;
+}
+
+static void WriteBlendState(Config* config, const DlssNrNativeBlend::State& state)
+{
+    config->DlssNrNativeBlend = state.on;
+    config->DlssNrNativeBlendWasFinishedPicture = state.saved.finishedPicture;
+    config->DlssNrNativeBlendWasReversibleMode = state.saved.reversibleMode;
+    config->DlssNrNativeBlendWasSkinProtection = state.saved.skinProtection;
+    config->DlssNrNativeBlendWasReplaceDetail = state.saved.replaceDetail;
+}
+
+static void WriteBlendSettings(Config* config, const DlssNrNativeBlend::Settings& settings)
+{
+    const bool finishedBefore = config->DlssNrFinishedPicture.value_or_default();
+
+    config->DlssNrFinishedPicture = settings.finishedPicture;
+    config->DlssNrReversibleMode = settings.reversibleMode;
+    config->DlssNrSkinProtection = settings.skinProtection;
+    config->DlssNrReplaceDetailStrength = settings.replaceDetail;
+
+    // Same rule as the "NR Pass at:" combo: changing Finished Picture clears a session failure.
+    if (finishedBefore != config->DlssNrFinishedPicture.value_or_default())
+        RetryNr();
 }
 
 // Which API's Optical F5Low drivers and depth finder this game uses: a game presents with one of them. A dxvk game
@@ -3141,6 +3188,68 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
                 ImGui::TextWrapped("This option needs a native DirectX 12 game.");
             else
                 ImGui::TextWrapped("%s", DlssNr::FinishedPictureStatus().c_str());
+        }
+
+        // Native blend: NR's answer written as it is (DlssNr_NativeBlend.h). Read each frame, so a change made in the
+        // controls it owns (or a look, a profile) ends it here and the player's change stands.
+        {
+            auto blend = ReadBlendState(config);
+            if (DlssNrNativeBlend::Reconcile(blend, BlendResolvedNow(config)))
+                WriteBlendState(config, blend);
+
+            // Finished Picture runs on a native DirectX 12 game only (the same test as the line above); Vulkan has
+            // none.
+            const auto blendFeature = State::Instance().currentFeature;
+            const bool blendUnsupported =
+                DlssNr::IsRunningVk() ||
+                (blendFeature && (blendFeature->Api() != API::DX12 || blendFeature->IsWithDx12()));
+            bool nativeBlend = DlssNrNativeBlend::Active(blend, BlendResolvedNow(config));
+
+            // Greyed only while off: a game that cannot run it can still switch a saved "on" off.
+            ImGui::BeginDisabled(blendUnsupported && !nativeBlend);
+            if (ImGui::Checkbox("Native blend", &nativeBlend))
+            {
+                if (nativeBlend)
+                {
+                    const auto write = DlssNrNativeBlend::TurnOn(blend, BlendSettingsNow(config));
+                    WriteBlendState(config, blend);
+                    WriteBlendSettings(config, write);
+                }
+                else if (const auto back = DlssNrNativeBlend::TurnOff(blend))
+                {
+                    WriteBlendState(config, blend);
+                    WriteBlendSettings(config, *back);
+                }
+
+                finishedPicture = config->DlssNrFinishedPicture.value_or_default();
+            }
+            ImGui::EndDisabled();
+
+            HelpMarker(
+                "Shows NR's result as it is, without OptiScaler's own blending. Runs NR on the finished picture "
+                "with Replace, and turns off Separate skin / environment controls and Restore Sharpness. Use NR's "
+                "Intensity for the strength.\n"
+                "Turning it off puts your earlier settings back. Changing the placement, the composition or one of "
+                "those controls yourself ends it and keeps your change.");
+
+            if (blendUnsupported && !nativeBlend)
+                ImGui::TextWrapped("Needs a native DirectX 12 game (Finished Picture does not run on Vulkan).");
+
+            if (nativeBlend && enabled)
+            {
+                const auto encoding = DlssNr::ReadColourEncodingStatus();
+                const bool sdr = encoding.seen && encoding.exposureState == DlssNrExposureState::State::ToneMapped;
+                const ImVec4 amber(0.9f, 0.6f, 0.25f, 1.0f);
+
+                if (encoding.seen && !sdr)
+                    ImGui::TextColored(amber, "This picture is HDR, so NR's result still goes through a brightness "
+                                              "curve here. Not a true native match.");
+
+                // The model then ran small and its changes were enlarged: not NR's answer as it is.
+                if (config->DlssNrRunBeforeSr.value_or_default() || config->DlssNrDeferredDlss.value_or_default())
+                    ImGui::TextColored(amber, "Run the model before Super Resolution is on: NR's changes are enlarged, "
+                                              "not shown as they are.");
+            }
         }
 
         // Nested under Finished Picture: a second, independent axis (generate the changes at the

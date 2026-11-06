@@ -405,6 +405,17 @@ class Config
     // way the composed modes do. 0 = today's behaviour, unchanged.
     CustomOptional<float> DlssNrReplaceDetailStrength { 0.5f };
 
+    // Native blend (the Neural Rendering page's "Native blend"): NR on the finished picture with Replace, no skin
+    // protection and no Replace detail, the model's answer written as it is. NativeBlend is whether it is on; the Was
+    // keys hold the four settings it replaced (FinishedPicture, ReversibleMode, SkinProtection, ReplaceDetailStrength)
+    // so turning it off puts them back, across a restart too. They have no default: auto (unset) comes back as auto,
+    // not as the default number. Rules in dlssnr/DlssNr_NativeBlend.h.
+    CustomOptional<bool> DlssNrNativeBlend { false };
+    CustomOptional<bool, NoDefault> DlssNrNativeBlendWasFinishedPicture;
+    CustomOptional<uint32_t, NoDefault> DlssNrNativeBlendWasReversibleMode;
+    CustomOptional<bool, NoDefault> DlssNrNativeBlendWasSkinProtection;
+    CustomOptional<float, NoDefault> DlssNrNativeBlendWasReplaceDetail;
+
     // The proxy curve (Final Image Composition), values in shaders/dlssnr/DlssNr_ProxyCurve.h. 0 = soft
     // knee + our composition (default); 1/2 = unclipped Neutwo proxy + composition / pure-inverse replace;
     // 3/4 = the balanced (hybrid) curve, the same two ways; 5 HLG and 6 PQ + composition; 7 linear +
