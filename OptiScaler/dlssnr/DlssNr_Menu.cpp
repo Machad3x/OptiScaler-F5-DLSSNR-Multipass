@@ -3282,7 +3282,13 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
             else
             {
                 if (!finishedPicture)
+                {
                     RetryNr();
+                    // Picking Finished Picture starts plain: "Run the model before Super Resolution" (the nested box)
+                    // is a choice of its own, not carried over from the "Before Super Resolution" placement.
+                    beforeSr = false;
+                    config->DlssNrRunBeforeSr = false;
+                }
                 finishedPicture = true;
                 config->DlssNrFinishedPicture = true;
             }

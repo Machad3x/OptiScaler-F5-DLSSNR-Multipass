@@ -120,8 +120,8 @@ uint32_t PresentsPerGameFrame()
 
 bool Clone(ComPtr<ID3D12Resource>& copy, ID3D12Resource* source, const D3D12_RESOURCE_DESC& want)
 {
-    if (want.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || want.SampleDesc.Count != 1 ||
-        want.DepthOrArraySize != 1 || want.MipLevels != 1)
+    // Mips and array slices are fine: the copy keeps only the top level (CopyFinishedGuide).
+    if (want.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || want.SampleDesc.Count != 1)
         return false;
     if (copy)
     {
@@ -131,7 +131,7 @@ bool Clone(ComPtr<ID3D12Resource>& copy, ID3D12Resource* source, const D3D12_RES
             copy.Reset(); // caller checked the previous GPU fence
     }
     if (!copy)
-        copy.Attach(CreateGuideClone(device.Get(), source));
+        copy.Attach(CreateGuideClone(device.Get(), source, true));
     return copy != nullptr;
 }
 
@@ -221,9 +221,30 @@ void Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool r
     auto& slot = *next;
     const auto depthDesc = depth ? depth->GetDesc() : D3D12_RESOURCE_DESC {};
     const auto motionDesc = motion->GetDesc();
+    // Logs a guide the copy could not take, once per shape, so the next unsupported case names itself.
+    const auto refuse = [](const char* name, const D3D12_RESOURCE_DESC& d)
+    {
+        static std::set<std::tuple<std::string, UINT64, UINT, UINT16, UINT16, UINT, int, unsigned>> logged;
+        if (!logged.emplace(name, d.Width, d.Height, d.DepthOrArraySize, d.MipLevels, d.SampleDesc.Count,
+                            (int) d.Format, (unsigned) d.Flags).second)
+            return;
+        LOG_WARN("DLSS-NR finished picture: cannot copy the game's {} (dimension {}, {}x{}, array {}, mips {}, samples {}, "
+                 "format {}, flags 0x{:X})",
+                 name, (int) d.Dimension, d.Width, d.Height, d.DepthOrArraySize, d.MipLevels, d.SampleDesc.Count,
+                 (int) d.Format, (unsigned) d.Flags);
+    };
+    if (depth && !Clone(slot.depth, depth, depthDesc))
+    {
+        refuse("depth", depthDesc);
+        depth = nullptr; // NR runs without depth rather than skipping the frame
+    }
     if (!depth) slot.depth.Reset(); // no stale depth from an earlier frame
-    if ((depth && !Clone(slot.depth, depth, depthDesc)) || !Clone(slot.motion, motion, motionDesc))
-    { Say("The game's depth or movement data is not supported."); return; }
+    if (!Clone(slot.motion, motion, motionDesc))
+    {
+        refuse("motion vectors", motionDesc);
+        Say("The game's movement data is not supported.");
+        return;
+    }
     slot.residualOnly = false;
     slot.frame = {};
     auto& frame = slot.frame;
@@ -261,9 +282,23 @@ void Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool r
                           const D3D12_RESOURCE_DESC& desc, GuideRegion region)
     {
         if (!source) return;
-        Barrier(cmd, source, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        // Only the top level is read. With more subresources, only that one is moved: the game's lower mips (a depth
+        // pyramid) may rest in another state, which a whole-resource barrier would get wrong.
+        const bool whole = desc.MipLevels == 1 && desc.DepthOrArraySize == 1;
+        const auto move = [&](D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
+        {
+            if (whole) { Barrier(cmd, source, from, to); return; }
+            D3D12_RESOURCE_BARRIER b {};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = source;
+            b.Transition.Subresource = 0;
+            b.Transition.StateBefore = from;
+            b.Transition.StateAfter = to;
+            cmd->ResourceBarrier(1, &b);
+        };
+        move(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
         CopyFinishedGuide(cmd, destination, source, desc, region);
-        Barrier(cmd, source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        move(D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         // The copy returns to COPY_DEST after the late dispatch.
     };
     copy(depth, slot.depth.Get(), depthDesc, regions.depth);
