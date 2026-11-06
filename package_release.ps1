@@ -507,6 +507,15 @@ foreach ($field in 'CompanyName', 'FileDescription', 'ProductName', 'OriginalFil
         throw "REFUSING: staged OptiScaler.dll has an empty $field in its version resource"
     }
 }
+# The forwarder carries the release number too, so a player can tell which release a game folder's copy came from.
+$forwarderVersion = (Get-Item -LiteralPath "$stage
+vngx.dll_dlssnr.dll").VersionInfo.FileVersion
+if ([string]::IsNullOrWhiteSpace($forwarderVersion)) {
+    throw 'REFUSING: staged nvngx.dll_dlssnr.dll has no version in its version resource'
+}
+if ($forwarderVersion -ne $versionInfo.FileVersion) {
+    throw "REFUSING: staged nvngx.dll_dlssnr.dll is version $forwarderVersion, OptiScaler.dll is $($versionInfo.FileVersion): a stale build"
+}
 Write-Host ("binary hygiene: DllCharacteristics 0x{0:X4}, version resource complete, no PDB path" -f $dllCharacteristics)
 
 # Hash every shipped file after the staging tree is final. Use forward slashes so the list is easy
