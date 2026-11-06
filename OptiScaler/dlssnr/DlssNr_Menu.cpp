@@ -3481,14 +3481,16 @@ static void RenderPostLutSection(Config* config)
     {
         std::string file;
         float strength;
-        int input; // look input, DlssNr::kLookInputAuto or a DlssNr::LutSpace
+        int input;    // look input, DlssNr::kLookInputAuto or a DlssNr::LutSpace
+        bool enabled; // off: kept in the stack, not applied
     };
     std::vector<Layer> layers;
     for (int i = 0; i < kMax; ++i)
         if (!config->DlssNrPostLutFile[i].value_or_default().empty())
             layers.push_back({ config->DlssNrPostLutFile[i].value_or_default(),
                                config->DlssNrPostLutStrength[i].value_or_default(),
-                               config->DlssNrPostLutInput[i].value_or_default() });
+                               config->DlssNrPostLutInput[i].value_or_default(),
+                               config->DlssNrPostLutEnabled[i].value_or_default() });
 
     const auto store = [&]()
     {
@@ -3497,9 +3499,17 @@ static void RenderPostLutSection(Config* config)
             config->DlssNrPostLutFile[i] = i < (int) layers.size() ? layers[i].file : std::string();
             config->DlssNrPostLutStrength[i] = i < (int) layers.size() ? layers[i].strength : 1.0f;
             config->DlssNrPostLutInput[i] = i < (int) layers.size() ? layers[i].input : DlssNr::kLookInputAuto;
+            config->DlssNrPostLutEnabled[i] = i < (int) layers.size() ? layers[i].enabled : true;
         }
     };
     const auto status = DlssNr::ReadPostLutStatus();
+
+    // The whole page's switch. Off greys the list out and keeps every setting; Status stays readable.
+    bool stackOn = config->DlssNrPostLutStackEnabled.value_or_default();
+    if (ImGui::Checkbox("Enable LUTs##postlutstack", &stackOn))
+        config->DlssNrPostLutStackEnabled = stackOn;
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!stackOn);
 
     // The empty row follows a layer, so it goes with the last one (and at the cap there is no room for it).
     if (addRow && (layers.empty() || (int) layers.size() >= kMax))
@@ -3544,7 +3554,7 @@ static void RenderPostLutSection(Config* config)
                         layers[row].input = DlssNr::kLookInputAuto;
                     }
                     else
-                        layers.push_back({ pathStr, 1.0f, DlssNr::kLookInputAuto });
+                        layers.push_back({ pathStr, 1.0f, DlssNr::kLookInputAuto, true });
                     addRow = false;
                     store();
                 }
@@ -3555,6 +3565,17 @@ static void RenderPostLutSection(Config* config)
         if (filled)
         {
             ImGui::SameLine(buttonsX);
+            bool enabled = layers[row].enabled;
+            if (ImGui::Checkbox(("##postluton" + id).c_str(), &enabled))
+            {
+                layers[row].enabled = enabled;
+                store();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(enabled ? "On: this LUT is applied. Untick to skip it and keep its settings."
+                                          : "Off: this LUT is skipped; its settings are kept. Tick to apply it.");
+
+            ImGui::SameLine();
             ImGui::BeginDisabled(row == 0);
             if (ImGui::ArrowButtonEx(("##postlutup" + id).c_str(), ImGuiDir_Up, arrowSize))
             {
@@ -3586,7 +3607,8 @@ static void RenderPostLutSection(Config* config)
         if (filled)
         {
             // What the layer reads: Auto shows what it found, from the last bake.
-            const bool reported = status.seen && status.loaded && layers[row].strength > 0.0f;
+            const bool reported =
+                stackOn && status.seen && status.loaded && layers[row].enabled && layers[row].strength > 0.0f;
             const std::string inputPreview =
                 LookInputPreview(layers[row].input, reported ? &status.inputs[row] : nullptr);
             const std::string inputLabel =
@@ -3653,16 +3675,18 @@ static void RenderPostLutSection(Config* config)
     }
     if (ImGui::SmallButton("Rescan##postlut"))
         lutFiles = ScanLutFolder();
+    ImGui::EndDisabled();
     ImGui::SameLine();
     HelpMarker("Applies a colour grade (.cube LUT) to the game's picture. Put files in OptiScaler\\LUTs and press "
-               "Rescan.\n"
+               "Rescan. Enable LUTs switches the whole stack off and on and keeps its settings.\n"
                "With Neural Rendering on, it grades the picture NR returns, so the model never sees it and exposure, "
                "skin detection and reuse are not affected. With NR before Super Resolution the grade is applied before "
                "the upscaler; in Finished Picture mode it grades the finished picture, UI included (D3D12; Vulkan does "
                "not run that mode). With NR off, it grades the OptiScaler upscaler's output, before the game draws its "
                "HUD (needs an OptiScaler upscaler).\n"
-               "Add LUT adds another after the last one, up to four. They are applied top to bottom (the arrows move a "
-               "layer, x removes it); each strength blends that layer only. Strong grades stack up.\n"
+               "Add LUT adds another after the last one, up to four. They are applied top to bottom (the tick box "
+               "switches a layer off and on and keeps its settings, the arrows move it, x removes it); each strength "
+               "blends that layer only. Strong grades stack up.\n"
                "Look input: a LUT made for a camera log space (ARRILogC4AWG4-to-..., S-Log3, ...) needs the picture in "
                "that space. Auto reads it from the file's header or name and converts the game's picture for it, so no "
                "conversion LUT is needed in front; an ordinary LUT gets the picture as it is. Exact on Linear HDR "
@@ -3678,6 +3702,8 @@ static void RenderPostLutSection(Config* config)
         const bool current = status.seen && GetTickCount64() - status.reportedMs < 1000;
         if (layers.empty())
             ImGui::TextWrapped("No LUT loaded.");
+        else if (!stackOn)
+            ImGui::TextWrapped("Switched off.");
         else if (!current)
             ImGui::TextWrapped("Not applied: needs Neural Rendering or an OptiScaler upscaler.");
         else if (!status.wanted)
@@ -3692,11 +3718,15 @@ static void RenderPostLutSection(Config* config)
             ImGui::TextWrapped("Not applied.");
 
         // The backend's reason (a mode or device that does not run it), or how it runs in this mode.
-        if (!layers.empty() && status.wanted && !status.note.empty())
+        if (stackOn && !layers.empty() && status.wanted && !status.note.empty())
             ImGui::TextWrapped("%s", status.note.c_str());
         ImGui::PopStyleColor();
 
-        if (!status.failedPath.empty() || !status.error.empty())
+        if (!stackOn)
+        {
+            // Switched off on purpose: no warnings about a stack that is not meant to run.
+        }
+        else if (!status.failedPath.empty() || !status.error.empty())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
             if (!status.failedPath.empty())
@@ -3710,8 +3740,9 @@ static void RenderPostLutSection(Config* config)
         {
             // A conversion LUT with no look after it: the screen shows the flat log signal.
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
-            ImGui::TextWrapped("The stack ends in %s, not a picture: add a look made for it after the last LUT.",
-                               DlssNr::LutSpaceName(status.endsIn));
+            ImGui::TextWrapped(
+                "The stack ends in %s, not a picture: add or switch on a look made for it after this LUT.",
+                DlssNr::LutSpaceName(status.endsIn));
             ImGui::PopStyleColor();
         }
         StatusSlotEnd(slot, 5);

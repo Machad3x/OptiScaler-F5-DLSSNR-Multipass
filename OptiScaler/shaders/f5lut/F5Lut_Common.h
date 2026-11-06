@@ -30,7 +30,7 @@ class F5Lut_Common
 
     // Whether the step runs this frame. CPU only, called while the chain is built, so a step that is in the chain
     // always has a lattice to grade with. False with an empty stack (the API step then lets go of its texture), while
-    // NR grades, or when no layer could be read (reported).
+    // NR grades, or when no layer is on or could be read (reported).
     bool PrepareChain(bool linearHdr)
     {
         const Config& cfg = *Config::Instance();

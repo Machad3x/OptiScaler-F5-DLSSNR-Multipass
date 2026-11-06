@@ -551,13 +551,22 @@ int main(int argc, char** argv)
                    c.baked.latticeCoord == kLatticeEven,
                "a creative stack re-baked on a frame decode change or left the even lattice");
 
-        // A failed layer: the last good chain stays, the menu's inputs are cleared.
+        // A file failing with the same layers on: the last good chain stays, the menu's inputs are cleared.
         DlssNr_LutChainState f;
-        Bake({ { look, 1.0f } }, FrameDecode::LinearHdr, &f);
+        Bake({ { look, 1.0f }, { creative, 0.5f } }, FrameDecode::LinearHdr, &f);
         expect(f.inputs[0].converted, "look did not convert before the failure check");
-        expect(Bake({ { broken, 1.0f }, { look, 1.0f } }, FrameDecode::LinearHdr, &f) && f.failedLayer == 0 &&
-                   !f.inputs[0].converted && !f.inputs[1].converted,
+        const std::vector<float> lastGood = f.baked.rgb;
+        expect(Bake({ { broken, 1.0f }, { creative, 0.5f } }, FrameDecode::LinearHdr, &f) && f.failedLayer == 0 &&
+                   f.baked.rgb == lastGood && !f.inputs[0].converted && !f.inputs[1].converted,
                "a failed layer left the menu showing the last bake's inputs");
+
+        // Layers switched on or off around a failed one: baked from those that can be read, and the menu's inputs say
+        // what that bake does.
+        DlssNr_LutChainState g;
+        Bake({ { look, 1.0f } }, FrameDecode::LinearHdr, &g);
+        expect(Bake({ { broken, 1.0f }, { look, 1.0f } }, FrameDecode::LinearHdr, &g) && g.failedLayer == 0 &&
+                   !g.inputs[0].converted && g.inputs[1].converted,
+               "a layer next to a failed one was not baked, or the menu's inputs do not match the bake");
         std::puts("7-8. Ensure: strength, settings, decode, failures and old stacks behave");
     }
 
