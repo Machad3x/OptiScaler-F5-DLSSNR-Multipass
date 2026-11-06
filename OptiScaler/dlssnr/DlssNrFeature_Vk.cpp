@@ -695,6 +695,69 @@ std::optional<std::filesystem::path> FindSnippet()
 #include "DlssNr_DetailReuse_Vk.inl"
 #include "DlssNr_Spatial_Vk.inl"
 
+// The game's depth for the resolve's depth fade (shaders/dlssnr/DlssNr_DepthFade.h). Read as a sampled image in
+// SHADER_READ_ONLY_OPTIMAL and never moved, as the detail reuse and Compress screen edges read it, through a depth-only
+// view when the game's own view covers stencil too (a view with both aspects cannot be sampled). That view is made for
+// the frame and retired like theirs.
+namespace DepthFadeVk
+{
+OwnedImage depthOnly;
+bool warned = false;
+
+// The depth image view to bind, or null (no depth, or one that cannot be read: the fade then does nothing).
+VkImageView View(VkDevice device, const NVSDK_NGX_Resource_VK* res)
+{
+    DetailReuseVk::Retire(depthOnly);
+
+    if (res == nullptr || res->Type != NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW)
+        return VK_NULL_HANDLE;
+
+    const auto& info = res->Resource.ImageViewInfo;
+    if (info.ImageView == VK_NULL_HANDLE)
+        return VK_NULL_HANDLE;
+
+    if (info.SubresourceRange.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT ||
+        info.SubresourceRange.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT)
+        return info.ImageView;
+
+    if (info.Image == VK_NULL_HANDLE || (info.SubresourceRange.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) == 0)
+        return VK_NULL_HANDLE;
+
+    VkImageViewCreateInfo view {};
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = info.Image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = info.Format;
+    view.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, info.SubresourceRange.baseMipLevel, 1,
+                              info.SubresourceRange.baseArrayLayer, 1 };
+
+    if (vkCreateImageView(device, &view, nullptr, &depthOnly.view) != VK_SUCCESS)
+    {
+        depthOnly.view = VK_NULL_HANDLE;
+        if (!warned)
+        {
+            warned = true;
+            LOG_WARN("DLSS-NR Vulkan depth fade: could not make a depth-only view of the game's depth");
+        }
+        return VK_NULL_HANDLE;
+    }
+
+    return depthOnly.view;
+}
+
+// The fade is off: let go of last frame's view.
+void Idle() { DetailReuseVk::Retire(depthOnly); }
+
+// Shutdown. deviceAlive: the device is idle and the view is destroyed; otherwise it went with the device.
+void Release(bool deviceAlive)
+{
+    if (deviceAlive)
+        DestroyImage(depthOnly);
+    else
+        depthOnly = OwnedImage {};
+}
+} // namespace DepthFadeVk
+
 } // namespace
 
 // ---------------------------------------------------------------------------------------------
@@ -2664,6 +2727,19 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     DlssNrConstants resolve = encode;
     resolve.Mode = DlssNrMode_Resolve;
+
+    // The depth fade. Off, or a depth that cannot be read, leaves the block zero and the resolve as it was.
+    const DlssNrDepthFade::Settings depthFade = DlssNrDepthFade::SettingsFrom(cfg);
+    VkImageView fadeDepth = VK_NULL_HANDLE;
+    if (depthFade.enabled)
+        fadeDepth = DepthFadeVk::View(device, depth);
+    else
+        DepthFadeVk::Idle();
+    resolve.DepthFade = DlssNrDepthFade::MakeBlock(depthFade, fadeDepth != VK_NULL_HANDLE, depthInverted,
+                                                   { guideWidth, guideHeight, guides.depth.x, guides.depth.y });
+    DlssNrDepthFade::Report(depthFade, fadeDepth != VK_NULL_HANDLE);
+    if ((resolve.DepthFade.Flags & DlssNrDepthFade::kActive) == 0)
+        fadeDepth = VK_NULL_HANDLE;
     // Replace's detail injection puts back the game frame's own fine texture, which is what a style removed: off while
     // the picture was restyled, so Replace shows the model's painting of the restyled picture.
     if (inputRestyled)
@@ -2822,11 +2898,10 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     if (beforeSr)
         Transition(cmdBuffer, g_vk.preColor, VK_IMAGE_LAYOUT_GENERAL);
-    if (!g_vk.pass->Dispatch(cmdBuffer, resolve, width, height, resolveProxy->view, resolveAnswer->view,
-                             g_vk.keep.view,
-                             liveExposureView,
-                             beforeSr ? g_vk.preColor.view : colour->Resource.ImageViewInfo.ImageView,
-                             VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
+    if (!g_vk.pass->Dispatch(cmdBuffer, resolve, width, height, resolveProxy->view, resolveAnswer->view, g_vk.keep.view,
+                             liveExposureView, beforeSr ? g_vk.preColor.view : colour->Resource.ImageViewInfo.ImageView,
+                             VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, fadeDepth))
     {
         Fail("the resolve dispatch failed");
         return;
@@ -2920,6 +2995,7 @@ void ReleaseNrObjects()
     CalibrationVkShutdown(true);
     DetailReuseVk::Release(true);
     EdgeCompressionVk::Release(true);
+    DepthFadeVk::Release(true);
 
     if (g_vk.feature != nullptr && g_vk.release != nullptr)
         g_vk.release(g_vk.feature);
@@ -3014,6 +3090,7 @@ void ShutdownVk(bool deviceAlive)
         CalibrationVkShutdown(false);
         DetailReuseVk::Release(false);
         EdgeCompressionVk::Release(false);
+        DepthFadeVk::Release(false);
         // The model's kernels went with the device without their destroy calls.
         DlssNrNative::VkDeviceLost();
 

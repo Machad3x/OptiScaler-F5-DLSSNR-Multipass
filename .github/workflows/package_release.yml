@@ -33,9 +33,14 @@ on:
         required: false
         default: false
         type: boolean
+      attach_to_draft:
+        description: 'Finish the zip for players (F5Low defaults, short name) and attach it to this draft release (its tag). Empty: artifact only'
+        required: false
+        default: ''
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -109,6 +114,30 @@ jobs:
         if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {
             exit $LASTEXITCODE
         }
+
+    # Sets the F5Low defaults package_release.ps1 refuses to ship, and the short name. Only ever attaches to a draft:
+    # a published release's files stay as they are.
+    - name: Finish the zip and attach it to the draft
+      if: ${{ inputs.attach_to_draft != '' }}
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ github.token }}
+        DRAFT_TAG: ${{ inputs.attach_to_draft }}
+        PACKAGE_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ("${{ inputs.no_f5low }}" -eq "true") { throw 'attach_to_draft needs F5Low in the zip' }
+        $isDraft = gh release view $env:DRAFT_TAG --json isDraft --jq .isDraft
+        if ($LASTEXITCODE -ne 0 -or $isDraft -ne 'true') { throw "REFUSING: $env:DRAFT_TAG is not a draft release" }
+        $package = @(Get-ChildItem release\*.zip)
+        if ($package.Count -ne 1) { throw "expected one package zip, found $($package.Count)" }
+        $finished = "release\$env:PACKAGE_VERSION-Optiscaler-F5.zip"
+        python tools\finish_release_zip.py $package[0].FullName $finished
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Remove-Item $package[0].FullName
+        gh release upload $env:DRAFT_TAG $finished --clobber
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Get-FileHash $finished -Algorithm SHA256 | Format-List Hash, Path
 
     - name: Upload Release Archive
       uses: actions/upload-artifact@v4

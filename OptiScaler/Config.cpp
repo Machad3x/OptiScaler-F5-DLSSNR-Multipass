@@ -1120,6 +1120,11 @@ void Config::ReadDlssNr()
     DlssNrTransferStrength.set_from_config(readFloat("DlssNr", "TransferStrength"));
     DlssNrColourStrength.set_from_config(readFloat("DlssNr", "ColourStrength"));
     DlssNrReplaceDetailStrength.set_from_config(readFloat("DlssNr", "ReplaceDetailStrength"));
+    DlssNrNativeBlend.set_from_config(readBool("DlssNr", "NativeBlend"));
+    DlssNrNativeBlendWasFinishedPicture.set_from_config(readBool("DlssNr", "NativeBlendWasFinishedPicture"));
+    DlssNrNativeBlendWasReversibleMode.set_from_config(readUInt("DlssNr", "NativeBlendWasReversibleMode"));
+    DlssNrNativeBlendWasSkinProtection.set_from_config(readBool("DlssNr", "NativeBlendWasSkinProtection"));
+    DlssNrNativeBlendWasReplaceDetail.set_from_config(readFloat("DlssNr", "NativeBlendWasReplaceDetail"));
     DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
     DlssNrTransfer.set_from_config(readUInt("DlssNr", "Transfer"));
     DlssNrSuperiorScalingPreset.set_from_config(readUInt("DlssNr", "SuperiorScalingPreset"));
@@ -1278,6 +1283,14 @@ void Config::ReadDlssNr()
     DlssNrEnvironmentDetail.set_from_config(readFloat("DlssNr", "EnvironmentDetail"));
     DlssNrEnvironmentColour.set_from_config(readFloat("DlssNr", "EnvironmentColour"));
     DlssNrShowSkinMask.set_from_config(readBool("DlssNr", "ShowSkinMask"));
+    DlssNrDepthFade.set_from_config(readBool("DlssNr", "DepthFade"));
+    DlssNrDepthFadeFarStart.set_from_config(readFloat("DlssNr", "DepthFadeFarStart"));
+    DlssNrDepthFadeFarEnd.set_from_config(readFloat("DlssNr", "DepthFadeFarEnd"));
+    DlssNrDepthFadeFarStrength.set_from_config(readFloat("DlssNr", "DepthFadeFarStrength"));
+    DlssNrDepthFadeNearStart.set_from_config(readFloat("DlssNr", "DepthFadeNearStart"));
+    DlssNrDepthFadeNearEnd.set_from_config(readFloat("DlssNr", "DepthFadeNearEnd"));
+    DlssNrDepthFadeNearStrength.set_from_config(readFloat("DlssNr", "DepthFadeNearStrength"));
+    DlssNrDepthFadeSkyStrength.set_from_config(readFloat("DlssNr", "DepthFadeSkyStrength"));
     DlssNrPass2Intensity.set_from_config(readFloat("DlssNr", "Pass2Intensity"));
     DlssNrPass2LocalStructure.set_from_config(readFloat("DlssNr", "Pass2LocalStructure"));
     DlssNrPass2LocalTone.set_from_config(readFloat("DlssNr", "Pass2LocalTone"));
@@ -1319,11 +1332,13 @@ void Config::ReadDlssNr()
         DlssNrPostLutStrength[i].set_from_config(readFloat("DlssNr", ("PostLutStrength" + n).c_str()));
         DlssNrPostLutInput[i].set_from_config(
             readString("DlssNr", ("PostLutInput" + n).c_str()).transform(DlssNr::LookInputFromKey));
+        DlssNrPostLutEnabled[i].set_from_config(readBool("DlssNr", ("PostLutEnabled" + n).c_str()));
         if (DlssNrPostLutStrength[i].has_value())
             DlssNrPostLutStrength[i] = std::isfinite(DlssNrPostLutStrength[i].value())
                                            ? std::clamp(DlssNrPostLutStrength[i].value(), 0.0f, 1.0f)
                                            : 1.0f;
     }
+    DlssNrPostLutStackEnabled.set_from_config(readBool("DlssNr", "PostLutStackEnabled"));
     DlssNrApplyModel.set_from_config(readBool("DlssNr", "ApplyModel"));
     DlssNrHoldFrame.set_from_config(readBool("DlssNr", "HoldFrame"));
 }
@@ -1372,6 +1387,15 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
                  GetFloatValue(c.DlssNrColourStrength.value_for_config()).c_str());
     out.SetValue("DlssNr", "ReplaceDetailStrength",
                  GetFloatValue(c.DlssNrReplaceDetailStrength.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlend", GetBoolValue(c.DlssNrNativeBlend.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasFinishedPicture",
+                 GetBoolValue(c.DlssNrNativeBlendWasFinishedPicture.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasReversibleMode",
+                 GetIntValue(c.DlssNrNativeBlendWasReversibleMode.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasSkinProtection",
+                 GetBoolValue(c.DlssNrNativeBlendWasSkinProtection.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasReplaceDetail",
+                 GetFloatValue(c.DlssNrNativeBlendWasReplaceDetail.value_for_config()).c_str());
     out.SetValue("DlssNr", "MaxRatio", GetFloatValue(c.DlssNrMaxRatio.value_for_config()).c_str());
     out.SetValue("DlssNr", "Transfer", GetIntValue(c.DlssNrTransfer.value_for_config()).c_str());
     out.SetValue("DlssNr", "SuperiorScalingPreset",
@@ -1544,6 +1568,17 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
     out.SetValue("DlssNr", "EnvironmentDetail", GetFloatValue(c.DlssNrEnvironmentDetail.value_for_config()).c_str());
     out.SetValue("DlssNr", "EnvironmentColour", GetFloatValue(c.DlssNrEnvironmentColour.value_for_config()).c_str());
     out.SetValue("DlssNr", "ShowSkinMask", GetBoolValue(c.DlssNrShowSkinMask.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFade", GetBoolValue(c.DlssNrDepthFade.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeFarStart", GetFloatValue(c.DlssNrDepthFadeFarStart.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeFarEnd", GetFloatValue(c.DlssNrDepthFadeFarEnd.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeFarStrength",
+                 GetFloatValue(c.DlssNrDepthFadeFarStrength.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeNearStart", GetFloatValue(c.DlssNrDepthFadeNearStart.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeNearEnd", GetFloatValue(c.DlssNrDepthFadeNearEnd.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeNearStrength",
+                 GetFloatValue(c.DlssNrDepthFadeNearStrength.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeSkyStrength",
+                 GetFloatValue(c.DlssNrDepthFadeSkyStrength.value_for_config()).c_str());
     out.SetValue("DlssNr", "Pass2Intensity", GetFloatValue(c.DlssNrPass2Intensity.value_for_config()).c_str());
     out.SetValue("DlssNr", "Pass2LocalStructure", GetFloatValue(c.DlssNrPass2LocalStructure.value_for_config()).c_str());
     out.SetValue("DlssNr", "Pass2LocalTone", GetFloatValue(c.DlssNrPass2LocalTone.value_for_config()).c_str());
@@ -1588,6 +1623,11 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
                  DlssNr::LookInputKey(c.DlssNrPostLutInput[2].value_for_config().value_or(DlssNr::kLookInputAuto)));
     out.SetValue("DlssNr", "PostLutInput4",
                  DlssNr::LookInputKey(c.DlssNrPostLutInput[3].value_for_config().value_or(DlssNr::kLookInputAuto)));
+    out.SetValue("DlssNr", "PostLutEnabled1", GetBoolValue(c.DlssNrPostLutEnabled[0].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutEnabled2", GetBoolValue(c.DlssNrPostLutEnabled[1].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutEnabled3", GetBoolValue(c.DlssNrPostLutEnabled[2].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutEnabled4", GetBoolValue(c.DlssNrPostLutEnabled[3].value_for_config()).c_str());
+    out.SetValue("DlssNr", "PostLutStackEnabled", GetBoolValue(c.DlssNrPostLutStackEnabled.value_for_config()).c_str());
     out.SetValue("DlssNr", "ApplyModel", GetBoolValue(c.DlssNrApplyModel.value_for_config()).c_str());
     out.SetValue("DlssNr", "HoldFrame", GetBoolValue(c.DlssNrHoldFrame.value_for_config()).c_str());
 }
@@ -1750,6 +1790,10 @@ bool Config::LoadDlssNrProfile(const std::filesystem::path& path, std::string& e
             note += (note.empty() ? "" : " ") + problem;
     }
 
+    // Saved in another game: its Optical F5Low tuning was laid out for that game's picture, so this game's stays
+    if (!DlssNrProfiles::SameGame(profile->savedFrom, State::Instance().gameExe))
+        profile->settings = DlssNrProfiles::KeepNative(profile->settings, DlssNrSnapshot());
+
     const size_t defaulted = ApplyDlssNrSection(profile->settings);
     LOG_INFO("NR profile loaded: {} (saved in {}; {} settings, {} at their default)", wstring_to_string(path.wstring()),
              profile->savedFrom.empty() ? "?" : profile->savedFrom, profile->settings.size(), defaulted);
@@ -1833,6 +1877,14 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("SkinColour", DlssNrSkinColour),
         NR_PROFILE_FIELD("EnvironmentDetail", DlssNrEnvironmentDetail),
         NR_PROFILE_FIELD("EnvironmentColour", DlssNrEnvironmentColour),
+        NR_PROFILE_FIELD("DepthFade", DlssNrDepthFade),
+        NR_PROFILE_FIELD("DepthFadeFarStart", DlssNrDepthFadeFarStart),
+        NR_PROFILE_FIELD("DepthFadeFarEnd", DlssNrDepthFadeFarEnd),
+        NR_PROFILE_FIELD("DepthFadeFarStrength", DlssNrDepthFadeFarStrength),
+        NR_PROFILE_FIELD("DepthFadeNearStart", DlssNrDepthFadeNearStart),
+        NR_PROFILE_FIELD("DepthFadeNearEnd", DlssNrDepthFadeNearEnd),
+        NR_PROFILE_FIELD("DepthFadeNearStrength", DlssNrDepthFadeNearStrength),
+        NR_PROFILE_FIELD("DepthFadeSkyStrength", DlssNrDepthFadeSkyStrength),
         NR_PROFILE_FIELD("InputFlatten", DlssNrInputFlatten),
         NR_PROFILE_FIELD("InputFlattenStrength", DlssNrInputFlattenStrength),
         NR_PROFILE_FIELD("InputStructureHint", DlssNrInputStructureHint),
@@ -1852,6 +1904,11 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("PostLutInput2", DlssNrPostLutInput[1]),
         NR_PROFILE_FIELD("PostLutInput3", DlssNrPostLutInput[2]),
         NR_PROFILE_FIELD("PostLutInput4", DlssNrPostLutInput[3]),
+        NR_PROFILE_FIELD("PostLutEnabled1", DlssNrPostLutEnabled[0]),
+        NR_PROFILE_FIELD("PostLutEnabled2", DlssNrPostLutEnabled[1]),
+        NR_PROFILE_FIELD("PostLutEnabled3", DlssNrPostLutEnabled[2]),
+        NR_PROFILE_FIELD("PostLutEnabled4", DlssNrPostLutEnabled[3]),
+        NR_PROFILE_FIELD("PostLutStackEnabled", DlssNrPostLutStackEnabled),
         NR_PROFILE_FIELD("WhitePointSource", DlssNrWhitePointSource),
         NR_PROFILE_FIELD("GameExposureScale", DlssNrGameExposureScale),
         NR_PROFILE_FIELD("WhitePointTrim", DlssNrWhitePointTrim),
@@ -1873,7 +1930,6 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("ScanInverted", DlssNrScanInverted),
         NR_PROFILE_FIELD("ScanMeter", DlssNrScanMeter),
         NR_PROFILE_FIELD("ColourEncoding", DlssNrColourEncoding),
-        NR_PROFILE_FIELD("NativeDepthFinder", DlssNrNativeDepthFinder),
         NR_PROFILE_FIELD("NativeDepthVkCopyUsage", DlssNrNativeDepthVkCopyUsage),
         NR_PROFILE_FIELD("NativeDepthResolveInList", DlssNrNativeDepthResolveInList),
         NR_PROFILE_FIELD("NativeDxvkVulkan", DlssNrNativeDxvkVulkan),
@@ -1886,11 +1942,7 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("NativeDepthOffsetY", DlssNrNativeDepthOffsetY),
         NR_PROFILE_FIELD("NativeMotionProfile", DlssNrNativeMotionProfile),
         NR_PROFILE_FIELD("NativeMotionProfileCustom", DlssNrNativeMotionProfileCustom),
-        NR_PROFILE_FIELD("NativeMotion", DlssNrNativeMotion),
-        NR_PROFILE_FIELD("NativeInput", DlssNrNativeInput),
-        NR_PROFILE_FIELD("NativeUpscaler", DlssNrNativeUpscaler),
         NR_PROFILE_FIELD("NativeUpscalerPass", DlssNrNativeUpscalerPass),
-        NR_PROFILE_FIELD("NativeFrameGenerationOnly", DlssNrNativeFrameGenerationOnly),
         NR_PROFILE_FIELD("NativeLowLatencyBoost", DlssNrNativeLowLatencyBoost),
         NR_PROFILE_FIELD("NativeLowLatencyDxvkGameThread", DlssNrNativeLowLatencyDxvkGameThread),
         NR_PROFILE_FIELD("SpatialCompression", DlssNrSpatialCompression),

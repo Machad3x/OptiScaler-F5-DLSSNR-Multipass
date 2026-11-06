@@ -23,6 +23,24 @@ static int fails = 0;
 
 using namespace DlssNr;
 
+// Stands in for Config's CustomOptional in the PostLutEntries check.
+template <typename T> struct Opt
+{
+    T v;
+    T value_or_default() const { return v; }
+};
+
+// Config's post-NR stack fields, layer 2 switched off.
+struct FakePostLutConfig
+{
+    static constexpr int kPostLutLayers = 4;
+    Opt<std::string> DlssNrPostLutFile[4] { { "a.cube" }, { "b.cube" }, { "c.cube" }, { "" } };
+    Opt<float> DlssNrPostLutStrength[4] { { 0.7f }, { 0.5f }, { 1.0f }, { 1.0f } };
+    Opt<int> DlssNrPostLutInput[4] { { -1 }, { 3 }, { -1 }, { -1 } };
+    Opt<bool> DlssNrPostLutEnabled[4] { { true }, { false }, { true }, { true } };
+    Opt<bool> DlssNrPostLutStackEnabled { true };
+};
+
 // A lattice from a per-point function, with an optional domain.
 template <typename F> static Lut3D Make(int n, F f, float lo = 0.0f, float hi = 1.0f)
 {
@@ -292,8 +310,87 @@ int main(int argc, char** argv)
         CHECK(!DlssNr_LutChainEnsure(&st, {}));
         CHECK(!st.wanted && st.baked.size == 0 && st.key.empty());
 
+        // Switches and an unreadable file together: the grade follows the switches, whatever the file does.
+        {
+            DlssNr_LutChainState s;
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f } }));
+            const std::vector<float> onlyFileA = s.baked.rgb;
+
+            // The file appears while the rest is as it was: A stays, the failure is named.
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f }, { bad, 1.0f } }));
+            CHECK(s.failedLayer == 1 && s.baked.rgb == onlyFileA);
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f }, { bad, 1.0f } })); // steady: still kept
+            CHECK(s.failedLayer == 1 && s.baked.rgb == onlyFileA);
+
+            // Everything off: nothing is applied and nothing warns about the file.
+            CHECK(!DlssNr_LutChainEnsure(&s, { { pa, 0.0f }, { bad, 0.0f } }));
+            CHECK(s.baked.size == 0 && s.failedLayer < 0);
+
+            // On again: back, with the failure named again.
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f }, { bad, 1.0f } }));
+            CHECK(s.baked.rgb == onlyFileA && s.failedLayer == 1);
+
+            // A switched off while the broken file stays on: A must go.
+            CHECK(!DlssNr_LutChainEnsure(&s, { { pa, 0.0f }, { bad, 1.0f } }));
+            CHECK(s.baked.size == 0 && s.failedLayer == 1 && !s.error.empty());
+
+            // The broken file switched off: it does not block A, and does not warn.
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f }, { bad, 0.0f } }));
+            CHECK(s.baked.rgb == onlyFileA && s.failedLayer < 0 && s.error.empty());
+
+            // Another layer switched while one is broken: the switch takes effect, the broken one is left out.
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f }, { bad, 1.0f }, { pb, 1.0f } }));
+            CHECK(s.failedLayer == 1 && s.baked.rgb != onlyFileA);
+            CHECK(DlssNr_LutChainEnsure(&s, { { pa, 1.0f }, { bad, 1.0f }, { pb, 0.0f } }));
+            CHECK(s.failedLayer == 1 && s.baked.rgb == onlyFileA);
+
+            // From a fresh start the layers that can be read are applied, and the failure is named.
+            DlssNr_LutChainState fresh;
+            CHECK(DlssNr_LutChainEnsure(&fresh, { { pa, 1.0f }, { bad, 1.0f } }));
+            CHECK(fresh.baked.rgb == onlyFileA && fresh.failedLayer == 1);
+
+            // Only the broken file: nothing applied, its failure is the message (not "every LUT is off").
+            DlssNr_LutChainState onlyBad;
+            CHECK(!DlssNr_LutChainEnsure(&onlyBad, { { bad, 1.0f } }));
+            CHECK(onlyBad.failedLayer == 0 && onlyBad.error.find("every LUT") == std::string::npos);
+
+            // Off and on again with no broken file: the same key, so the kept GPU texture is what comes back.
+            DlssNr_LutChainState toggled;
+            CHECK(DlssNr_LutChainEnsure(&toggled, { { pa, 1.0f }, { pb, 0.5f } }));
+            const std::string keyOn = toggled.key;
+            CHECK(!DlssNr_LutChainEnsure(&toggled, { { pa, 0.0f }, { pb, 0.0f } }));
+            CHECK(toggled.baked.size == 0 && toggled.key != keyOn);
+            CHECK(DlssNr_LutChainEnsure(&toggled, { { pa, 1.0f }, { pb, 0.5f } }));
+            CHECK(toggled.key == keyOn);
+        }
+
         std::filesystem::remove(pa);
         std::filesystem::remove(pb);
+    }
+
+    // A layer switched off: PostLutEntries hands it on at strength 0 in its own place, so it is skipped by the bake and
+    // the layers after it keep their index; switched on again it is back at its own strength.
+    {
+        FakePostLutConfig cfg;
+        auto e = PostLutEntries(cfg);
+        CHECK(e.size() == 4 && e[0].strength == 0.7f && e[1].path == "b.cube" && e[1].strength == 0.0f &&
+              e[1].input == 3 && e[2].path == "c.cube" && e[2].strength == 1.0f);
+        cfg.DlssNrPostLutEnabled[1].v = true;
+        e = PostLutEntries(cfg);
+        CHECK(e[1].strength == 0.5f);
+
+        // The whole stack off: every layer at 0, paths and look inputs kept; on again, each back at its own strength.
+        cfg.DlssNrPostLutStackEnabled.v = false;
+        e = PostLutEntries(cfg);
+        CHECK(e[0].strength == 0.0f && e[1].strength == 0.0f && e[2].strength == 0.0f && e[0].path == "a.cube" &&
+              e[1].input == 3);
+        cfg.DlssNrPostLutStackEnabled.v = true;
+        e = PostLutEntries(cfg);
+        CHECK(e[0].strength == 0.7f && e[1].strength == 0.5f && e[2].strength == 1.0f);
+
+        cfg.DlssNrPostLutEnabled[0].v = cfg.DlssNrPostLutEnabled[1].v = cfg.DlssNrPostLutEnabled[2].v = false;
+        e = PostLutEntries(cfg);
+        CHECK(e[0].strength == 0.0f && e[1].strength == 0.0f && e[2].strength == 0.0f);
     }
 
     // Optional: every pair of real LUTs in a folder.

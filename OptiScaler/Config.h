@@ -375,6 +375,18 @@ class Config
     CustomOptional<float> DlssNrEnvironmentDetail { 1.0f };
     CustomOptional<float> DlssNrEnvironmentColour { 1.0f };
     CustomOptional<bool> DlssNrShowSkinMask { false };
+    // Depth fade: the final resolve keeps less of NR's result on faraway surfaces, very near ones and sky, from the
+    // game's depth (off by default, and a no-op on a frame without depth). Distances are 0..1 on a log scale from the
+    // near plane (see shaders/dlssnr/precompile/dlssnr_depthfade.hlsli); strengths are the share of NR's result kept,
+    // 0..1.
+    CustomOptional<bool> DlssNrDepthFade { false };
+    CustomOptional<float> DlssNrDepthFadeFarStart { 0.5f };
+    CustomOptional<float> DlssNrDepthFadeFarEnd { 0.85f };
+    CustomOptional<float> DlssNrDepthFadeFarStrength { 0.5f };
+    CustomOptional<float> DlssNrDepthFadeNearStart { 0.0f };
+    CustomOptional<float> DlssNrDepthFadeNearEnd { 0.1f };
+    CustomOptional<float> DlssNrDepthFadeNearStrength { 1.0f };
+    CustomOptional<float> DlssNrDepthFadeSkyStrength { 1.0f };
     CustomOptional<float, NoDefault> DlssNrPass2Intensity;
     CustomOptional<float, NoDefault> DlssNrPass2LocalStructure;
     CustomOptional<float, NoDefault> DlssNrPass2LocalTone;
@@ -404,6 +416,17 @@ class Config
     // restored below 100% model resolution, where Replace has no native-resolution fallback the
     // way the composed modes do. 0 = today's behaviour, unchanged.
     CustomOptional<float> DlssNrReplaceDetailStrength { 0.5f };
+
+    // Native blend (the Neural Rendering page's "Native blend"): NR on the finished picture with Replace, no skin
+    // protection and no Replace detail, the model's answer written as it is. NativeBlend is whether it is on; the Was
+    // keys hold the four settings it replaced (FinishedPicture, ReversibleMode, SkinProtection, ReplaceDetailStrength)
+    // so turning it off puts them back, across a restart too. They have no default: auto (unset) comes back as auto,
+    // not as the default number. Rules in dlssnr/DlssNr_NativeBlend.h.
+    CustomOptional<bool> DlssNrNativeBlend { false };
+    CustomOptional<bool, NoDefault> DlssNrNativeBlendWasFinishedPicture;
+    CustomOptional<uint32_t, NoDefault> DlssNrNativeBlendWasReversibleMode;
+    CustomOptional<bool, NoDefault> DlssNrNativeBlendWasSkinProtection;
+    CustomOptional<float, NoDefault> DlssNrNativeBlendWasReplaceDetail;
 
     // The proxy curve (Final Image Composition), values in shaders/dlssnr/DlssNr_ProxyCurve.h. 0 = soft
     // knee + our composition (default); 1/2 = unclipped Neutwo proxy + composition / pure-inverse replace;
@@ -437,6 +460,11 @@ class Config
     // Each layer's look input (Story 6): -1 = Auto (DlssNr::kLookInputAuto), else a DlssNr::LutSpace value, 0 = None.
     // The ini holds words (DlssNr::LookInputKey).
     CustomOptional<int> DlssNrPostLutInput[kPostLutLayers] { -1, -1, -1, -1 };
+    // Each layer's on/off: off keeps the layer (file, strength, look input) in the stack without applying it, as if its
+    // strength were 0 (DlssNr::PostLutEntries).
+    CustomOptional<bool> DlssNrPostLutEnabled[kPostLutLayers] { true, true, true, true };
+    // The whole stack on/off: off is every layer off, each layer's own setting kept.
+    CustomOptional<bool> DlssNrPostLutStackEnabled { true };
 
     // Whether the model's edit is applied. Off keeps the pass running (so Hold frame works) but shows
     // the clean upscaler frame -- for A/B'ing NR on/off on a frozen frame. Default true.

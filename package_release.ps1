@@ -203,18 +203,15 @@ if (-not $SkipBuild) {
 
 $src = "$root\x64\Release\a"
 
-# The forwarder is taken from its own build output, not from the shared folder. The solution build
-# does not reliably rebuild it, and a stale one here would ship silently.
-#
-# A fresh checkout has no per-project output directory until that project has been built on its own,
-# so fall back to the shared folder rather than failing. The export check below is what actually
-# guards against a stale one, and it runs either way.
-$forwarder = "$root\OptiScaler\dlssnr\forwarder\x64\Release\a\nvngx.dll_dlssnr.dll"
-
-if (-not (Test-Path $forwarder)) {
-    $forwarder = "$root\x64\Release\a\nvngx.dll_dlssnr.dll"
-    Write-Host "forwarder: using the shared build output ($forwarder)"
-}
+# The forwarder has two possible outputs: the shared folder when built through the solution, its own folder when its
+# project is built alone. Take the newer one, so an old build left in either cannot ship. The export check below and the
+# version check further down guard against a stale one too.
+$forwarder = @("$root\OptiScaler\dlssnr\forwarder\x64\Release\a\nvngx.dll_dlssnr.dll", "$root\x64\Release\a\nvngx.dll_dlssnr.dll") |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending |
+    Select-Object -First 1
+if (-not $forwarder) { throw 'REFUSING: nvngx.dll_dlssnr.dll is not built' }
+Write-Host "forwarder: $forwarder"
 
 $exports = @("dlssnr_call_create", "dlssnr_call_evaluate_v2", "dlssnr_call_set_extras",
              "dlssnr_vk_probe", "dlssnr_vk_init", "dlssnr_vk_create", "dlssnr_vk_evaluate_v2", "dlssnr_vk_release")
@@ -506,6 +503,14 @@ foreach ($field in 'CompanyName', 'FileDescription', 'ProductName', 'OriginalFil
     if ([string]::IsNullOrWhiteSpace($versionInfo.$field)) {
         throw "REFUSING: staged OptiScaler.dll has an empty $field in its version resource"
     }
+}
+# The forwarder carries the release number too, so a player can tell which release a game folder's copy came from.
+$forwarderVersion = (Get-Item -LiteralPath "$stage\nvngx.dll_dlssnr.dll").VersionInfo.FileVersion
+if ([string]::IsNullOrWhiteSpace($forwarderVersion)) {
+    throw 'REFUSING: staged nvngx.dll_dlssnr.dll has no version in its version resource'
+}
+if ($forwarderVersion -ne $versionInfo.FileVersion) {
+    throw "REFUSING: staged nvngx.dll_dlssnr.dll is version $forwarderVersion, OptiScaler.dll is $($versionInfo.FileVersion): a stale build"
 }
 Write-Host ("binary hygiene: DllCharacteristics 0x{0:X4}, version resource complete, no PDB path" -f $dllCharacteristics)
 

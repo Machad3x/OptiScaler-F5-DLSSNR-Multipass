@@ -59,9 +59,9 @@ class FinishedPqRaster;
 }
 
 // Goes through the same constant-buffer ring as DlssNrConstants.
-static_assert(sizeof(DlssNrDetailReuseConstants) == sizeof(DlssNrConstants));
-static_assert(sizeof(DlssNrEditCacheConstants) == sizeof(DlssNrConstants));
-static_assert(sizeof(DlssNr::Spatial::Constants) == sizeof(DlssNrConstants));
+static_assert(sizeof(DlssNrDetailReuseConstants) <= sizeof(DlssNrConstants));
+static_assert(sizeof(DlssNrEditCacheConstants) <= sizeof(DlssNrConstants));
+static_assert(sizeof(DlssNr::Spatial::Constants) <= sizeof(DlssNrConstants));
 
 class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
 {

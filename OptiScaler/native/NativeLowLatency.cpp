@@ -2,6 +2,7 @@
 
 #include "NativeLowLatency.h"
 #include "DepthFinderCore.h"
+#include "NativeDriver.h"
 
 #include <Config.h>
 #include <State.h>
@@ -207,7 +208,8 @@ Inputs GatherInputs()
 
     // Optical F5Low's modes only: the Vulkan route (frame generation from the game's upscaler) is not Optical F5Low,
     // and with no upscaler call (menus) it has nothing running to pace.
-    in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !gameUpscaler;
+    // Idle (nothing uses the motion: NativeDriver runs none of it) is not running either.
+    in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !gameUpscaler && NativeDriver::MotionUsed();
     in.xefgRunning = UsesXeFGApi(state.activeFgOutput) && state.currentFG != nullptr &&
                      state.currentFG->SwapchainContext() != nullptr;
     // While it is on. Its short pauses (toggles, a changed interpolation count, swap chain remakes, about ten frames) do
