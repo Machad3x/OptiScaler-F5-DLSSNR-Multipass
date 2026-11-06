@@ -183,9 +183,19 @@ static void Grades()
     Check(!LayerGrades(false, 1.0f), "no file does not grade");
 }
 
+// Paused only on the finished picture, on a native DirectX 12 game, while the game's frame generation blocks it.
+static void Paused()
+{
+    Check(FinishedPicturePaused(true, true, true), "finished picture under game frame generation is paused");
+    Check(!FinishedPicturePaused(false, true, true), "after SR is not paused by game frame generation");
+    Check(!FinishedPicturePaused(true, false, true), "not native DirectX 12 is not reported as paused");
+    Check(!FinishedPicturePaused(true, true, false), "no game frame generation is not paused");
+}
+
 int main()
 {
     Grades();
+    Paused();
     NativeValues();
     RestoresEverything();
     AutoStaysAuto();

@@ -6,6 +6,7 @@
 #include "DlssNr_LookPresets.h"
 #include "DlssNr_NativeBlend.h"
 #include "DlssNr_Profiles.h"
+#include "DlssNr_StreamlinePicture.h"
 #include "DlssNr_SuperiorScaling.h"
 #include "DlssNrNative.h"
 
@@ -1271,6 +1272,19 @@ static void RenderEnableToggle(Config* config)
     HelpMarker("Turns DLSS Neural Rendering on. Needs nvngx_dlssnr.dll and the included nvngx.dll_dlssnr.dll.");
 }
 
+// Finished Picture runs on a native DirectX 12 game only.
+static bool IsNativeDx12Game()
+{
+    const auto feature = State::Instance().currentFeature;
+    return !DlssNr::IsRunningVk() && (!feature || (feature->Api() == API::DX12 && !feature->IsWithDx12()));
+}
+
+// The game's own frame generation runs with no picture handoff, so NR on the finished picture pauses every frame.
+// The feature stays alive, so without this the status said Running.
+static bool GameFgPausesFinishedPicture() { return IsNativeDx12Game() && DlssNr::StreamlinePicture::PauseEvaluation(); }
+
+static const ImVec4 kPausedAmber(0.9f, 0.6f, 0.25f, 1.0f);
+
 // The full running-status block, for the Status & Presets page.
 static void RenderRunningStatus(Config* config, const NrCommon& nr)
 {
@@ -1285,6 +1299,15 @@ static void RenderRunningStatus(Config* config, const NrCommon& nr)
     if (!enabled)
     {
         ImGui::TextDisabled("NR off.");
+    }
+    else if (DlssNrNativeBlend::FinishedPicturePaused(finishedPicture, IsNativeDx12Game(),
+                                                      DlssNr::StreamlinePicture::PauseEvaluation()))
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, kPausedAmber);
+        ImGui::TextWrapped("Paused: the game's own frame generation is on, and NR on the finished picture cannot run "
+                           "under it. Turn off frame generation in the game's settings (OptiScaler's frame generation "
+                           "works with it), or set NR Pass at: After Super Resolution.");
+        ImGui::PopStyleColor();
     }
     else if (!DlssNr::IsRunning() && !vulkan)
     {
@@ -1388,6 +1411,9 @@ static void RenderStatusLine(const NrCommon& nr)
 
     if (!nr.enabled)
         ImGui::TextDisabled("NR off.");
+    else if (DlssNrNativeBlend::FinishedPicturePaused(nr.finishedPicture, IsNativeDx12Game(),
+                                                      DlssNr::StreamlinePicture::PauseEvaluation()))
+        ImGui::TextColored(kPausedAmber, "Paused: the game's own frame generation is on.");
     else if (views.active && DlssNr::Views::OnePicture(views.mask) && ms.has_value())
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
                            "Running on all %zu screens as one picture - %.2f ms elapsed", views.screens, ms.value());
@@ -2352,10 +2378,25 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
                    "with Replace, and turns off Separate skin / environment controls and Restore Sharpness. Use NR's "
                    "Intensity for the strength.\n"
                    "Green = on; click again to put your earlier settings back. Changing the placement, the composition "
-                   "or one of those controls, or pressing a quality tier, ends it and keeps your change.");
+                   "or one of those controls, or pressing a quality tier, ends it and keeps your change.\n"
+                   "It cannot run while the game's own frame generation is on; use OptiScaler's frame generation "
+                   "instead.");
 
         if (blendUnsupported && !nativeBlend)
             ImGui::TextWrapped("Needs a native DirectX 12 game (Finished Picture does not run on Vulkan).");
+
+        // Not greyed: the player may turn the game's frame generation off afterwards.
+        if (GameFgPausesFinishedPicture())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, kPausedAmber);
+            if (nativeBlend)
+                ImGui::TextWrapped("Paused: the game's own frame generation is on. Turn it off in the game's settings "
+                                   "to see Native blend.");
+            else
+                ImGui::TextWrapped("The game's own frame generation is on. Native blend runs NR on the finished "
+                                   "picture, which pauses under it: turn off frame generation in the game first.");
+            ImGui::PopStyleColor();
+        }
 
         if (nativeBlend && nr.enabled)
         {
@@ -3261,6 +3302,13 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
             const auto feature = State::Instance().currentFeature;
             if (feature && (feature->Api() != API::DX12 || feature->IsWithDx12()))
                 ImGui::TextWrapped("This option needs a native DirectX 12 game.");
+            else if (GameFgPausesFinishedPicture())
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, kPausedAmber);
+                ImGui::TextWrapped("Paused: the game's own frame generation is on. Turn it off in the game's settings, "
+                                   "or pick After Super Resolution.");
+                ImGui::PopStyleColor();
+            }
             else
                 ImGui::TextWrapped("%s", DlssNr::FinishedPictureStatus().c_str());
         }

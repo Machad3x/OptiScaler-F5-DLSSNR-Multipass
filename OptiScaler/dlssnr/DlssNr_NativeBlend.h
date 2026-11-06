@@ -104,4 +104,11 @@ inline bool LayerGrades(bool hasFile, float strength) { return hasFile && streng
 
 // What the checkbox shows.
 inline bool Active(const State& state, const Resolved& now) { return state.on && Matches(now); }
+
+// NR on the finished picture pauses while the game's own frame generation runs without a picture handoff
+// (StreamlinePicture::PauseEvaluation). The menu then says Paused instead of Running.
+inline bool FinishedPicturePaused(bool finishedPictureSetting, bool nativeDx12, bool pauseEvaluation)
+{
+    return finishedPictureSetting && nativeDx12 && pauseEvaluation;
+}
 } // namespace DlssNrNativeBlend
