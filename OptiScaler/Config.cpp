@@ -1120,6 +1120,11 @@ void Config::ReadDlssNr()
     DlssNrTransferStrength.set_from_config(readFloat("DlssNr", "TransferStrength"));
     DlssNrColourStrength.set_from_config(readFloat("DlssNr", "ColourStrength"));
     DlssNrReplaceDetailStrength.set_from_config(readFloat("DlssNr", "ReplaceDetailStrength"));
+    DlssNrNativeBlend.set_from_config(readBool("DlssNr", "NativeBlend"));
+    DlssNrNativeBlendWasFinishedPicture.set_from_config(readBool("DlssNr", "NativeBlendWasFinishedPicture"));
+    DlssNrNativeBlendWasReversibleMode.set_from_config(readUInt("DlssNr", "NativeBlendWasReversibleMode"));
+    DlssNrNativeBlendWasSkinProtection.set_from_config(readBool("DlssNr", "NativeBlendWasSkinProtection"));
+    DlssNrNativeBlendWasReplaceDetail.set_from_config(readFloat("DlssNr", "NativeBlendWasReplaceDetail"));
     DlssNrMaxRatio.set_from_config(readFloat("DlssNr", "MaxRatio"));
     DlssNrTransfer.set_from_config(readUInt("DlssNr", "Transfer"));
     DlssNrSuperiorScalingPreset.set_from_config(readUInt("DlssNr", "SuperiorScalingPreset"));
@@ -1374,6 +1379,15 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
                  GetFloatValue(c.DlssNrColourStrength.value_for_config()).c_str());
     out.SetValue("DlssNr", "ReplaceDetailStrength",
                  GetFloatValue(c.DlssNrReplaceDetailStrength.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlend", GetBoolValue(c.DlssNrNativeBlend.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasFinishedPicture",
+                 GetBoolValue(c.DlssNrNativeBlendWasFinishedPicture.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasReversibleMode",
+                 GetIntValue(c.DlssNrNativeBlendWasReversibleMode.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasSkinProtection",
+                 GetBoolValue(c.DlssNrNativeBlendWasSkinProtection.value_for_config()).c_str());
+    out.SetValue("DlssNr", "NativeBlendWasReplaceDetail",
+                 GetFloatValue(c.DlssNrNativeBlendWasReplaceDetail.value_for_config()).c_str());
     out.SetValue("DlssNr", "MaxRatio", GetFloatValue(c.DlssNrMaxRatio.value_for_config()).c_str());
     out.SetValue("DlssNr", "Transfer", GetIntValue(c.DlssNrTransfer.value_for_config()).c_str());
     out.SetValue("DlssNr", "SuperiorScalingPreset",

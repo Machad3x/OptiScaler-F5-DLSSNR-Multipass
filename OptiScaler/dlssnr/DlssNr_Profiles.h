@@ -183,6 +183,14 @@ inline constexpr std::string_view kLeftOutKeys[] = {
     // the rig's, not the look: which view of a multi-monitor layout NR works on
     "MultiViewScreens",
     "SecondaryFeatures",
+    // Native blend and what it replaced (DlssNr_NativeBlend.h): the player's own switch with its put-back
+    // values. A profile loaded while it is on ends it (the profile's own placement, curve and skin settings no longer
+    // match), so these must not travel with a profile.
+    "NativeBlend",
+    "NativeBlendWasFinishedPicture",
+    "NativeBlendWasReversibleMode",
+    "NativeBlendWasSkinProtection",
+    "NativeBlendWasReplaceDetail",
     // how OptiScaler is hooked into the game, not the look: the Optical F5Low mode (Off / NR only / NR + frame
     // generation) and the game's-upscaler route. A profile saved with the mode off would otherwise turn off the
     // upscaler and frame generation the mode feeds; one from an older build still has them, and they are not read.
