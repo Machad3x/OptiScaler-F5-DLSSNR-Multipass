@@ -511,6 +511,8 @@ void* ReflexHooks::getHookedReflex(unsigned int InterfaceId)
         timingData[TimingType::type].reset();                                                                          \
     }
 
+void ReflexHooks::resetInputLatency() { _inputLatencyValid.store(false, std::memory_order_relaxed); }
+
 bool ReflexHooks::updateTimingData()
 {
     // Why the Reflex timings are empty, once per reason (the menu's timing graph and the FPS overlay's Reflex timings)
@@ -523,6 +525,7 @@ bool ReflexHooks::updateTimingData()
             LOG_INFO("Reflex timings: no data, {}", why);
         }
 
+        resetInputLatency();
         return false;
     };
 
@@ -553,6 +556,37 @@ bool ReflexHooks::updateTimingData()
             return noData("the driver's frame report is empty (no markers reached it on this device)");
 
         double rangeNs = static_cast<double>(end - start);
+
+        // Input latency: the report's own unit is microseconds. An estimated report (fakenvapi) has made-up GPU marks:
+        // it reaches no further than Present.
+        {
+            const auto latency = lloutput::InputLatencyFromReport(
+                frameReport.simStartTime, frameReport.presentEndTime,
+                _timingEstimated.load(std::memory_order_relaxed) ? 0 : frameReport.gpuRenderEndTime);
+
+            if (!latency.valid)
+            {
+                resetInputLatency();
+            }
+            else
+            {
+                // An average of about the last 30 reads (an exponential one); starts again when the data was empty or
+                // changes from reaching the GPU to not (or back)
+                constexpr double alpha = 2.0 / (30.0 + 1.0);
+                double value = latency.ms;
+
+                if (_inputLatencyValid.load(std::memory_order_relaxed) &&
+                    _inputLatencyReachesGpu.load(std::memory_order_relaxed) == latency.reachesGpu)
+                {
+                    const double previous = _inputLatencyMs.load(std::memory_order_relaxed);
+                    value = previous + alpha * (latency.ms - previous);
+                }
+
+                _inputLatencyMs.store(value, std::memory_order_relaxed);
+                _inputLatencyReachesGpu.store(latency.reachesGpu, std::memory_order_relaxed);
+                _inputLatencyValid.store(true, std::memory_order_relaxed);
+            }
+        }
 
         timingData[TimingType::TimeRange] = TimingEntry { .position = 0, .length = rangeNs };
         UPDATE_TIMING_ENTRY(sim, Simulation)
@@ -606,6 +640,7 @@ bool ReflexHooks::updateTimingData()
         if (auto result = o_NvAPI_D3D_GetLatency(_lastSleepDev, results); result != NVAPI_OK)
         {
             LOG_WARN("NvAPI_D3D_GetLatency failed: {}", magic_enum::enum_name(result));
+            resetInputLatency();
             return false;
         }
 

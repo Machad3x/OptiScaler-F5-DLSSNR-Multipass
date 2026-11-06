@@ -390,6 +390,21 @@ void MenuCommon::UpdateManualInput(HWND targetHwnd)
     lastKey = OptiInput::GetLastPressedKey();
 }
 
+// The FPS overlay's first Reflex timings line: the input latency, simulation start to GPU done (or to the end of
+// Present when the report has no GPU marks). `estimated`: the report is made of the frame markers (a `~` before the
+// number). Nothing while the timing data has no latency.
+static void DrawInputLatencyLine(bool estimated)
+{
+    double ms = 0.0;
+    bool reachesGpu = false;
+
+    if (!ReflexHooks::inputLatency(ms, reachesGpu))
+        return;
+
+    ImGui::Text(reachesGpu ? "Input latency: %s%.0f ms" : "Input latency, to Present: %s%.0f ms", estimated ? "~" : "",
+                ms);
+}
+
 void MenuCommon::ShowTooltip(const char* tip)
 {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2493,7 +2508,8 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                         localFrameCount = fg->FrameCount();
 
                     ImGui::Text("FGId: %llu, RfxId: %llu", localFrameCount, state.reflexFrameId);
-                    ImGui::Text("Low latency timings, whole frame: %.1fms", rangeInNs / 1000.0);
+                    DrawInputLatencyLine(false);
+                    ImGui::Text("Low latency timings, frame span: %.1fms", rangeInNs / 1000.0);
 
                     const auto maxWidth =
                         config->FpsOverlayHorizontal.value_or_default() ? ImGui::GetWindowWidth() : plotSize.x;
@@ -2575,6 +2591,8 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     // and GPU entries are made up, so they are not drawn
                     const bool estimated = ReflexHooks::timingEstimated();
 
+                    DrawInputLatencyLine(estimated);
+
                     if (estimated)
                     {
                         ImGui::Text("Latency, simulation to present: %.1fms", rangeInNs / 1000.0);
@@ -2582,7 +2600,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     }
                     else
                     {
-                        ImGui::Text("Reflex timings, whole frame: %.1fms", rangeInNs / 1000.0);
+                        ImGui::Text("Reflex timings, frame span: %.1fms", rangeInNs / 1000.0);
                     }
 
                     const auto maxWidth =
@@ -8058,6 +8076,10 @@ void MenuCommon::RenderFpsOverlaySettings(RenderMenuContext& ctx)
 
             ImGui::EndCombo();
         }
+
+        MenuCommon::ShowHelpMarker("Reflex timings: the first line is the input latency, from the start of the "
+                                   "simulation to the GPU finishing the frame. It does not include the mouse or the "
+                                   "monitor. The frame span line below it is not a latency.");
 
         float fpsAlpha = config->FpsOverlayAlpha.value_or_default();
         if (ImGui::SliderFloat("Background Alpha", &fpsAlpha, 0.0f, 1.0f, "%.2f"))

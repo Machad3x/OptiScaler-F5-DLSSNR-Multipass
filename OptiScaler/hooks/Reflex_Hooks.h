@@ -56,6 +56,11 @@ class ReflexHooks
 
     inline static std::atomic<bool> _gameCalledReflex = false;
     inline static std::atomic<bool> _timingEstimated = false;
+    // The overlay's input latency: a running average of the last reads (see ReflexHooks::updateTimingData)
+    inline static std::atomic<double> _inputLatencyMs = 0.0;
+    inline static std::atomic<bool> _inputLatencyValid = false;
+    inline static std::atomic<bool> _inputLatencyReachesGpu = false;
+    static void resetInputLatency();
     inline static std::atomic<bool> _gameCalledSetSleepMode = false;
     // The stored sleep modes and devices: the game's calls and ours never interleave, and a released device is dropped
     inline static std::recursive_mutex _sleepModeMutex;
@@ -227,6 +232,17 @@ class ReflexHooks
     // The last timings came from estimated reports (InputCommon's own markers for a method without a driver report):
     // no GPU, driver or queue times, only the markers' own
     static bool timingEstimated() { return _timingEstimated.load(std::memory_order_relaxed); }
+    // The input latency of the last timing reads, smoothed: simulation start to GPU done (reachesGpu), else to the end
+    // of Present. False while the timing data is empty. Not the mouse or the monitor.
+    static bool inputLatency(double& ms, bool& reachesGpu)
+    {
+        if (!_inputLatencyValid.load(std::memory_order_relaxed))
+            return false;
+
+        ms = _inputLatencyMs.load(std::memory_order_relaxed);
+        reachesGpu = _inputLatencyReachesGpu.load(std::memory_order_relaxed);
+        return true;
+    }
     static bool gameIsSendingMarkers();
     // The frame ID the last marker of this type carried (the game's, or ours while it does not call Reflex)
     static uint64_t lastMarkerFrameId(NV_LATENCY_MARKER_TYPE type);

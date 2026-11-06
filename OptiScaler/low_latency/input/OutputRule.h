@@ -458,4 +458,29 @@ constexpr bool IsFgLibraryMarker(const void* callerModule, const void* fgLibrary
 
 // The interval a sleep mode carries for `fps`, 0: no cap
 constexpr uint32_t IntervalUs(float fps) { return fps > 0.0f ? static_cast<uint32_t>(1'000'000.0f / fps + 0.5f) : 0; }
+
+// The input latency the FPS overlay shows, from one frame report's marks (all in the report's own unit, microseconds, 0
+// = not set): from the simulation start to the GPU finishing the frame. It stops at the end of Present when the report
+// has no usable GPU mark (XeLL gives none, DLSS-G's ends before the Present, the markers-only reports). Not the whole
+// span of the report: its earliest and latest marks can lie well outside simulation start .. GPU done.
+struct InputLatency
+{
+    bool valid = false;
+    double ms = 0.0;
+    bool reachesGpu = false; // true: simulation start to GPU done, false: simulation start to the end of Present
+};
+
+constexpr InputLatency InputLatencyFromReport(uint64_t simStart, uint64_t presentEnd, uint64_t gpuRenderEnd)
+{
+    if (simStart == 0)
+        return {};
+
+    if (gpuRenderEnd != 0 && gpuRenderEnd >= presentEnd && gpuRenderEnd >= simStart)
+        return { true, static_cast<double>(gpuRenderEnd - simStart) / 1000.0, true };
+
+    if (presentEnd != 0 && presentEnd > simStart)
+        return { true, static_cast<double>(presentEnd - simStart) / 1000.0, false };
+
+    return {};
+}
 } // namespace lloutput
