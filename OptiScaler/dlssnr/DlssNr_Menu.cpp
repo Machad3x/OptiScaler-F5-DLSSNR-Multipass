@@ -4462,7 +4462,7 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         }
     }
 
-    if (NrCard card("Depth fade", menuResScale, false); card.IsOpen())
+    if (NrCard card("Depth fade (new)##depthfadecard", menuResScale); card.IsOpen())
     {
         bool fade = config->DlssNrDepthFade.value_or_default();
         if (ImGui::Checkbox("Fade NR with distance", &fade))
