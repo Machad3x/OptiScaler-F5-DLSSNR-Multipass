@@ -1278,6 +1278,14 @@ void Config::ReadDlssNr()
     DlssNrEnvironmentDetail.set_from_config(readFloat("DlssNr", "EnvironmentDetail"));
     DlssNrEnvironmentColour.set_from_config(readFloat("DlssNr", "EnvironmentColour"));
     DlssNrShowSkinMask.set_from_config(readBool("DlssNr", "ShowSkinMask"));
+    DlssNrDepthFade.set_from_config(readBool("DlssNr", "DepthFade"));
+    DlssNrDepthFadeFarStart.set_from_config(readFloat("DlssNr", "DepthFadeFarStart"));
+    DlssNrDepthFadeFarEnd.set_from_config(readFloat("DlssNr", "DepthFadeFarEnd"));
+    DlssNrDepthFadeFarStrength.set_from_config(readFloat("DlssNr", "DepthFadeFarStrength"));
+    DlssNrDepthFadeNearStart.set_from_config(readFloat("DlssNr", "DepthFadeNearStart"));
+    DlssNrDepthFadeNearEnd.set_from_config(readFloat("DlssNr", "DepthFadeNearEnd"));
+    DlssNrDepthFadeNearStrength.set_from_config(readFloat("DlssNr", "DepthFadeNearStrength"));
+    DlssNrDepthFadeSkyStrength.set_from_config(readFloat("DlssNr", "DepthFadeSkyStrength"));
     DlssNrPass2Intensity.set_from_config(readFloat("DlssNr", "Pass2Intensity"));
     DlssNrPass2LocalStructure.set_from_config(readFloat("DlssNr", "Pass2LocalStructure"));
     DlssNrPass2LocalTone.set_from_config(readFloat("DlssNr", "Pass2LocalTone"));
@@ -1544,6 +1552,17 @@ static void WriteDlssNr(Config& c, CSimpleIniA& out)
     out.SetValue("DlssNr", "EnvironmentDetail", GetFloatValue(c.DlssNrEnvironmentDetail.value_for_config()).c_str());
     out.SetValue("DlssNr", "EnvironmentColour", GetFloatValue(c.DlssNrEnvironmentColour.value_for_config()).c_str());
     out.SetValue("DlssNr", "ShowSkinMask", GetBoolValue(c.DlssNrShowSkinMask.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFade", GetBoolValue(c.DlssNrDepthFade.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeFarStart", GetFloatValue(c.DlssNrDepthFadeFarStart.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeFarEnd", GetFloatValue(c.DlssNrDepthFadeFarEnd.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeFarStrength",
+                 GetFloatValue(c.DlssNrDepthFadeFarStrength.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeNearStart", GetFloatValue(c.DlssNrDepthFadeNearStart.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeNearEnd", GetFloatValue(c.DlssNrDepthFadeNearEnd.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeNearStrength",
+                 GetFloatValue(c.DlssNrDepthFadeNearStrength.value_for_config()).c_str());
+    out.SetValue("DlssNr", "DepthFadeSkyStrength",
+                 GetFloatValue(c.DlssNrDepthFadeSkyStrength.value_for_config()).c_str());
     out.SetValue("DlssNr", "Pass2Intensity", GetFloatValue(c.DlssNrPass2Intensity.value_for_config()).c_str());
     out.SetValue("DlssNr", "Pass2LocalStructure", GetFloatValue(c.DlssNrPass2LocalStructure.value_for_config()).c_str());
     out.SetValue("DlssNr", "Pass2LocalTone", GetFloatValue(c.DlssNrPass2LocalTone.value_for_config()).c_str());
@@ -1837,6 +1856,14 @@ size_t Config::ApplyDlssNrSection(const DlssNrProfiles::Section& section)
         NR_PROFILE_FIELD("SkinColour", DlssNrSkinColour),
         NR_PROFILE_FIELD("EnvironmentDetail", DlssNrEnvironmentDetail),
         NR_PROFILE_FIELD("EnvironmentColour", DlssNrEnvironmentColour),
+        NR_PROFILE_FIELD("DepthFade", DlssNrDepthFade),
+        NR_PROFILE_FIELD("DepthFadeFarStart", DlssNrDepthFadeFarStart),
+        NR_PROFILE_FIELD("DepthFadeFarEnd", DlssNrDepthFadeFarEnd),
+        NR_PROFILE_FIELD("DepthFadeFarStrength", DlssNrDepthFadeFarStrength),
+        NR_PROFILE_FIELD("DepthFadeNearStart", DlssNrDepthFadeNearStart),
+        NR_PROFILE_FIELD("DepthFadeNearEnd", DlssNrDepthFadeNearEnd),
+        NR_PROFILE_FIELD("DepthFadeNearStrength", DlssNrDepthFadeNearStrength),
+        NR_PROFILE_FIELD("DepthFadeSkyStrength", DlssNrDepthFadeSkyStrength),
         NR_PROFILE_FIELD("InputFlatten", DlssNrInputFlatten),
         NR_PROFILE_FIELD("InputFlattenStrength", DlssNrInputFlattenStrength),
         NR_PROFILE_FIELD("InputStructureHint", DlssNrInputStructureHint),

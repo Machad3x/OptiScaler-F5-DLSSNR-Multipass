@@ -5849,8 +5849,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ci.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || CalibrationActive() ||
                      g_multiRun || g_contextRun;
         // The skin mask preview is painted by the resolve: carried, it would be taken for the model's edit
+        // The depth fade is applied by the resolve, which a carried edit skips
         ci.debugOrCompare = cfg.DlssNrDebugView.value_or_default() != 0 || cfg.DlssNrCompare.value_or_default() != 0 ||
-                            cfg.DlssNrShowSkinMask.value_or_default();
+                            cfg.DlssNrShowSkinMask.value_or_default() || cfg.DlssNrDepthFade.value_or_default();
         ci.reset = g_nr.reset;
         ci.revision = reuseFrame.revision;
         ci.width = width;
@@ -6280,6 +6281,15 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         resolveParams.CompareZoom = std::max(1.0f, cfg.DlssNrCompareZoom.value_or_default());
         resolveParams.CompareSwap = cfg.DlssNrCompareSwap.value_or_default() ? 1u : 0u;
 
+        // The depth fade (DlssNr_DepthFade.h). Off, or with no depth from the game this frame, the block stays zero and
+        // the resolve is the one it always was. depthIn is the game's depth as a readable twin; the valid region and
+        // direction are the ones the model's own depth input uses.
+        const DlssNrDepthFade::Settings depthFade = DlssNrDepthFade::SettingsFrom(cfg);
+        const bool fadeDepthReadable = depthIn != nullptr && guideWidth != 0 && guideHeight != 0;
+        resolveParams.DepthFade = DlssNrDepthFade::MakeBlock(depthFade, fadeDepthReadable, g_nr.guideDepthInverted,
+                                                             { guideWidth, guideHeight, depthBaseX, depthBaseY });
+        DlssNrDepthFade::Report(depthFade, fadeDepthReadable);
+
         // The numbers the composition actually ran with, logged when any of them changes.
         //
         // A colour report without these cannot be read. Paper white alone decides whether the model
@@ -6524,8 +6534,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         }
         else
         {
-            const bool dispatched = DispatchPass(cmdList, resolveParams, resolveProxy, resolveAnswer, resolveOriginal,
-                                                 motionIn, exposureTex, resolveTarget, nullptr);
+            // The game's depth rides in the sixth slot (t5, the resolve's depth fade); the stand-in is the source.
+            const bool dispatched = DispatchPass(
+                cmdList, resolveParams, resolveProxy, resolveAnswer, resolveOriginal, motionIn, exposureTex,
+                resolveTarget, nullptr, (resolveParams.DepthFade.Flags & DlssNrDepthFade::kActive) ? depthIn : nullptr);
             // Without Superior the frame counts as composed whatever the dispatch says, exactly as before.
             composed = dispatched || !superior;
         }

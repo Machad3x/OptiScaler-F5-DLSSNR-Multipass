@@ -41,6 +41,7 @@
 #include <shaders/dlssnr/DlssNr_ExposureMeter.h>
 #include <shaders/dlssnr/DlssNr_ColourEncoding.h>
 #include <shaders/dlssnr/DlssNr_ProxyCurve.h>
+#include <shaders/dlssnr/DlssNr_DepthFade.h>
 #include "DlssNr_ColourEncodingStatus.h"
 #include "DlssNr_SteadyValue.h"
 #include "DlssNr_GameDefaults.h"
@@ -4461,6 +4462,76 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         }
     }
 
+    if (NrCard card("Depth fade", menuResScale, false); card.IsOpen())
+    {
+        bool fade = config->DlssNrDepthFade.value_or_default();
+        if (ImGui::Checkbox("Fade NR with distance", &fade))
+            config->DlssNrDepthFade = fade;
+
+        HelpMarker(
+            "Keeps less of NR's result on faraway surfaces, very near ones and the sky, and more of the frame as "
+            "the game drew it. Uses the game's depth. Off: NR everywhere. Debug view 'Depth fade' shows how much "
+            "NR is kept.\n"
+            "Distances run 0 to 1 on a log scale from the camera's near plane: each 1/16 doubles the distance.");
+
+        if (fade)
+        {
+            switch (DlssNrDepthFade::Current())
+            {
+            case DlssNrDepthFade::State::Active:
+                ImGui::TextDisabled("Reading the game's depth.");
+                break;
+            case DlssNrDepthFade::State::NoDepth:
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                                   "The game gives no depth, so the fade does nothing.");
+                break;
+            default:
+                ImGui::TextDisabled("Waiting for a frame with NR.");
+                break;
+            }
+        }
+
+        ImGui::BeginDisabled(!fade);
+
+        const auto slider = [&](const char* label, const char* resetId, auto& option, float resetTo, const char* help)
+        {
+            float v = option.value_or_default();
+            if (ImGui::SliderFloat(label, &v, 0.0f, 1.0f, "%.2f"))
+                option = std::clamp(v, 0.0f, 1.0f);
+
+            ImGui::SameLine();
+            if (ImGui::SmallButton(resetId))
+                option = resetTo;
+
+            HelpMarker(help);
+        };
+
+        ImGui::TextUnformatted("Far");
+        slider("Far starts", "Reset##dfarstart", config->DlssNrDepthFadeFarStart, 0.5f,
+               "Distance where NR starts to fade out. Closer than this keeps all of it.");
+        slider("Far ends", "Reset##dfarend", config->DlssNrDepthFadeFarEnd, 0.85f,
+               "Distance where the fade has reached its strength. Further than this keeps the same share.");
+        slider("Far strength", "Reset##dfarstrength", config->DlssNrDepthFadeFarStrength, 0.5f,
+               "How much of NR's result is kept far away. 1: all (no fade). 0: none (the frame as the game drew it).");
+
+        ImGui::TextUnformatted("Near");
+        slider("Near starts", "Reset##dnearstart", config->DlssNrDepthFadeNearStart, 0.0f,
+               "Distance up to which the near strength applies.");
+        slider("Near ends", "Reset##dnearend", config->DlssNrDepthFadeNearEnd, 0.1f,
+               "Distance where the near fade has ended and all of NR is kept again.");
+        slider("Near strength", "Reset##dnearstrength", config->DlssNrDepthFadeNearStrength, 1.0f,
+               "How much of NR's result is kept very close to the camera (a first-person weapon). 1: all (no near "
+               "fade).");
+
+        ImGui::TextUnformatted("Sky");
+        slider(
+            "Sky strength", "Reset##dskystrength", config->DlssNrDepthFadeSkyStrength, 1.0f,
+            "How much of NR's result is kept where there is no surface (the sky, at the far plane). Used in place of "
+            "the far fade there. 1: all.");
+
+        ImGui::EndDisabled();
+    }
+
     if (NrCard card("Effect strength", menuResScale); card.IsOpen())
     {
         float transfer = config->DlssNrTransferStrength.value_or_default();
@@ -4714,12 +4785,13 @@ static void RenderDebugPage(Config* config, float menuResScale)
     if (NrCard card("Debug view##card", menuResScale); card.IsOpen())
     {
         static const char* debugNames[] = { "Off", "Proxy (what the model sees)", "Model output (raw)",
-                                            "Difference (amplified)" };
+                                            "Difference (amplified)", "Depth fade (kept share)" };
         int debugView = (int) config->DlssNrDebugView.value_or_default();
         if (ImGui::Combo("Debug view", &debugView, debugNames, IM_ARRAYSIZE(debugNames)))
             config->DlssNrDebugView = (uint32_t) debugView;
 
-        HelpMarker("Shows the model input, its raw output, or the difference x20 (grey = no change).");
+        HelpMarker("Shows the model input, its raw output, or the difference x20 (grey = no change). Depth fade: how "
+                   "much of NR's result is kept, white = all (white everywhere with the fade off or no depth).");
     }
 
     if (NrCard card("Logging", menuResScale, false); card.IsOpen())
