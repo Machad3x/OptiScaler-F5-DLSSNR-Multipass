@@ -459,6 +459,14 @@ constexpr bool IsFgLibraryMarker(const void* callerModule, const void* fgLibrary
 // The interval a sleep mode carries for `fps`, 0: no cap
 constexpr uint32_t IntervalUs(float fps) { return fps > 0.0f ? static_cast<uint32_t>(1'000'000.0f / fps + 0.5f) : 0; }
 
+// Whether one read of the report counts toward the shown input latency: the report's frame must be a new one since the
+// last read (a loading screen or a pause presents nothing, the frame ID stays and its GPU mark keeps rising) and the
+// sample must be sane (500 ms or less). The first read has no last frame to compare. Otherwise the average starts over.
+constexpr bool InputLatencySampleCounts(bool haveLastFrame, uint64_t lastFrameId, uint64_t frameId, double ms)
+{
+    return ms <= 500.0 && (!haveLastFrame || frameId != lastFrameId);
+}
+
 // The input latency the FPS overlay shows, from one frame report's marks (all in the report's own unit, microseconds, 0
 // = not set): from the simulation start to the GPU finishing the frame. It stops at the end of Present when the report
 // has no usable GPU mark (XeLL gives none, DLSS-G's ends before the Present, the markers-only reports). Not the whole

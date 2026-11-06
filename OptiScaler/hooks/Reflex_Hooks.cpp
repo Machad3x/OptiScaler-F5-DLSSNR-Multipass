@@ -564,7 +564,14 @@ bool ReflexHooks::updateTimingData()
                 frameReport.simStartTime, frameReport.presentEndTime,
                 _timingEstimated.load(std::memory_order_relaxed) ? 0 : frameReport.gpuRenderEndTime);
 
-            if (!latency.valid)
+            // Only a new frame of sane length counts; a stalled report (loading screen) starts the average over
+            const bool counts =
+                latency.valid && lloutput::InputLatencySampleCounts(_haveLatencyFrameId, _lastLatencyFrameId,
+                                                                    frameReport.frameID, latency.ms);
+            _lastLatencyFrameId = frameReport.frameID;
+            _haveLatencyFrameId = true;
+
+            if (!counts)
             {
                 resetInputLatency();
             }

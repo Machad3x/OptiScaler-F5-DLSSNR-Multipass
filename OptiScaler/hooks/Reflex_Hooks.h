@@ -61,6 +61,8 @@ class ReflexHooks
     inline static std::atomic<bool> _inputLatencyValid = false;
     inline static std::atomic<bool> _inputLatencyReachesGpu = false;
     static void resetInputLatency();
+    inline static uint64_t _lastLatencyFrameId = 0;
+    inline static bool _haveLatencyFrameId = false;
     inline static std::atomic<bool> _gameCalledSetSleepMode = false;
     // The stored sleep modes and devices: the game's calls and ours never interleave, and a released device is dropped
     inline static std::recursive_mutex _sleepModeMutex;

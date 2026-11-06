@@ -398,8 +398,12 @@ static void DrawInputLatencyLine(bool estimated)
     double ms = 0.0;
     bool reachesGpu = false;
 
+    // No valid value (a loading screen, the first read): a placeholder, so the overlay does not jump
     if (!ReflexHooks::inputLatency(ms, reachesGpu))
+    {
+        ImGui::TextUnformatted("Input latency: --");
         return;
+    }
 
     ImGui::Text(reachesGpu ? "Input latency: %s%.0f ms" : "Input latency, to Present: %s%.0f ms", estimated ? "~" : "",
                 ms);

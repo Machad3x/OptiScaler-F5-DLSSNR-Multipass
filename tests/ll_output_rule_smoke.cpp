@@ -647,6 +647,16 @@ int main()
         CHECK(!InputLatencyFromReport(5000, 3000, 2000).valid);
     }
 
+    // Which reads count toward the shown input latency: a new frame and 500 ms or less; the first read counts
+    {
+        CHECK(InputLatencySampleCounts(false, 0, 100, 40.0));
+        CHECK(InputLatencySampleCounts(true, 100, 101, 40.0));
+        CHECK(!InputLatencySampleCounts(true, 100, 100, 40.0));   // the frame did not change (loading screen)
+        CHECK(!InputLatencySampleCounts(true, 100, 101, 22233.0)); // too long
+        CHECK(!InputLatencySampleCounts(false, 0, 100, 500.5));
+        CHECK(InputLatencySampleCounts(true, 100, 101, 500.0));
+    }
+
     static_assert(IntervalUs(75.0f) == 13333);
     static_assert(IntervalUs(37.5f) == 26667);
     static_assert(IntervalUs(0.0f) == 0);
