@@ -2314,6 +2314,81 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
                    "Superior Scaling, if selected, is kept. Green = in effect; changing those clears it.");
     }
 
+    // Native presets: Native blend (DlssNr_NativeBlend.h), NR's answer written as it is. Read when the card draws, so a
+    // change made on another page (or a look, a profile, a tier preset) has ended it by now and the player's change
+    // stands.
+    if (auto card = ScopedCollapsingHeader("Native Presets", ImGuiTreeNodeFlags_DefaultOpen); card.IsHeaderOpen())
+    {
+        auto blend = ReadBlendState(config);
+        if (DlssNrNativeBlend::Reconcile(blend, BlendResolvedNow(config)))
+            WriteBlendState(config, blend);
+
+        // Finished Picture runs on a native DirectX 12 game only (the same test as the NR Options line); Vulkan has
+        // none.
+        const auto blendFeature = State::Instance().currentFeature;
+        const bool blendUnsupported =
+            DlssNr::IsRunningVk() || (blendFeature && (blendFeature->Api() != API::DX12 || blendFeature->IsWithDx12()));
+        const bool nativeBlend = DlssNrNativeBlend::Active(blend, BlendResolvedNow(config));
+
+        // Greyed only while off: a game that cannot run it can still switch a saved "on" off.
+        ImGui::BeginDisabled(blendUnsupported && !nativeBlend);
+        if (PresetButton("Native blend", nativeBlend, presetWidth))
+        {
+            if (!nativeBlend)
+            {
+                const auto write = DlssNrNativeBlend::TurnOn(blend, BlendSettingsNow(config));
+                WriteBlendState(config, blend);
+                WriteBlendSettings(config, write);
+            }
+            else if (const auto back = DlssNrNativeBlend::TurnOff(blend))
+            {
+                WriteBlendState(config, blend);
+                WriteBlendSettings(config, *back);
+            }
+        }
+        ImGui::EndDisabled();
+
+        HelpMarker("Shows NR's result as it is, without OptiScaler's own blending. Runs NR on the finished picture "
+                   "with Replace, and turns off Separate skin / environment controls and Restore Sharpness. Use NR's "
+                   "Intensity for the strength.\n"
+                   "Green = on; click again to put your earlier settings back. Changing the placement, the composition "
+                   "or one of those controls, or pressing a quality tier, ends it and keeps your change.");
+
+        if (blendUnsupported && !nativeBlend)
+            ImGui::TextWrapped("Needs a native DirectX 12 game (Finished Picture does not run on Vulkan).");
+
+        if (nativeBlend && nr.enabled)
+        {
+            const auto encoding = DlssNr::ReadColourEncodingStatus();
+            const bool sdr = encoding.seen && encoding.exposureState == DlssNrExposureState::State::ToneMapped;
+            const ImVec4 amber(0.9f, 0.6f, 0.25f, 1.0f);
+
+            if (encoding.seen && !sdr)
+                ImGui::TextColored(amber, "This picture is HDR, so NR's result still goes through a brightness "
+                                          "curve here. Not a true native match.");
+
+            // The player's own grade and a forced gamma 2.2 conversion also sit between NR and the screen. Native
+            // blend leaves them as they are.
+            bool graded = DlssNrNativeBlend::LayerGrades(!config->DlssNrLutFile.value_or_default().empty(),
+                                                         config->DlssNrLutStrength.value_or_default());
+            for (int i = 0; i < Config::kPostLutLayers; ++i)
+                graded =
+                    graded || DlssNrNativeBlend::LayerGrades(!config->DlssNrPostLutFile[i].value_or_default().empty(),
+                                                             config->DlssNrPostLutStrength[i].value_or_default());
+
+            if (graded)
+                ImGui::TextColored(amber, "A colour grade is on, so this is not NR's result as it is.");
+
+            if (encoding.seen && sdr && encoding.gammaConverted)
+                ImGui::TextColored(amber, "Colour Encoding is forced to gamma 2.2, so the picture is converted on "
+                                          "the way in and back out. Not NR's result as it is.");
+
+            // The model then ran small and its changes were enlarged: not NR's answer as it is.
+            if (config->DlssNrRunBeforeSr.value_or_default() || config->DlssNrDeferredDlss.value_or_default())
+                ImGui::TextColored(amber, "Run the model before Super Resolution is on: NR's changes are enlarged, "
+                                          "not shown as they are.");
+        }
+    }
 }
 
 // NR Exposure, drawn at the end of the NR Input page.
@@ -3188,84 +3263,6 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
                 ImGui::TextWrapped("This option needs a native DirectX 12 game.");
             else
                 ImGui::TextWrapped("%s", DlssNr::FinishedPictureStatus().c_str());
-        }
-
-        // Native blend: NR's answer written as it is (DlssNr_NativeBlend.h). Read each frame, so a change made in the
-        // controls it owns (or a look, a profile) ends it here and the player's change stands.
-        {
-            auto blend = ReadBlendState(config);
-            if (DlssNrNativeBlend::Reconcile(blend, BlendResolvedNow(config)))
-                WriteBlendState(config, blend);
-
-            // Finished Picture runs on a native DirectX 12 game only (the same test as the line above); Vulkan has
-            // none.
-            const auto blendFeature = State::Instance().currentFeature;
-            const bool blendUnsupported =
-                DlssNr::IsRunningVk() ||
-                (blendFeature && (blendFeature->Api() != API::DX12 || blendFeature->IsWithDx12()));
-            bool nativeBlend = DlssNrNativeBlend::Active(blend, BlendResolvedNow(config));
-
-            // Greyed only while off: a game that cannot run it can still switch a saved "on" off.
-            ImGui::BeginDisabled(blendUnsupported && !nativeBlend);
-            if (ImGui::Checkbox("Native blend", &nativeBlend))
-            {
-                if (nativeBlend)
-                {
-                    const auto write = DlssNrNativeBlend::TurnOn(blend, BlendSettingsNow(config));
-                    WriteBlendState(config, blend);
-                    WriteBlendSettings(config, write);
-                }
-                else if (const auto back = DlssNrNativeBlend::TurnOff(blend))
-                {
-                    WriteBlendState(config, blend);
-                    WriteBlendSettings(config, *back);
-                }
-
-                finishedPicture = config->DlssNrFinishedPicture.value_or_default();
-            }
-            ImGui::EndDisabled();
-
-            HelpMarker(
-                "Shows NR's result as it is, without OptiScaler's own blending. Runs NR on the finished picture "
-                "with Replace, and turns off Separate skin / environment controls and Restore Sharpness. Use NR's "
-                "Intensity for the strength.\n"
-                "Turning it off puts your earlier settings back. Changing the placement, the composition or one of "
-                "those controls yourself ends it and keeps your change.");
-
-            if (blendUnsupported && !nativeBlend)
-                ImGui::TextWrapped("Needs a native DirectX 12 game (Finished Picture does not run on Vulkan).");
-
-            if (nativeBlend && enabled)
-            {
-                const auto encoding = DlssNr::ReadColourEncodingStatus();
-                const bool sdr = encoding.seen && encoding.exposureState == DlssNrExposureState::State::ToneMapped;
-                const ImVec4 amber(0.9f, 0.6f, 0.25f, 1.0f);
-
-                if (encoding.seen && !sdr)
-                    ImGui::TextColored(amber, "This picture is HDR, so NR's result still goes through a brightness "
-                                              "curve here. Not a true native match.");
-
-                // The player's own grade and a forced gamma 2.2 conversion also sit between NR and the screen. Native
-                // blend leaves them as they are.
-                bool graded = DlssNrNativeBlend::LayerGrades(!config->DlssNrLutFile.value_or_default().empty(),
-                                                             config->DlssNrLutStrength.value_or_default());
-                for (int i = 0; i < Config::kPostLutLayers; ++i)
-                    graded = graded ||
-                             DlssNrNativeBlend::LayerGrades(!config->DlssNrPostLutFile[i].value_or_default().empty(),
-                                                            config->DlssNrPostLutStrength[i].value_or_default());
-
-                if (graded)
-                    ImGui::TextColored(amber, "A colour grade is on, so this is not NR's result as it is.");
-
-                if (encoding.seen && sdr && encoding.gammaConverted)
-                    ImGui::TextColored(amber, "Colour Encoding is forced to gamma 2.2, so the picture is converted on "
-                                              "the way in and back out. Not NR's result as it is.");
-
-                // The model then ran small and its changes were enlarged: not NR's answer as it is.
-                if (config->DlssNrRunBeforeSr.value_or_default() || config->DlssNrDeferredDlss.value_or_default())
-                    ImGui::TextColored(amber, "Run the model before Super Resolution is on: NR's changes are enlarged, "
-                                              "not shown as they are.");
-            }
         }
 
         // Nested under Finished Picture: a second, independent axis (generate the changes at the

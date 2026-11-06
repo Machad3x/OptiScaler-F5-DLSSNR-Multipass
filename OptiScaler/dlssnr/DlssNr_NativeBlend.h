@@ -1,8 +1,9 @@
 #pragma once
 
-// "Native blend" on the Neural Rendering page: run NR on the finished picture and write the model's answer as it is,
-// leaving all blending to NR's own Intensity. It sets four settings and remembers what they were, so turning it off
-// puts every one back (an unset one stays unset). Plain data and rules, no config and no ImGui, so
+// "Native blend" preset on the Neural Rendering Status & Presets page ("Native Presets" card): run NR on the finished
+// picture and write the model's answer as it is, leaving all blending to NR's own Intensity. It sets four settings and
+// remembers what they were, so turning it off puts every one back (an unset one stays unset). Plain data and rules, no
+// config and no ImGui, so
 // tests/nr_native_blend_smoke.cpp runs them; dlssnr/DlssNr_Menu.cpp draws the control and Config.cpp keeps the
 // remembered values in [DlssNr] (NativeBlend and NativeBlendWas*).
 //
