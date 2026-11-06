@@ -2509,15 +2509,15 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 
                     ImGui::Text("FGId: %llu, RfxId: %llu", localFrameCount, state.reflexFrameId);
                     DrawInputLatencyLine(false);
-                    ImGui::Text("Low latency timings, frame span: %.1fms", rangeInNs / 1000.0);
 
                     const auto maxWidth =
                         config->FpsOverlayHorizontal.value_or_default() ? ImGui::GetWindowWidth() : plotSize.x;
 
-                    const auto drawTiming = [&](const auto& timingOpt, const char* desc, ImVec4 color)
+                    // A row without data (no entry, or no length: the report's times were zero) is not drawn
+                    const auto drawTiming = [&](const auto& timingOpt, const char* desc, ImVec4 color) -> bool
                     {
-                        if (!timingOpt.has_value())
-                            return;
+                        if (!timingOpt.has_value() || timingOpt.value().length <= 0.0)
+                            return false;
 
                         auto toneMappedColor = State::Instance().isHdrActive ? toneMapColor(color) : color;
 
@@ -2538,14 +2538,19 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                         auto size = ImVec2(end, ImGui::GetItemRectMax().y);
 
                         drawList->AddRectFilled(pos, size, ImGui::ColorConvertFloat4ToU32(toneMappedColor));
+                        return true;
                     };
 
                     drawTiming(timingData.simulation, "Simulation", ImVec4(0.768f, 0.169f, 0.169f, 1.0f));
                     drawTiming(timingData.renderSubmit, "RenderSubmit", ImVec4(0.235f, 0.705f, 0.294f, 1.0f));
                     drawTiming(timingData.present, "Present", ImVec4(1.0f, 0.88f, 0.098f, 1.0f));
-                    drawTiming(timingData.driver, "Driver", ImVec4(0.263f, 0.388f, 0.847f, 1.0f));
-                    drawTiming(timingData.osRenderQueue, "RenderQueue", ImVec4(0.76f, 0.51f, 0.188f, 1.0f));
-                    drawTiming(timingData.gpuRender, "GpuRender", ImVec4(0.569f, 0.117f, 0.705f, 1.0f));
+                    bool anyGpuRow = drawTiming(timingData.driver, "Driver", ImVec4(0.263f, 0.388f, 0.847f, 1.0f));
+                    anyGpuRow |=
+                        drawTiming(timingData.osRenderQueue, "RenderQueue", ImVec4(0.76f, 0.51f, 0.188f, 1.0f));
+                    anyGpuRow |= drawTiming(timingData.gpuRender, "GpuRender", ImVec4(0.569f, 0.117f, 0.705f, 1.0f));
+
+                    if (!anyGpuRow)
+                        ImGui::TextDisabled("GPU timing not available");
                 }
 #else
                 if (previousPoll <= 0.001 || previousPoll + delayBetweenPollsMs < now)
@@ -2594,22 +2599,16 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     DrawInputLatencyLine(estimated);
 
                     if (estimated)
-                    {
-                        ImGui::Text("Latency, simulation to present: %.1fms", rangeInNs / 1000.0);
                         ImGui::TextDisabled("From the frame markers (fakenvapi: no GPU times)");
-                    }
-                    else
-                    {
-                        ImGui::Text("Reflex timings, frame span: %.1fms", rangeInNs / 1000.0);
-                    }
 
                     const auto maxWidth =
                         config->FpsOverlayHorizontal.value_or_default() ? ImGui::GetWindowWidth() : plotSize.x;
 
-                    const auto drawTiming = [&](TimingType type, const char* desc, ImVec4 color)
+                    // A row without data (no entry, or no length: the report's times were zero) is not drawn
+                    const auto drawTiming = [&](TimingType type, const char* desc, ImVec4 color) -> bool
                     {
-                        if (!timingData[type].has_value())
-                            return;
+                        if (!timingData[type].has_value() || timingData[type].value().length <= 0.0)
+                            return false;
 
                         auto toneMappedColor = toneMapColor(color);
 
@@ -2624,6 +2623,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                         auto pos = ImVec2(start, ImGui::GetItemRectMin().y);
                         auto size = ImVec2(end, ImGui::GetItemRectMax().y);
                         drawList->AddRectFilled(pos, size, ImGui::ColorConvertFloat4ToU32(toneMappedColor));
+                        return true;
                     };
 
                     drawTiming(TimingType::Simulation, "Simulation", ImVec4(0.768f, 0.169f, 0.169f, 1.0f));
@@ -2632,9 +2632,14 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 
                     if (!estimated)
                     {
-                        drawTiming(TimingType::Driver, "Driver", ImVec4(0.263f, 0.388f, 0.847f, 1.0f));
-                        drawTiming(TimingType::OsRenderQueue, "RenderQueue", ImVec4(0.76f, 0.51f, 0.188f, 1.0f));
-                        drawTiming(TimingType::GpuRender, "GpuRender", ImVec4(0.569f, 0.117f, 0.705f, 1.0f));
+                        bool anyGpuRow = drawTiming(TimingType::Driver, "Driver", ImVec4(0.263f, 0.388f, 0.847f, 1.0f));
+                        anyGpuRow |=
+                            drawTiming(TimingType::OsRenderQueue, "RenderQueue", ImVec4(0.76f, 0.51f, 0.188f, 1.0f));
+                        anyGpuRow |=
+                            drawTiming(TimingType::GpuRender, "GpuRender", ImVec4(0.569f, 0.117f, 0.705f, 1.0f));
+
+                        if (!anyGpuRow)
+                            ImGui::TextDisabled("GPU timing not available");
                     }
                 }
 #endif
@@ -8077,9 +8082,10 @@ void MenuCommon::RenderFpsOverlaySettings(RenderMenuContext& ctx)
             ImGui::EndCombo();
         }
 
-        MenuCommon::ShowHelpMarker("Reflex timings: the first line is the input latency, from the start of the "
-                                   "simulation to the GPU finishing the frame. It does not include the mouse or the "
-                                   "monitor. The frame span line below it is not a latency.");
+        MenuCommon::ShowHelpMarker("Reflex timings: the bars show when each stage of the frame ran. Input latency "
+                                   "runs from the start of the simulation to the GPU finishing the frame, or to "
+                                   "Present when GPU timing is not available. It does not include the mouse or the "
+                                   "monitor.");
 
         float fpsAlpha = config->FpsOverlayAlpha.value_or_default();
         if (ImGui::SliderFloat("Background Alpha", &fpsAlpha, 0.0f, 1.0f, "%.2f"))
