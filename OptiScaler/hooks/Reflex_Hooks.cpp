@@ -995,6 +995,14 @@ NvAPI_Status ReflexHooks::routeSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKE
     return hkNvAPI_D3D_SetLatencyMarker(pDev, pParams);
 }
 
+NvAPI_Status ReflexHooks::deliverLibraryAsyncMarker(ID3D12CommandQueue* pQueue, NV_ASYNC_FRAME_MARKER_PARAMS* pParams)
+{
+    if (o_NvAPI_D3D12_SetAsyncFrameMarker == nullptr)
+        return NVAPI_NO_IMPLEMENTATION;
+
+    return o_NvAPI_D3D12_SetAsyncFrameMarker(pQueue, pParams);
+}
+
 NvAPI_Status ReflexHooks::routeSetAsyncFrameMarker(ID3D12CommandQueue* pQueue, NV_ASYNC_FRAME_MARKER_PARAMS* pParams,
                                                    bool)
 {

@@ -620,6 +620,15 @@ int main()
         CHECK(!CapForGame(in).outputHoldsCap);
     }
 
+    // Async markers: the frame generation library's own calls are recognised by module, and only when a library is loaded
+    {
+        int libraryModule = 0, gameModule = 0;
+        CHECK(IsFgLibraryMarker(&libraryModule, &libraryModule));
+        CHECK(!IsFgLibraryMarker(&gameModule, &libraryModule));
+        CHECK(!IsFgLibraryMarker(nullptr, nullptr));
+        CHECK(!IsFgLibraryMarker(&gameModule, nullptr));
+    }
+
     static_assert(IntervalUs(75.0f) == 13333);
     static_assert(IntervalUs(37.5f) == 26667);
     static_assert(IntervalUs(0.0f) == 0);

@@ -252,6 +252,10 @@ class ReflexHooks
     // (`returnAddress`: the hooked function's caller)
     static bool isGameCall(void* returnAddress);
 
+    // An async marker of the frame generation library's own (lloutput::IsFgLibraryMarker): straight to the driver, no
+    // Reflex bookkeeping (not the game's call, no last marker frame, no frame generation mark)
+    static NvAPI_Status deliverLibraryAsyncMarker(ID3D12CommandQueue* pQueue, NV_ASYNC_FRAME_MARKER_PARAMS* pParams);
+
     // The game itself has called Reflex (SetSleepMode, Sleep, a marker or an async marker), ever; and SetSleepMode
     // in particular (a game that only sends markers has Reflex off).
     static bool gameCalledReflex() { return _gameCalledReflex.load(std::memory_order_relaxed); }
