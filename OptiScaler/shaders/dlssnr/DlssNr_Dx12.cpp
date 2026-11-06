@@ -2019,12 +2019,20 @@ DXGI_FORMAT TypedGuideFormat(DXGI_FORMAT f)
 
 bool IsTypeless(DXGI_FORMAT f) { return TypedGuideFormat(f) != f; }
 
-// Creates a typed twin of a guide buffer, matching everything but the format.
-ID3D12Resource* CreateGuideClone(ID3D12Device* device, ID3D12Resource* source)
+// Creates a typed twin of a guide buffer, matching everything but the format. With `topLevelOnly` the twin holds just
+// the source's first subresource (mip 0 of slice 0): a game may keep a depth pyramid in its depth buffer's lower mips
+// (Resonance: A Plague Tale Legacy, 11 mips), and only the top level is the guide.
+ID3D12Resource* CreateGuideClone(ID3D12Device* device, ID3D12Resource* source, bool topLevelOnly = false)
 {
     D3D12_RESOURCE_DESC desc = source->GetDesc();
     desc.Format = TypedGuideFormat(desc.Format);
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    if (topLevelOnly)
+    {
+        desc.MipLevels = 1;
+        desc.DepthOrArraySize = 1;
+        desc.Alignment = 0;
+    }
 
     D3D12_HEAP_PROPERTIES heap {};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
