@@ -174,8 +174,18 @@ static void AcrossRestart()
     Check(Reconcile(edited, Resolve(changed)), "an edited ini ends it at the next start");
 }
 
+// A grade layer counts with a file and a strength above 0.
+static void Grades()
+{
+    Check(LayerGrades(true, 1.0f), "a file at full strength grades");
+    Check(LayerGrades(true, 0.01f), "a file at low strength grades");
+    Check(!LayerGrades(true, 0.0f), "strength 0 does not grade");
+    Check(!LayerGrades(false, 1.0f), "no file does not grade");
+}
+
 int main()
 {
+    Grades();
     NativeValues();
     RestoresEverything();
     AutoStaysAuto();

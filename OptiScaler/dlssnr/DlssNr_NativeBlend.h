@@ -1,8 +1,8 @@
 #pragma once
 
 // "Native blend" on the Neural Rendering page: run NR on the finished picture and write the model's answer as it is,
-// leaving all blending to NR's own Intensity. It sets four settings and remembers what they were, so turning it off puts
-// every one back (an unset one stays unset). Plain data and rules, no config and no ImGui, so
+// leaving all blending to NR's own Intensity. It sets four settings and remembers what they were, so turning it off
+// puts every one back (an unset one stays unset). Plain data and rules, no config and no ImGui, so
 // tests/nr_native_blend_smoke.cpp runs them; dlssnr/DlssNr_Menu.cpp draws the control and Config.cpp keeps the
 // remembered values in [DlssNr] (NativeBlend and NativeBlendWas*).
 //
@@ -96,6 +96,10 @@ inline bool Reconcile(State& state, const Resolved& now)
     state = State {};
     return true;
 }
+
+// A colour grade layer (the input LUT or one of the post-NR layers) changes the picture when it has a file and a
+// strength above 0. Native blend leaves the player's grade alone and the menu says so.
+inline bool LayerGrades(bool hasFile, float strength) { return hasFile && strength > 0.0f; }
 
 // What the checkbox shows.
 inline bool Active(const State& state, const Resolved& now) { return state.on && Matches(now); }

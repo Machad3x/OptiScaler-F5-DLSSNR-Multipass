@@ -3245,6 +3245,22 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
                     ImGui::TextColored(amber, "This picture is HDR, so NR's result still goes through a brightness "
                                               "curve here. Not a true native match.");
 
+                // The player's own grade and a forced gamma 2.2 conversion also sit between NR and the screen. Native
+                // blend leaves them as they are.
+                bool graded = DlssNrNativeBlend::LayerGrades(!config->DlssNrLutFile.value_or_default().empty(),
+                                                             config->DlssNrLutStrength.value_or_default());
+                for (int i = 0; i < Config::kPostLutLayers; ++i)
+                    graded = graded ||
+                             DlssNrNativeBlend::LayerGrades(!config->DlssNrPostLutFile[i].value_or_default().empty(),
+                                                            config->DlssNrPostLutStrength[i].value_or_default());
+
+                if (graded)
+                    ImGui::TextColored(amber, "A colour grade is on, so this is not NR's result as it is.");
+
+                if (encoding.seen && sdr && encoding.gammaConverted)
+                    ImGui::TextColored(amber, "Colour Encoding is forced to gamma 2.2, so the picture is converted on "
+                                              "the way in and back out. Not NR's result as it is.");
+
                 // The model then ran small and its changes were enlarged: not NR's answer as it is.
                 if (config->DlssNrRunBeforeSr.value_or_default() || config->DlssNrDeferredDlss.value_or_default())
                     ImGui::TextColored(amber, "Run the model before Super Resolution is on: NR's changes are enlarged, "
