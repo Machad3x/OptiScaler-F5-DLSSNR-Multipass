@@ -112,6 +112,7 @@ class NativeDriver
     std::atomic<bool> _pictureHdr10 { false }; // the last picture handed to NR was HDR10 (read by the menu thread)
     uint64_t _trustFrame = 0; // the last frame the trust mask was recorded in
     uint64_t _cuts = 0;       // scene cuts the mask reported
+    uint32_t _queueChanges = 0; // producer lists that went to another queue than the last (logged the first few)
     Status _status = Status::Off;
     std::string _failure;
 

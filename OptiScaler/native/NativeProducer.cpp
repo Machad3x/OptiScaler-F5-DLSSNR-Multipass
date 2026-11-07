@@ -513,6 +513,17 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         if (input.ready.fence != nullptr)
             queue->Wait(input.ready.fence, input.ready.value);
 
+        // Another queue than the last list's: on its own queue the last list is ahead of this one, on a new one nothing
+        // orders them, and both would change the same textures' states at once (NBA 2K27: a GPU hang when frame
+        // generation's game queue dropped out at a screen transition and the next list went to the swap chain's queue).
+        if (_lastQueue != nullptr && queue != _lastQueue && _signalled > 0)
+        {
+            queue->Wait(_fence, _signalled);
+            result.queueChanged = true;
+        }
+
+        _lastQueue = queue;
+
         ID3D12CommandList* lists[] = { list };
         queue->ExecuteCommandLists(1, lists);
         queue->Signal(_fence, ++_signalled);
