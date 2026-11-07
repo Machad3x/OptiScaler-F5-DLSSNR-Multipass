@@ -274,6 +274,9 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
         }
     }
 
+    if (result.queueChanged && _queueChanges++ < 8)
+        LOG_INFO("{}: the game's queue for this step changed; this frame waits for the last one's GPU work", _tag);
+
     if (result.sceneCut)
     {
         ++_cuts;
