@@ -31,6 +31,8 @@ NativeProducer::~NativeProducer()
         _fence->Release();
     if (_event != nullptr)
         CloseHandle(_event);
+    if (_lastQueue != nullptr)
+        _lastQueue->Release();
 }
 
 bool NativeProducer::WaitFor(UINT64 value)
@@ -213,6 +215,26 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
 
         if (_trust)
             _trust->Reset();
+    }
+
+    // Another queue than the last list's: every list uses the same textures, and only lists on one queue are ordered
+    // by submission. NBA 2K27 hung the GPU when frame generation's game queue dropped out at a screen change and the
+    // next list went to the swap chain's queue while the last one still ran. The order is kept on the CPU, never with a
+    // GPU wait across queues: the last list's signal can sit behind a wait on this very present (the rule in
+    // shaders/dlssnr/DlssNr_FinishedReady.h). Unfinished: this frame is skipped and the consumer's history restarts.
+    if (_lastQueue != nullptr && queue != _lastQueue)
+    {
+        result.queueChanged = true;
+        const UINT64 completed = _fence->GetCompletedValue();
+
+        if (completed == UINT64_MAX || completed < _signalled)
+        {
+            result.stoppedAt = "waiting for the last list on another queue";
+            result.deviceRemoved = _device->GetDeviceRemovedReason();
+            result.stoppedHr = FAILED(result.deviceRemoved) ? result.deviceRemoved : HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+            _consumerResetPending = true;
+            return result;
+        }
     }
 
     // The slot's allocator is reset below: while the GPU may still run its last list that would break that list, so a
@@ -513,16 +535,13 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         if (input.ready.fence != nullptr)
             queue->Wait(input.ready.fence, input.ready.value);
 
-        // Another queue than the last list's: on its own queue the last list is ahead of this one, on a new one nothing
-        // orders them, and both would change the same textures' states at once (NBA 2K27: a GPU hang when frame
-        // generation's game queue dropped out at a screen transition and the next list went to the swap chain's queue).
-        if (_lastQueue != nullptr && queue != _lastQueue && _signalled > 0)
+        if (queue != _lastQueue)
         {
-            queue->Wait(_fence, _signalled);
-            result.queueChanged = true;
+            queue->AddRef();
+            if (_lastQueue != nullptr)
+                _lastQueue->Release();
+            _lastQueue = queue;
         }
-
-        _lastQueue = queue;
 
         ID3D12CommandList* lists[] = { list };
         queue->ExecuteCommandLists(1, lists);
