@@ -93,6 +93,7 @@ class NativeProducer
         float distrustedShare = 0.0f;
         bool nativeRan = false;  // the consumer ran on the picture
         bool previewDrawn = false;       // the debug view was drawn this frame (Options::flowPreview)
+        bool queueChanged = false;       // the caller's queue is not the last list's (for the log)
         const char* stoppedAt = nullptr; // when nothing was submitted: the step that gave up (for the log)
         long stoppedHr = 0;              // and the HRESULT it got, when it had one
         long deviceRemoved = 0;          // the device's removed reason at that moment (0: not removed)
@@ -144,6 +145,10 @@ class NativeProducer
     HANDLE _event = nullptr;
     UINT64 _values[kRing] = {};
     UINT64 _signalled = 0;
+    // The queue the last list went to, held so its address can't be reused by a new queue. The caller's queue can
+    // change between frames (frame generation's game queue comes and goes) and every list uses the same textures: on
+    // another queue, Run skips the frame until the last list has finished (a CPU check, no GPU wait across queues).
+    ID3D12CommandQueue* _lastQueue = nullptr;
     uint64_t _frame = 0;
     uint64_t _cutQuietUntil = 0; // a cut's consumer reset was asked for: the late count of the same cut is not another
 
