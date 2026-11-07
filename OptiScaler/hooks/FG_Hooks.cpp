@@ -1614,6 +1614,28 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         gameQueue = fg12->GameCommandQueue();
     }
 
+    // Which queue this is can change from frame to frame (frame generation's game queue comes and goes at a screen
+    // change): native input's work keeps its own order across a change (native::NativeProducer), and the log says when.
+    {
+        static ID3D12CommandQueue* lastGameQueue = nullptr; // compared only
+        static uint32_t changes = 0;
+
+        if (gameQueue != lastGameQueue)
+        {
+            if (lastGameQueue != nullptr && changes++ < 8)
+            {
+                auto* fg12 = dynamic_cast<IFGFeature_Dx12*>(state.currentFG);
+                LOG_INFO("FGPresent: the game's queue for work before frame generation changed {:X} -> {:X} ({})",
+                         (size_t) lastGameQueue, (size_t) gameQueue,
+                         fg12 == nullptr                       ? "no frame generation"
+                         : fg12->GameCommandQueue() == nullptr ? "frame generation has no game queue right now"
+                                                               : "frame generation's game queue");
+            }
+
+            lastGameQueue = gameQueue;
+        }
+    }
+
     // Native input runs here, on the game's picture and queue, ahead of frame generation and before its lock below: when it
     // presents to the virtual upscaler, that call feeds frame generation (UpscaleStart takes the same lock).
     //

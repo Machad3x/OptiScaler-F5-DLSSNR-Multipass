@@ -29,7 +29,7 @@
 #define VER_MAJOR_VERSION 0
 #define VER_MINOR_VERSION 7
 #define VER_HOTFIX_VERSION 7
-#define VER_BUILD_NUMBER 1
+#define VER_BUILD_NUMBER 2
 
 // This fork's own release train (git tags "vX.Y.Z-slug" on
 // janblade/OptiScaler-F5-DLSSNR-Multipass, e.g. v0.1.6-dlssnr-enlarge-filter-simplify) --
