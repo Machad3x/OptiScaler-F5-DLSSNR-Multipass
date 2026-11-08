@@ -1481,6 +1481,39 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
     return result;
 }
 
+// Present is DXGI's own function, shared by every swapchain in the process, so the detour also sees swapchains that are
+// not the one frame generation hands the game: F5Low's real chain, which f5low.dll presents from its own thread on its own
+// queue. FGPresent works on the game's picture and queue (finished picture pass, frame counters, pacing, hudfix), so
+// running it for such a chain submits work on the library's present queue and counts its presents as game frames.
+// Only XeFG API outputs are judged: their library makes presents of its own on chains other than the game's. Without a
+// current frame generation chain, or for a chain that is the game-facing one or the D3D11/Vulkan interop's presenting
+// chain, this says no and today's behaviour stands.
+static bool IsForeignChainPresent(IDXGISwapChain* This)
+{
+    auto& state = State::Instance();
+
+    if (This == nullptr || state.currentFG == nullptr || state.currentFGSwapchain == nullptr ||
+        !UsesXeFGApi(state.activeFgOutput))
+    {
+        return false;
+    }
+
+    if (This == state.currentFGSwapchain || FGHooks::IsDx12InteropPresentSC(This))
+        return false;
+
+    static bool logged = false;
+
+    if (!logged)
+    {
+        logged = true;
+        LOG_INFO("Present on swapchain {:X} that is not frame generation's game-facing one {:X}: passed straight to DXGI, "
+                 "none of the game's present work runs for it",
+                 (size_t) This, (size_t) state.currentFGSwapchain);
+    }
+
+    return true;
+}
+
 HRESULT FGHooks::hkFGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 {
     // Skip XeFG's internal call
@@ -1505,6 +1538,9 @@ HRESULT FGHooks::hkFGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags
 
         return result;
     }
+
+    if (IsForeignChainPresent(This))
+        return o_FGSCPresent(This, SyncInterval, Flags);
 
     LOG_DEBUG("SyncInterval: {}, Flags: {:X}", SyncInterval, Flags);
 
@@ -1540,6 +1576,9 @@ HRESULT FGHooks::hkFGPresent1(IDXGISwapChain1* This, UINT SyncInterval, UINT Fla
 
         return result;
     }
+
+    if (IsForeignChainPresent(This))
+        return o_FGSCPresent1(This, SyncInterval, Flags, pPresentParameters);
 
     LOG_DEBUG("SyncInterval: {}, Flags: {:X}", SyncInterval, Flags);
     _skipPresent = true;
