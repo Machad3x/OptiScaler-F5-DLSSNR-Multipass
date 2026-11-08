@@ -554,8 +554,10 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     // present, and a frame generation library that presents on its own queue runs that there.
     std::optional<DlssNr::ScopedNrInList> nrInList;
 
-    if (route == VuNrRoute::BackendPass && state.currentFG != nullptr && state.currentFG->IsActive() &&
-        !state.currentFG->IsPaused())
+    // Whenever OptiScaler's frame generation owns the swap chain, active or not: it activates, deactivates and activates
+    // again at start, and NR must not move between the list and the present with that (it resets NR's history).
+    if (route == VuNrRoute::BackendPass && state.currentFG != nullptr && state.currentFGSwapchain != nullptr &&
+        UsesXeFGApi(state.activeFgOutput))
         nrInList.emplace();
 
     if (route != VuNrRoute::InPlace)
