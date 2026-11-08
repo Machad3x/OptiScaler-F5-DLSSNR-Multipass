@@ -6907,6 +6907,12 @@ void RetryAfterFailure()
 
 #include "DlssNr_Late.inl"
 
+// Depth of ScopedNrInList on this thread.
+static thread_local int g_nrInListDepth = 0;
+
+ScopedNrInList::ScopedNrInList() { ++g_nrInListDepth; }
+ScopedNrInList::~ScopedNrInList() { --g_nrInListDepth; }
+
 // Reads the game's parameter block and runs the pass on what it finds.
 //
 // This is the call site's job, not the pass's. A caller that has the resources in hand -- a
@@ -6918,6 +6924,11 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
 {
     std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
     const Config& cfg = *Config::Instance();
+    // The virtual upscaler's backend pass under frame generation (ScopedNrInList) works in its own list: the present-time
+    // Finished Picture pass would run on the presenting queue, which is not the game's when the library presents itself.
+    const bool finishedPictureOn = cfg.DlssNrFinishedPicture.value_or_default() && g_nrInListDepth == 0;
+    if (g_nrInListDepth > 0 && cfg.DlssNrFinishedPicture.value_or_default())
+        Late::Say("Neural Rendering runs on the upscaler pass's output before frame generation, in the game's own commands.");
     static unsigned lastPrecision=0;
     const unsigned precision=cfg.DlssNrPrecision.value_or_default();
     if(lastPrecision!=precision)
@@ -7016,7 +7027,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         if (role.kind == Contexts::Kind::Own)
         {
             // One picture's modes cannot run on a second one
-            if (cfg.DlssNrFinishedPicture.value_or_default() || cfg.DlssNrDeferredDlss.value_or_default())
+            if (finishedPictureOn || cfg.DlssNrDeferredDlss.value_or_default())
             {
                 ReportSkipOnce("another DLSS feature of the game: Finished picture and Deferred DLSS work on the main "
                                "one only");
@@ -7078,7 +7089,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
 
         // The finished-picture and deferred modes keep one picture of their own and stage from the origin.
         const bool ownPictureModes =
-            cfg.DlssNrFinishedPicture.value_or_default() || cfg.DlssNrDeferredDlss.value_or_default();
+            finishedPictureOn || cfg.DlssNrDeferredDlss.value_or_default();
         if (view.slot >= 0 && ownPictureModes)
         {
             ReportSkipOnce("several views are drawn: Finished picture and Deferred DLSS work on one picture only");
@@ -7094,7 +7105,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         g_multiRun = viewLatched && Views::CountRuns(mask) >= 2;
     }
 
-    const unsigned finishedMode = !cfg.DlssNrFinishedPicture.value_or_default() ? 0u :
+    const unsigned finishedMode = !finishedPictureOn ? 0u :
         (cfg.DlssNrRunBeforeSr.value_or_default() || cfg.DlssNrDeferredDlss.value_or_default()) ? 2u : 1u;
     static unsigned lastFinishedMode = 0;
     if (lastFinishedMode != finishedMode)
@@ -7352,7 +7363,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
     ApplyColourEncoding(frame, Config::Instance()->DlssNrColourEncoding.value_or_default(),
                         (createFlags & NVSDK_NGX_DLSS_Feature_Flags_IsHDR) != 0,
                         colourAuthority != nullptr ? colourAuthority->GetDesc().Format : DXGI_FORMAT_UNKNOWN,
-                        !Config::Instance()->DlssNrFinishedPicture.value_or_default());
+                        !finishedPictureOn);
 
     // The game telling the upscaler to forget everything it has accumulated: a cut, a teleport, a
     // load. Every upscaler in this tree reads it and this pass did not, so the model's history was

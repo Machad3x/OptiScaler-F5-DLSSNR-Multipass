@@ -6,6 +6,7 @@
 #include "VirtualUpscalerMode.h"
 
 #include <atomic>
+#include <optional>
 #include <NVNGX_Parameter.h>
 #include <State.h>
 #include <Config.h>
@@ -547,6 +548,16 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     // DLSS-NR hangs off NVSDK_NGX_D3D12_EvaluateFeature around the upscaler, not off the feature: before it (Run before SR,
     // or the finished-picture capture of depth and motion) and after it (over Output). Not with the backend's pass off:
     // NR already ran on the picture itself, above, and would otherwise run twice.
+    //
+    // With the backend's pass and frame generation running, NR works on the pass's output in this list, as in place does:
+    // frame generation copies the picture next. Finished Picture (an ini setting for NR Only mode) would leave it to the
+    // present, and a frame generation library that presents on its own queue runs that there.
+    std::optional<DlssNr::ScopedNrInList> nrInList;
+
+    if (route == VuNrRoute::BackendPass && state.currentFG != nullptr && state.currentFG->IsActive() &&
+        !state.currentFG->IsPaused())
+        nrInList.emplace();
+
     if (route != VuNrRoute::InPlace)
         DlssNr::EvaluateBeforeUpscale(cmd, _params);
     _params->Set(NVSDK_NGX_Parameter_Depth, depth);
