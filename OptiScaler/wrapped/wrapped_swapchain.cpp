@@ -590,11 +590,17 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 currentFeature->TickFrozenCheck();
         }
 
+        // The frame generation library's own real chain (F5Low presents it on its own queue and thread, also while
+        // frame generation is paused and passes frames through): the game's picture and queue are FGPresent's, which
+        // runs the native input step and the finished picture pass for the game's present. Here they would submit on
+        // the library's queue.
+        const bool libraryChain = FGHooks::IsLibraryChain(pSwapChain);
+
         // Before the finished-picture pass, which composes from what the virtual upscaler's call captured this frame.
-        if (cq && device12)
+        if (cq && device12 && !libraryChain)
             NativeMotionDx12::OnPresent(pSwapChain, cq, device12);
 
-        if (cq && (fg == nullptr || !fg->IsActive() || fg->IsPaused()))
+        if (cq && !libraryChain && (fg == nullptr || !fg->IsActive() || fg->IsPaused()))
             DlssNr::ApplyToFinishedPicture(pSwapChain, cq);
 
         // HDR output: the game drew into its proxy back buffer. Turn it into the real HDR one, after the finished picture
@@ -735,6 +741,15 @@ WrappedIDXGISwapChain4::WrappedIDXGISwapChain4(IDXGISwapChain* real, IUnknown* p
 {
     _id = ++scCount;
     _lastFlags = flags;
+
+    // Made inside the frame generation library's own create (DxgiFactoryHooks::ScopedSkipFGSCCreation) for an XeFG API
+    // output: its real chain, presented on the library's queue and thread. Marked here, by what this chain is, so the
+    // mark does not depend on frame generation's State pointers, which are cleared while the library tears down.
+    if (SdrToHdr::InFgLibraryCreate() && UsesXeFGApi(State::Instance().activeFgOutput))
+    {
+        _libraryChainMarked = true;
+        FGHooks::NoteLibraryChain(_real);
+    }
 
     _real->QueryInterface(IID_PPV_ARGS(&_real1));
     if (_real1 != nullptr)
@@ -1155,6 +1170,10 @@ ULONG STDMETHODCALLTYPE WrappedIDXGISwapChain4::Release()
             proxy->Release();
 
         auto refCount = _real->Release();
+
+        // After the release: the library can still present the chain until then
+        if (_libraryChainMarked)
+            FGHooks::ForgetLibraryChain(_real);
 
         // Disabled for now, cause issues with some games
         /*
