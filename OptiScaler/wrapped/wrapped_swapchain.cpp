@@ -742,6 +742,15 @@ WrappedIDXGISwapChain4::WrappedIDXGISwapChain4(IDXGISwapChain* real, IUnknown* p
     _id = ++scCount;
     _lastFlags = flags;
 
+    // Made inside the frame generation library's own create (DxgiFactoryHooks::ScopedSkipFGSCCreation) for an XeFG API
+    // output: its real chain, presented on the library's queue and thread. Marked here, by what this chain is, so the mark
+    // does not depend on frame generation's State pointers, which are cleared while the library tears down.
+    if (SdrToHdr::InFgLibraryCreate() && UsesXeFGApi(State::Instance().activeFgOutput))
+    {
+        _libraryChainMarked = true;
+        FGHooks::NoteLibraryChain(_real);
+    }
+
     _real->QueryInterface(IID_PPV_ARGS(&_real1));
     if (_real1 != nullptr)
         _real1->Release();
@@ -1161,6 +1170,10 @@ ULONG STDMETHODCALLTYPE WrappedIDXGISwapChain4::Release()
             proxy->Release();
 
         auto refCount = _real->Release();
+
+        // After the release: the library can still present the chain until then
+        if (_libraryChainMarked)
+            FGHooks::ForgetLibraryChain(_real);
 
         // Disabled for now, cause issues with some games
         /*

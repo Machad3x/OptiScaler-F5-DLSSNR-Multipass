@@ -589,17 +589,37 @@ bool FGHooks::IsDx12InteropPresentSC(IUnknown* pSwapChain)
     return pSwapChain != nullptr && pSwapChain == _dx12InteropPresentSC;
 }
 
+// Raw swapchain pointers (as DXGI's Present sees them) -> how many wrappers marked them
+static std::mutex g_libraryChainMutex;
+static std::unordered_map<const void*, int> g_libraryChains;
+
+void FGHooks::NoteLibraryChain(IUnknown* pSwapChain)
+{
+    if (pSwapChain == nullptr)
+        return;
+
+    std::lock_guard<std::mutex> lock(g_libraryChainMutex);
+    ++g_libraryChains[pSwapChain];
+}
+
+void FGHooks::ForgetLibraryChain(IUnknown* pSwapChain)
+{
+    if (pSwapChain == nullptr)
+        return;
+
+    std::lock_guard<std::mutex> lock(g_libraryChainMutex);
+
+    if (auto it = g_libraryChains.find(pSwapChain); it != g_libraryChains.end() && --it->second <= 0)
+        g_libraryChains.erase(it);
+}
+
 bool FGHooks::IsLibraryChain(IUnknown* pSwapChain)
 {
-    auto& state = State::Instance();
-
-    if (pSwapChain == nullptr || state.currentFG == nullptr || state.currentFGSwapchain == nullptr ||
-        !UsesXeFGApi(state.activeFgOutput))
-    {
+    if (pSwapChain == nullptr)
         return false;
-    }
 
-    return pSwapChain != static_cast<IUnknown*>(state.currentFGSwapchain) && !IsDx12InteropPresentSC(pSwapChain);
+    std::lock_guard<std::mutex> lock(g_libraryChainMutex);
+    return g_libraryChains.find(pSwapChain) != g_libraryChains.end();
 }
 
 void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
@@ -1494,29 +1514,23 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
     return result;
 }
 
-// Present is DXGI's own function, shared by every swapchain in the process, so the detour also sees swapchains that are
-// not the one frame generation hands the game: F5Low's real chain, which f5low.dll presents from its own thread on its own
-// queue. FGPresent works on the game's picture and queue (finished picture pass, frame counters, pacing, hudfix), so
-// running it for such a chain submits work on the library's present queue and counts its presents as game frames.
-// Only XeFG API outputs are judged: their library makes presents of its own on chains other than the game's. Without a
-// current frame generation chain, or for a chain that is the game-facing one or the D3D11/Vulkan interop's presenting
-// chain, this says no and today's behaviour stands.
+// Present is DXGI's own function, shared by every swapchain in the process, so the detour also sees the real chain an
+// XeFG API library (F5Low) made for itself, which it presents from its own thread on its own queue. FGPresent works on the
+// game's picture and queue (finished picture pass, frame counters, pacing, hudfix), so running it for that chain submits
+// work on the library's present queue and counts its presents as game frames. Only a chain marked as the library's at its
+// creation (FGHooks::IsLibraryChain) is passed through: that stays so through the library's teardown, when
+// currentFGSwapchain is already cleared, and a game chain, the interop's chain or another window's chain is never one.
 static bool IsForeignChainPresent(IDXGISwapChain* This)
 {
-    auto& state = State::Instance();
-
     if (!FGHooks::IsLibraryChain(This))
         return false;
 
-    static bool logged = false;
+    static std::atomic_bool logged { false };
 
-    if (!logged)
-    {
-        logged = true;
-        LOG_INFO("Present on swapchain {:X} that is not frame generation's game-facing one {:X}: passed straight to DXGI, "
-                 "none of the game's present work runs for it",
-                 (size_t) This, (size_t) state.currentFGSwapchain);
-    }
+    if (!logged.exchange(true))
+        LOG_INFO("Present on the frame generation library's own swapchain {:X} (game-facing one {:X}): passed straight "
+                 "to DXGI, none of the game's present work runs for it",
+                 (size_t) This, (size_t) State::Instance().currentFGSwapchain);
 
     return true;
 }
@@ -1804,10 +1818,12 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     {
         LOG_TRACE("FGHooks::FGPresent: FG feature exists but is inactive/paused; pass-through present only");
 
-        // Finished Picture keeps working through a pause (frame generation starts with an activate / deactivate /
-        // activate): on the game's picture and queue here, once per game present. The library's own real chain is
-        // left alone (wrapped_swapchain.cpp's LocalPresent), as its queue is not the game's.
-        DlssNr::ApplyToFinishedPicture(This, gameQueue);
+        // XeFG API outputs only: Finished Picture keeps working through a pause (frame generation starts with an
+        // activate / deactivate / activate) on the game's picture and queue, here, for this game present (the active
+        // branch above is the other). The library's own real chain is left alone (wrapped_swapchain.cpp's LocalPresent),
+        // as its queue is not the game's. FSR FG and DLSS-G keep applying it in LocalPresent as before.
+        if (UsesXeFGApi(state.activeFgOutput))
+            DlssNr::ApplyToFinishedPicture(This, gameQueue);
     }
 
     if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None)

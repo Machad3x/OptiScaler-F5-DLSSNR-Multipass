@@ -121,6 +121,8 @@ class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChai
     HWND _handle = nullptr;
 
     bool _otherWindow = false;
+    // The frame generation library's own real chain of an XeFG API output, marked in FGHooks (IsLibraryChain)
+    bool _libraryChainMarked = false;
     // Presented through LocalPresent (frame generation was away): the menu may have drawn on this chain. Written by the
     // presenting thread, read by Release's
     std::atomic<bool> _presentedAsMain { false };

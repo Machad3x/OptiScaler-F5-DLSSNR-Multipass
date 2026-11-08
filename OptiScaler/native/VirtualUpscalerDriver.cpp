@@ -554,10 +554,11 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     // present, and a frame generation library that presents on its own queue runs that there.
     std::optional<DlssNr::ScopedNrInList> nrInList;
 
-    // Whenever OptiScaler's frame generation owns the swap chain, active or not: it activates, deactivates and activates
-    // again at start, and NR must not move between the list and the present with that (it resets NR's history).
-    if (route == VuNrRoute::BackendPass && state.currentFG != nullptr && state.currentFGSwapchain != nullptr &&
-        UsesXeFGApi(state.activeFgOutput))
+    // With an XeFG API output (XeFG, F5Low) owning the swap chain on a native D3D12 game, active or not: it activates,
+    // deactivates and activates again at start, and NR must not move between the list and the present with that (it resets
+    // NR's history). Not under the D3D11 or Vulkan bridge, where this stays as it was.
+    if (route == VuNrRoute::BackendPass && state.swapchainInteropApi == SwapchainInteropApi::None &&
+        state.currentFG != nullptr && state.currentFGSwapchain != nullptr && UsesXeFGApi(state.activeFgOutput))
         nrInList.emplace();
 
     if (route != VuNrRoute::InPlace)

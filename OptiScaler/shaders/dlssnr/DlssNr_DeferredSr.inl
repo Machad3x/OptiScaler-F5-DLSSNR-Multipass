@@ -293,7 +293,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     if (cfg.DlssNrUseProxy.value_or_default() || cfg.DlssNrHoldFrame.value_or_default() ||
         cfg.DlssNrDebugView.value_or_default() != 0 || cfg.DlssNrCompare.value_or_default() != 0 ||
         cfg.DlssNrShowSkinMask.value_or_default() ||
-        (!cfg.DlssNrApplyModel.value_or_default() && !cfg.DlssNrFinishedPicture.value_or_default()))
+        (!cfg.DlssNrApplyModel.value_or_default() && !FinishedPictureEffective()))
     {
         Say("inactive: disable proxy backend, frame hold/debug/compare, and enable Apply model");
         return;
@@ -310,7 +310,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     auto* depth = GetResource(source, NVSDK_NGX_Parameter_Depth, "DLSSD.Depth");
     auto* motion = GetResource(source, NVSDK_NGX_Parameter_MotionVectors, "DLSSD.MotionVectors");
     const bool wantsHalf = cfg.DlssNrResidualFg.value_or_default() && !privateJob &&
-                           !cfg.DlssNrFinishedPicture.value_or_default();
+                           !FinishedPictureEffective();
     const bool sampleAndHold = wantsHalf && motion == nullptr;
     if (!color || !output || !depth || (!motion && !sampleAndHold) || color == output)
     {
@@ -330,7 +330,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     // Output mips are fine with Finished Picture: that path reads only the output's size and identity (After hands the
     // changes to Late::CaptureResidual). Composition copies the whole output, which needs a single level. Resonance: A
     // Plague Tale Legacy keeps a 12-level mip chain on its upscaled picture.
-    const bool outputMipsOk = outDesc.MipLevels == 1 || cfg.DlssNrFinishedPicture.value_or_default();
+    const bool outputMipsOk = outDesc.MipLevels == 1 || FinishedPictureEffective();
     if (!active || !PreSrColorExtent(outDesc, 0, 0) || inDesc.MipLevels != 1 || !outputMipsOk ||
         active->width > outDesc.Width || active->height > outDesc.Height)
     {
@@ -485,7 +485,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     frame.DepthInverted = (flags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
     // With Finished Picture on, the forced choice is the screen's (DlssNr_Late.inl): this pre-SR scene buffer keeps
     // the game's own rule, and the screen's choice is the one reported.
-    const bool finishedPicture = cfg.DlssNrFinishedPicture.value_or_default();
+    const bool finishedPicture = FinishedPictureEffective();
     ApplyColourEncoding(frame, finishedPicture ? DlssNrColourEncoding::kAuto : cfg.DlssNrColourEncoding.value_or_default(),
                         (UInt(source, NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags) & NVSDK_NGX_DLSS_Feature_Flags_IsHDR) != 0,
                         outDesc.Format, !finishedPicture);
@@ -512,7 +512,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
         DlssNrConstants encode {}; encode.Mode = DlssNrMode_EncodeResidual;
         encode.Width = g.w; encode.Height = g.h; encode.ExposurePreMul = frame.PreExposure;
         bool ok;
-        if (cfg.DlssNrFinishedPicture.value_or_default())
+        if (FinishedPictureEffective())
         {
             encode.Mode = 5; // finished-colour shader: encode relative changes before FP16 storage
             encode.WhitePoint = frame.PreExposure;
@@ -614,7 +614,7 @@ void After(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source, unsigned
     else
         LOG_TRACE("DLSS-NR deferred: After applied epoch {} skipNr {} half {}", epoch, pair.skipNr, pair.half);
     g.reset = false;
-    if (cfg.DlssNrFinishedPicture.value_or_default())
+    if (FinishedPictureEffective())
     {
         // Finished Picture is on here, so this scene buffer follows the game's own rule (the override is the screen's).
         const bool sceneLinear = (UInt(source, NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags) &
