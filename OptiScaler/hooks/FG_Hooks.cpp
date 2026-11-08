@@ -600,6 +600,8 @@ void FGHooks::NoteLibraryChain(IUnknown* pSwapChain)
 
     std::lock_guard<std::mutex> lock(g_libraryChainMutex);
     ++g_libraryChains[pSwapChain];
+    // The finished picture and native input steps skip this chain only if it got here: say so once per chain
+    LOG_INFO("Frame generation library's own swapchain {:X}: present-time steps leave it alone", (size_t) pSwapChain);
 }
 
 void FGHooks::ForgetLibraryChain(IUnknown* pSwapChain)
