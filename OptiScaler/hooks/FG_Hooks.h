@@ -34,6 +34,11 @@ class FGHooks
     static void NoteGameFsrFg(bool on);
     static bool IsDx12InteropPresentSC(IUnknown* pSwapChain);
 
+    // A swapchain that is not the one frame generation hands the game while an XeFG API output (XeFG, F5Low) owns that
+    // one: the library's own real chain, which it presents on its own queue and thread. The game's picture and queue are
+    // FGPresent's, so work on the game's picture (finished picture, native input) must not run for this chain.
+    static bool IsLibraryChain(IUnknown* pSwapChain);
+
     // A swapchain of another window while the frame generation swapchain lives (framegen/FgWindowRule.h): it gets no
     // frame generation and must not replace the State pointers frame generation reads. The game's own DXGI calls only,
     // the Vulkan bridge manages its windows itself.

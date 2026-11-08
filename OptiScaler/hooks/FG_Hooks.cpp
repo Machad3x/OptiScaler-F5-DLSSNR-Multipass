@@ -589,6 +589,19 @@ bool FGHooks::IsDx12InteropPresentSC(IUnknown* pSwapChain)
     return pSwapChain != nullptr && pSwapChain == _dx12InteropPresentSC;
 }
 
+bool FGHooks::IsLibraryChain(IUnknown* pSwapChain)
+{
+    auto& state = State::Instance();
+
+    if (pSwapChain == nullptr || state.currentFG == nullptr || state.currentFGSwapchain == nullptr ||
+        !UsesXeFGApi(state.activeFgOutput))
+    {
+        return false;
+    }
+
+    return pSwapChain != static_cast<IUnknown*>(state.currentFGSwapchain) && !IsDx12InteropPresentSC(pSwapChain);
+}
+
 void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
 {
     if (o_FGSCPresent != nullptr || pSwapChain == nullptr)
@@ -1492,13 +1505,7 @@ static bool IsForeignChainPresent(IDXGISwapChain* This)
 {
     auto& state = State::Instance();
 
-    if (This == nullptr || state.currentFG == nullptr || state.currentFGSwapchain == nullptr ||
-        !UsesXeFGApi(state.activeFgOutput))
-    {
-        return false;
-    }
-
-    if (This == state.currentFGSwapchain || FGHooks::IsDx12InteropPresentSC(This))
+    if (!FGHooks::IsLibraryChain(This))
         return false;
 
     static bool logged = false;
@@ -1796,6 +1803,11 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     else if (willPresent && fg != nullptr)
     {
         LOG_TRACE("FGHooks::FGPresent: FG feature exists but is inactive/paused; pass-through present only");
+
+        // Finished Picture keeps working through a pause (frame generation starts with an activate / deactivate /
+        // activate): on the game's picture and queue here, once per game present. The library's own real chain is
+        // left alone (wrapped_swapchain.cpp's LocalPresent), as its queue is not the game's.
+        DlssNr::ApplyToFinishedPicture(This, gameQueue);
     }
 
     if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None)

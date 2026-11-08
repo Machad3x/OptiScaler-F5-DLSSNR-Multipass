@@ -590,11 +590,17 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 currentFeature->TickFrozenCheck();
         }
 
+        // The frame generation library's own real chain (F5Low presents it on its own queue and thread, also while frame
+        // generation is paused and passes frames through): the game's picture and queue are FGPresent's, which runs the
+        // native input step and the finished picture pass for the game's present. Here they would submit on the library's
+        // queue.
+        const bool libraryChain = FGHooks::IsLibraryChain(pSwapChain);
+
         // Before the finished-picture pass, which composes from what the virtual upscaler's call captured this frame.
-        if (cq && device12)
+        if (cq && device12 && !libraryChain)
             NativeMotionDx12::OnPresent(pSwapChain, cq, device12);
 
-        if (cq && (fg == nullptr || !fg->IsActive() || fg->IsPaused()))
+        if (cq && !libraryChain && (fg == nullptr || !fg->IsActive() || fg->IsPaused()))
             DlssNr::ApplyToFinishedPicture(pSwapChain, cq);
 
         // HDR output: the game drew into its proxy back buffer. Turn it into the real HDR one, after the finished picture
