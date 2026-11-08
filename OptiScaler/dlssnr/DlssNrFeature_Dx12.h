@@ -50,9 +50,10 @@ void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Paramete
                           ID3D12CommandQueue* timingQueue = nullptr, bool rayReconstruction = false,
                           unsigned long long submissionEpoch = 0, uint32_t gameFeature = 0);
 
-// While one of these lives on a thread, NR's evaluate calls on it ignore [DlssNr] FinishedPicture and work in the command
-// list they are given, like the ordinary after-SR placement. For the virtual upscaler's backend pass under frame
-// generation: Finished Picture would leave the work to the present, on whichever queue presents (native/VirtualUpscalerDriver.cpp).
+// While one of these lives on a thread, NR's evaluate calls on it ignore [DlssNr] FinishedPicture and work in the
+// command list they are given, like the ordinary after-SR placement. For the virtual upscaler's backend pass under
+// frame generation: Finished Picture would leave the work to the present, on whichever queue presents
+// (native/VirtualUpscalerDriver.cpp).
 struct ScopedNrInList
 {
     ScopedNrInList();

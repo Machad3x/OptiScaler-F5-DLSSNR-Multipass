@@ -545,18 +545,18 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     Transition(cmd, depth, kRead, inDepth);
     Transition(cmd, _output, kWrite, inOutput);
 
-    // DLSS-NR hangs off NVSDK_NGX_D3D12_EvaluateFeature around the upscaler, not off the feature: before it (Run before SR,
-    // or the finished-picture capture of depth and motion) and after it (over Output). Not with the backend's pass off:
-    // NR already ran on the picture itself, above, and would otherwise run twice.
+    // DLSS-NR hangs off NVSDK_NGX_D3D12_EvaluateFeature around the upscaler, not off the feature: before it (Run before
+    // SR, or the finished-picture capture of depth and motion) and after it (over Output). Not with the backend's pass
+    // off: NR already ran on the picture itself, above, and would otherwise run twice.
     //
-    // With the backend's pass and frame generation running, NR works on the pass's output in this list, as in place does:
-    // frame generation copies the picture next. Finished Picture (an ini setting for NR Only mode) would leave it to the
-    // present, and a frame generation library that presents on its own queue runs that there.
+    // With the backend's pass and frame generation running, NR works on the pass's output in this list, as in place
+    // does: frame generation copies the picture next. Finished Picture (an ini setting for NR Only mode) would leave it
+    // to the present, and a frame generation library that presents on its own queue runs that there.
     std::optional<DlssNr::ScopedNrInList> nrInList;
 
     // With an XeFG API output (XeFG, F5Low) owning the swap chain on a native D3D12 game, active or not: it activates,
-    // deactivates and activates again at start, and NR must not move between the list and the present with that (it resets
-    // NR's history). Not under the D3D11 or Vulkan bridge, where this stays as it was.
+    // deactivates and activates again at start, and NR must not move between the list and the present with that (it
+    // resets NR's history). Not under the D3D11 or Vulkan bridge, where this stays as it was.
     if (route == VuNrRoute::BackendPass && state.swapchainInteropApi == SwapchainInteropApi::None &&
         state.currentFG != nullptr && state.currentFGSwapchain != nullptr && UsesXeFGApi(state.activeFgOutput))
         nrInList.emplace();

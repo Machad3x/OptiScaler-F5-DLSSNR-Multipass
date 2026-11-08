@@ -1517,11 +1517,12 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
 }
 
 // Present is DXGI's own function, shared by every swapchain in the process, so the detour also sees the real chain an
-// XeFG API library (F5Low) made for itself, which it presents from its own thread on its own queue. FGPresent works on the
-// game's picture and queue (finished picture pass, frame counters, pacing, hudfix), so running it for that chain submits
-// work on the library's present queue and counts its presents as game frames. Only a chain marked as the library's at its
-// creation (FGHooks::IsLibraryChain) is passed through: that stays so through the library's teardown, when
-// currentFGSwapchain is already cleared, and a game chain, the interop's chain or another window's chain is never one.
+// XeFG API library (F5Low) made for itself, which it presents from its own thread on its own queue. FGPresent works on
+// the game's picture and queue (finished picture pass, frame counters, pacing, hudfix), so running it for that chain
+// submits work on the library's present queue and counts its presents as game frames. Only a chain marked as the
+// library's at its creation (FGHooks::IsLibraryChain) is passed through: that stays so through the library's teardown,
+// when currentFGSwapchain is already cleared, and a game chain, the interop's chain or another window's chain is never
+// one.
 static bool IsForeignChainPresent(IDXGISwapChain* This)
 {
     if (!FGHooks::IsLibraryChain(This))
@@ -1822,8 +1823,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
         // XeFG API outputs only: Finished Picture keeps working through a pause (frame generation starts with an
         // activate / deactivate / activate) on the game's picture and queue, here, for this game present (the active
-        // branch above is the other). The library's own real chain is left alone (wrapped_swapchain.cpp's LocalPresent),
-        // as its queue is not the game's. FSR FG and DLSS-G keep applying it in LocalPresent as before.
+        // branch above is the other). The library's own real chain is left alone (wrapped_swapchain.cpp's
+        // LocalPresent), as its queue is not the game's. FSR FG and DLSS-G keep applying it in LocalPresent as before.
         if (UsesXeFGApi(state.activeFgOutput))
             DlssNr::ApplyToFinishedPicture(This, gameQueue);
     }

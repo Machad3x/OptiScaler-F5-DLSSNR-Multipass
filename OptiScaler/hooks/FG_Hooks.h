@@ -35,10 +35,11 @@ class FGHooks
     static bool IsDx12InteropPresentSC(IUnknown* pSwapChain);
 
     // The real swapchain an XeFG API output's library (XeFG, F5Low) made for itself, marked when it was created (inside
-    // DxgiFactoryHooks::ScopedSkipFGSCCreation, by the wrapper made for it) and unmarked when the wrapper lets it go. It is
-    // presented on the library's own queue and thread, also while frame generation is paused and while it is torn down. The
-    // game's picture and queue are FGPresent's, so work on the game's picture (finished picture, native input) must not run
-    // for this chain. Counted: a new chain at a freed one's address is not unmarked by the old one's release.
+    // DxgiFactoryHooks::ScopedSkipFGSCCreation, by the wrapper made for it) and unmarked when the wrapper lets it go.
+    // It is presented on the library's own queue and thread, also while frame generation is paused and while it is torn
+    // down. The game's picture and queue are FGPresent's, so work on the game's picture (finished picture, native
+    // input) must not run for this chain. Counted: a new chain at a freed one's address is not unmarked by the old
+    // one's release.
     static void NoteLibraryChain(IUnknown* pSwapChain);
     static void ForgetLibraryChain(IUnknown* pSwapChain);
     static bool IsLibraryChain(IUnknown* pSwapChain);

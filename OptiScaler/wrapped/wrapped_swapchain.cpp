@@ -590,10 +590,10 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 currentFeature->TickFrozenCheck();
         }
 
-        // The frame generation library's own real chain (F5Low presents it on its own queue and thread, also while frame
-        // generation is paused and passes frames through): the game's picture and queue are FGPresent's, which runs the
-        // native input step and the finished picture pass for the game's present. Here they would submit on the library's
-        // queue.
+        // The frame generation library's own real chain (F5Low presents it on its own queue and thread, also while
+        // frame generation is paused and passes frames through): the game's picture and queue are FGPresent's, which
+        // runs the native input step and the finished picture pass for the game's present. Here they would submit on
+        // the library's queue.
         const bool libraryChain = FGHooks::IsLibraryChain(pSwapChain);
 
         // Before the finished-picture pass, which composes from what the virtual upscaler's call captured this frame.
@@ -743,8 +743,8 @@ WrappedIDXGISwapChain4::WrappedIDXGISwapChain4(IDXGISwapChain* real, IUnknown* p
     _lastFlags = flags;
 
     // Made inside the frame generation library's own create (DxgiFactoryHooks::ScopedSkipFGSCCreation) for an XeFG API
-    // output: its real chain, presented on the library's queue and thread. Marked here, by what this chain is, so the mark
-    // does not depend on frame generation's State pointers, which are cleared while the library tears down.
+    // output: its real chain, presented on the library's queue and thread. Marked here, by what this chain is, so the
+    // mark does not depend on frame generation's State pointers, which are cleared while the library tears down.
     if (SdrToHdr::InFgLibraryCreate() && UsesXeFGApi(State::Instance().activeFgOutput))
     {
         _libraryChainMarked = true;
