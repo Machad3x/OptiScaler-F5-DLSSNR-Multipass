@@ -61,7 +61,7 @@ static HMODULE dllModule = nullptr;
 struct LibraryLoadHooks {
     enum class RecoveryResult { Ready, Retry, Unsupported, NotApplicable };
     static bool KnownNonExecutable(HMODULE) { return veto; }
-    static void RecordDeferredLoad(HMODULE,bool=true) { ++retryMarks; }
+    static void RecordDeferredLoad(HMODULE) { ++retryMarks; }
     static bool EndsWithInsensitive(std::wstring_view,std::wstring_view);
     static RecoveryResult ObserveOrdinaryModule(HMODULE);
     static RecoveryResult HandleCallerModule(const std::wstring&,LPCWSTR,HMODULE);

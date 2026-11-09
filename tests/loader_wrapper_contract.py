@@ -82,7 +82,7 @@ struct KernelBaseProxy { static auto GetModuleHandleW_() { return &GetModuleHand
 struct LibraryLoadHooks {
     static void CatchUpDeferredLoads() { SetLastError(0xaaaa); }
     static void RecordNonExecutable(HMODULE, HMODULE) {}
-    static void RecordDeferredLoad(HMODULE m, bool = true) { if (m) ++marks; }
+    static void RecordDeferredLoad(HMODULE m) { if (m) ++marks; }
     static bool IsApiSetName(std::wstring_view n) { return n.starts_with(L"api-ms-"); }
     static bool EndsWithInsensitive(std::wstring_view, std::wstring_view) { return false; }
     static HMODULE LoadLibraryCheckW(std::wstring name, LPCWSTR, bool* failed) {

@@ -18,7 +18,7 @@ class LibraryLoadHooks
     // the file failed, or the binding was busy). Kept (one reference) until CatchUpDeferredLoads sets it up.
     static void RecordDeferredLoad(HMODULE module);
     // Sets up the recorded d3d12.dll. Cheap when nothing is recorded; called after attach (GPU info worker) and at
-    // every DXGI factory creation, so a busy or late load is retried.
+    // every DXGI factory or swap chain creation, so a busy or late load is retried.
     static void CatchUpDeferredLoads();
 
     static HMODULE LoadLibraryCheckA(std::string libName, LPCSTR lpLibFullPath);
