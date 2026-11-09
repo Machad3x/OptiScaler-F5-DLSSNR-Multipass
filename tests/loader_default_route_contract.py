@@ -25,7 +25,7 @@ def main():
     # Replace only the fixture's platform declarations, not production bodies.
     pre = pre[:pre.index('struct KernelBaseProxy')] + pre[pre.index('static bool veto'):]
     pre = pre.replace('struct KernelHooks { inline static auto o_K32_LoadLibraryW = &LoadLibraryW; static HMODULE hk_K32_LoadLibraryW(LPCWSTR); };','')
-    pre = pre.replace('static RecoveryResult HandleCallerModule(', 'static void RecordNonExecutable(HMODULE m, HMODULE previous) { if (m && m!=previous && !(reinterpret_cast<ULONG_PTR>(m)&3)) veto=true; }\n    static bool IsApiSetName(std::wstring_view n) { return n.starts_with(L"api-ms-"); }\n    static HMODULE LoadLibraryCheckW(std::wstring, LPCWSTR, bool* failed) { *failed=true; ++nativeChecks; return nullptr; }\n    static RecoveryResult HandleCallerModule(')
+    pre = pre.replace('static RecoveryResult HandleCallerModule(', 'static void RecordNonExecutable(HMODULE m, HMODULE previous) { if (m && m!=previous && !(reinterpret_cast<ULONG_PTR>(m)&3)) veto=true; }\n    static bool IsApiSetName(std::wstring_view n) { return n.starts_with(L"api-ms-"); }\n    static HMODULE LoadLibraryCheckW(std::wstring, LPCWSTR, bool, bool* failed) { *failed=true; ++nativeChecks; return nullptr; }\n    static RecoveryResult HandleCallerModule(')
     pre = pre.replace('static bool veto = false;', 'static unsigned nativeChecks=0, nativeEntries=0;\nstatic bool veto = false;')
     pre = pre.replace('static bool SkipDllChecks() { return false; }', 'static bool SkipDllChecks() { return false; } static std::string SkipDllName() { return {}; }')
     pre = pre.replace('struct Config { struct Option { bool value_or_default() const { return false; } } UseNtdllHooks; static Config* Instance() { static Config c; return &c; } };', 'struct Config { struct Option { bool value=true; bool value_or_default() const { return value; } } UseNtdllHooks; static Config* Instance() { static Config c; return &c; } };')
@@ -88,8 +88,13 @@ struct KernelHooks {
     static HMODULE hk_K32_LoadLibraryExW(LPCWSTR,HANDLE,DWORD);
     static HMODULE hk_K32_LoadLibraryExA(LPCSTR,HANDLE,DWORD);
 };
+namespace MfgUnlock { inline bool AnyFamilyEnabled() { return false; } }
 struct NtdllHooks {
     inline static NtdllProxy::PFN_LdrLoadDll o_LdrLoadDll=nullptr;
+    static NTSTATUS ObserveXeFGLoadResult(NTSTATUS r, std::wstring_view, PHANDLE) { return r; }
+    inline static NtdllProxy::PFN_LdrUnloadDll o_LdrUnloadDll=nullptr;
+    inline static std::atomic<bool> unloadHookForMfgOnly { false };
+    static NTSTATUS NTAPI hkLdrUnloadDll(PVOID) { return 0; }
     static NTSTATUS NTAPI hkLdrLoadDll(PWSTR,PULONG,PUNICODE_STRING,PHANDLE);
     static void Hook();
 };
@@ -108,7 +113,8 @@ struct NtdllHooks {
     native = native.replace('    {','    {\n        ++nativeEntries;',1)
     nhook = function_body(native_header,'static void Hook()')
     select = nhook[nhook.index('        if (!Config'):nhook.index('        if (o_RtlGetVersion')]
-    install = nhook[nhook.index('        if (o_LdrLoadDll'):nhook.index('        if (o_LdrUnloadDll')]
+    start = nhook.index('        if (o_LdrLoadDll')
+    install = nhook[start:nhook.index('        if (o_LdrUnloadDll', start)]
     nhook = 'void NtdllHooks::Hook() {\n' + select + install + '}\n'
     library = source('OptiScaler/hooks/LibraryLoad_Hooks.cpp')
     bodies=[function_body(source('OptiScaler/hooks/D3D12_Hooks.cpp'),'bool D3D12Hooks::Hook()'),kb,k32,native,nhook]

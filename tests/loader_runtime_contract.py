@@ -54,7 +54,9 @@ static int retryMarks=0;
 struct Config { struct Option { bool value_or_default() const { return false; } } UseNtdllHooks; static Config* Instance() { static Config c; return &c; } };
 struct KernelHooks { inline static auto o_K32_LoadLibraryW = &LoadLibraryW; static HMODULE hk_K32_LoadLibraryW(LPCWSTR); };
 inline bool ThreadHasNoTls() { return false; }
-inline HMODULE CheckLoad(const std::wstring&, bool* failed) { *failed=true; return nullptr; }
+namespace F5Low { inline const HMODULE kBlockedLoad = reinterpret_cast<HMODULE>(static_cast<ULONG_PTR>(0x1339)); }
+inline HMODULE ObserveLoadedXeFG(std::wstring_view, HMODULE m) { return m; }
+inline HMODULE CheckLoad(const std::wstring&, DWORD, bool* failed) { *failed=true; return nullptr; }
 static HMODULE dllModule = nullptr;
 struct LibraryLoadHooks {
     enum class RecoveryResult { Ready, Retry, Unsupported, NotApplicable };

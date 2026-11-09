@@ -84,7 +84,7 @@ struct LibraryLoadHooks {
     static void RecordDeferredLoad(HMODULE m, bool = true) { if (m) ++marks; }
     static bool IsApiSetName(std::wstring_view n) { return n.starts_with(L"api-ms-"); }
     static bool EndsWithInsensitive(std::wstring_view, std::wstring_view) { return false; }
-    static HMODULE LoadLibraryCheckW(std::wstring name, LPCWSTR, bool* failed) {
+    static HMODULE LoadLibraryCheckW(std::wstring name, LPCWSTR, bool, bool* failed) {
         ++checks; checkedName = std::move(name); *failed = failOwn;
         SetLastError(0xbbbb); return speculative;
     }
@@ -106,6 +106,8 @@ static NTSTATUS NTAPI OriginalLdr(PWSTR path, PULONG flags, PUNICODE_STRING n, P
 static NTSTATUS NTAPI OriginalNt(PUNICODE_STRING path, PULONG flags, PUNICODE_STRING n, PHANDLE out) {
     const auto status=OriginalLdr(nullptr,flags,n,out); seenSearch=path; return status;
 }
+namespace F5Low { inline const HMODULE kBlockedLoad = reinterpret_cast<HMODULE>(static_cast<ULONG_PTR>(0x1339)); }
+static HMODULE ObserveLoadedXeFG(std::wstring_view, HMODULE m) { return m; }
 struct KernelHooks {
     inline static auto o_K32_LoadLibraryW = OriginalW;
     inline static auto o_K32_LoadLibraryA = OriginalA;
@@ -265,7 +267,8 @@ def main():
     parts += [function_body(kernel, f"HMODULE KernelHooks::{name}(") for name in (
         "hk_K32_LoadLibraryW", "hk_K32_LoadLibraryA", "hk_K32_LoadLibraryExW",
         "hk_K32_LoadLibraryExA", "hk_KB_LoadLibraryExW")]
-    parts += ["struct NtdllHooks { inline static auto o_LdrLoadDll = OriginalLdr; inline static auto o_NtLoadDll = OriginalNt;"]
+    parts += ["struct NtdllHooks { inline static auto o_LdrLoadDll = OriginalLdr; inline static auto o_NtLoadDll = OriginalNt; "
+              "static NTSTATUS ObserveXeFGLoadResult(NTSTATUS r, std::wstring_view, PHANDLE) { return r; }"]
     parts += [function_body(native, f"static NTSTATUS NTAPI {name}(") for name in ("hkLdrLoadDll", "hkNtLoadDll")]
     parts += ["};", MAIN]
     source = out / "loader_wrapper_contract.generated.cpp"
