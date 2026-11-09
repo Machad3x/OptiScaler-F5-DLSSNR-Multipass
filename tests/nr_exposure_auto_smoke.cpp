@@ -196,6 +196,80 @@ int main()
         CHECK(l.Now() == Phase::Found && !l.Closed());
     }
 
+    // Our meter not running (Cyberpunk 2077 with Finished Picture on, 2026-11-06): no search against nothing -- wait,
+    // holding, copying nothing; search once it runs again
+    {
+        Lifecycle l;
+        Frame off = At(0.0f);
+        off.metering = false;
+        l.OnFrame(off);
+        CHECK(l.Now() == Phase::NoMeter && l.SearchNumber() == 0);
+        CHECK(!l.CopiesAll() && !l.CopiesMatchOnly() && !l.LetsGo() && !l.Closed());
+        off.seconds = 900.0f;
+        l.OnFrame(off);
+        CHECK(l.Now() == Phase::NoMeter); // never gives up while waiting
+        l.OnFrame(At(901.0f));
+        CHECK(l.Now() == Phase::Searching && l.SearchNumber() == 1);
+
+        // the meter stops mid-search: wait, and the next search starts from no history
+        off.seconds = 950.0f;
+        l.OnFrame(off);
+        CHECK(l.Now() == Phase::NoMeter);
+        l.OnFrame(At(960.0f));
+        CHECK(l.Now() == Phase::Searching && l.SearchNumber() == 2);
+
+        // a found exposure does not need the meter
+        Frame found = At(970.0f);
+        found.verdict = Verdict::Found;
+        l.OnFrame(found);
+        off.seconds = 980.0f;
+        l.OnFrame(off);
+        CHECK(l.Now() == Phase::Found);
+    }
+
+    // Lost after a find: a later Baked is a give-up (retried), not the end of the session
+    {
+        Lifecycle l;
+        l.OnFrame(At(0.0f));
+        Frame found = At(10.0f);
+        found.verdict = Verdict::Found;
+        l.OnFrame(found);
+        CHECK(l.FoundBefore());
+        Frame gone = At(20.0f);
+        gone.matchAlive = false;
+        l.OnFrame(gone);
+        CHECK(l.Now() == Phase::Searching);
+        Frame baked = At(40.0f);
+        baked.verdict = Verdict::Baked;
+        l.OnFrame(baked);
+        CHECK(l.Now() == Phase::GaveUp && l.KeepsLikely() && !l.Closed());
+    }
+
+    // Given up while holding likely candidates: they are searched again after the retry time, with no new creation
+    // (before: a give-up was for the session unless the game made new buffers). Not while the meter is off
+    {
+        Lifecycle l(Settings { 300.0f, 60.0f, 1800.0f });
+        l.OnFrame(At(10.0f));
+        Frame held = At(310.0f);
+        held.holding = true;
+        l.OnFrame(held);
+        CHECK(l.Now() == Phase::GaveUp && l.KeepsLikely() && l.LetsGo());
+        held.seconds = 369.0f;
+        l.OnFrame(held);
+        CHECK(l.Now() == Phase::GaveUp);
+        held.seconds = 370.0f;
+        held.metering = false;
+        l.OnFrame(held);
+        CHECK(l.Now() == Phase::GaveUp);
+        held.metering = true;
+        held.seconds = 371.0f;
+        l.OnFrame(held);
+        CHECK(l.Now() == Phase::Searching && l.SearchNumber() == 2);
+        held.seconds = 671.0f;
+        l.OnFrame(held);
+        CHECK(l.Now() == Phase::GaveUp && l.RetrySeconds() == 120.0f);
+    }
+
     // The pre-exposure rung: Dawnwalker's moves with the light; a constant one, a single change (a setting) or a few
     // values switched between (gameplay and cutscenes) do not
     {

@@ -5355,7 +5355,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     {
         DlssNr::ExposureScan::FrameExposure scanFrame;
         scanFrame.handed = (ID3D12Resource*) frame.ExposureTexture;
-        scanFrame.meter = whitePointSource == 3 ? g_nr.autoExposureRawValue : 0.0f;
+        // Only while the meter runs this frame: its last reading stays behind once it stops (finished picture switched
+        // on, a frame that is not linear HDR), and the scan would record a frozen meter beside moving candidates
+        scanFrame.meter = automaticApplies ? g_nr.autoExposureRawValue : 0.0f;
         scanFrame.game = whitePointSource == 1   ? g_nr.gameExposure
                          : whitePointSource == 3 ? g_nr.autoPairGameExposure
                                                  : 0.0f;

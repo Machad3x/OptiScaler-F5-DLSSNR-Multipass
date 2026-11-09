@@ -548,10 +548,56 @@ static void Each()
     }
 }
 
+// A search after a loss: the game remade its exposure during a steadily lit stretch, so its column is short and our
+// meter travels about 1.4 EV, not the 2 a first search asks for. Refind accepts the same kind on that, and nothing else
+static void Refinds()
+{
+    // One slow swing over the rows (TrueExposure's two would repeat every 60 rows, and a periodic signal matches itself
+    // at the edge lag)
+    const size_t rows = 120;
+    const auto e = Map(std::vector<float>(rows),
+                       [&](float, size_t i)
+                       {
+                           const float t = (float) i / (float) rows;
+                           return std::exp2(-2.0f + 0.75f * (1.0f - std::cos(t * 2.0f * 3.14159265f)));
+                       });
+    const auto meter = Metered(e, 0.05f);
+    const std::vector<float> exposure = Map(e, [](float v, size_t) { return v; });
+
+    const Verdict first = MatchEach(meter, { exposure }, { 0 });
+    CHECK(first.what == What::NotSure); // a first search cannot tell units from this
+    printf("  refind: first search says %d on %zu rows\n", (int) first.what, rows);
+
+    const Verdict again = Refind(meter, { exposure }, { 0 }, Kind::Multiplier);
+    CHECK(again.what == What::Found && again.index == 0 && again.fit.kind == Kind::Multiplier);
+
+    // the earlier find was a divisor: a multiplier now is not the same buffer behaving the same way
+    CHECK(Refind(meter, { exposure }, { 0 }, Kind::Divisor).what == What::NotSure);
+
+    // too few rows even for a refind
+    CHECK(Refind(meter, { exposure }, { 90 }, Kind::Multiplier).what == What::NotSure);
+
+    // something unrelated to the light stays not found
+    std::vector<float> wander(rows);
+    for (size_t i = 0; i < rows; ++i)
+        wander[i] = std::exp2(std::sin((float) i * 0.31f) * 1.5f);
+    CHECK(Refind(meter, { wander }, { 0 }, Kind::Multiplier).what == What::NotSure);
+
+    // a flat meter beside a swinging buffer is never Baked on a refind's evidence
+    std::vector<float> flat(rows), swing(rows);
+    for (size_t i = 0; i < rows; ++i)
+    {
+        flat[i] = 0.25f * std::exp2((Rand01() - 0.5f) * 0.2f);
+        swing[i] = std::exp2((float) ((i / 20) % 5));
+    }
+    CHECK(Refind(flat, { swing }, { 0 }, Kind::Multiplier).what == What::NotSure);
+}
+
 int main(int argc, char** argv)
 {
     Synthetic();
     Each();
+    Refinds();
     Recordings(argc > 1 ? argv[1] : "tests/data/exposure_scan");
 
     printf(fails == 0 ? "nr_exposure_match_smoke: PASS\n" : "nr_exposure_match_smoke: %d FAIL\n", fails);

@@ -581,6 +581,42 @@ inline Verdict MatchEach(const std::vector<float>& meter, const std::vector<std:
     return out;
 }
 
+// After the game's exposure was found once this session: the evidence a search after a loss asks of candidates shaped
+// as the find was. A first search must tell units from nothing; this one only confirms that a buffer like the one
+// already found still behaves the same way (the game remade it on a quality change, or it came back after a give-up).
+// A still or evenly lit stretch rarely gives 2 EV of meter travel within a search, and the scan could not find again
+// what it had found (2026-11-10).
+inline Settings RefindSettings()
+{
+    Settings s;
+    s.minRows = 50; // ~5 s at the recording's ~10 rows a second
+    s.minTravelEv = 1.0f;
+    s.minLevels = 3;
+    // The halves are not asked to agree: a short history often holds one light change, and the half that only rises
+    // reads as a timer. Being the same kind of value as the earlier find, in a buffer of its shape, is the
+    // confirmation.
+    s.halfTravelEv = 1e9f;
+    return s;
+}
+
+// MatchEach on lighter evidence (RefindSettings) over candidates shaped as the earlier find, accepted only as the same
+// kind of value: Found, or NotSure. Never Baked or None: those need a first search's evidence.
+inline Verdict Refind(const std::vector<float>& meter, const std::vector<std::vector<float>>& candidates,
+                      const std::vector<size_t>& first, Kind kind)
+{
+    Verdict v = MatchEach(meter, candidates, first, RefindSettings());
+
+    if (v.what != What::Found || v.fit.kind != kind)
+    {
+        Verdict none;
+        none.rows = v.rows;
+        none.meterTravelEv = v.meterTravelEv;
+        return none;
+    }
+
+    return v;
+}
+
 // A candidate's value as an exposure multiplier in our meter's sense, up to a constant factor; 0 when it has none.
 inline float AsExposure(const Fit& f, float value)
 {
