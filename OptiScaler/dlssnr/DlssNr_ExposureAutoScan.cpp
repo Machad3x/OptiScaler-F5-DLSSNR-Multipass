@@ -104,7 +104,7 @@ struct AutoState
     // What was found last this session, by shape and kind (not by slot: the game may remake it): a later search judges
     // candidates of this shape on lighter evidence (DlssNrExposureMatch::Refind)
     std::string foundShape;
-    DlssNrExposureMatch::Kind foundKind = DlssNrExposureMatch::Kind::Unsure;
+    DlssNrExposureMatch::Fit foundFit; // its kind, lag and slope: a refind must behave the same way
 
     // The found exposure as the picture uses it, worked out once per NR frame (FoundExposure reads it), with the
     // pre-exposure of the frame it goes with. A match that moves with our meter's unadapted reading (lag 1 row or less,
@@ -187,14 +187,24 @@ void AppendRowLocked(float meter)
     if (!(meter > 0.0f) || !std::isfinite(meter))
         return;
 
+    // Full: drop the oldest rows, so the matcher keeps being asked on the newest (it stopped once full before)
     if (g_auto.meter.size() >= kMaxHistoryRows)
     {
+        constexpr size_t kDrop = kMaxHistoryRows / 6;
+
         if (!g_auto.historyFull)
-            LOG_INFO("DLSS-NR exposure scan (Auto): history full ({} rows); this search goes on with what it has",
+            LOG_INFO("DLSS-NR exposure scan (Auto): history full ({} rows); dropping the oldest as the search goes on",
                      kMaxHistoryRows);
 
         g_auto.historyFull = true;
-        return;
+        g_auto.meter.erase(g_auto.meter.begin(), g_auto.meter.begin() + kDrop);
+
+        for (size_t i = 0; i < g_auto.values.size(); ++i)
+        {
+            std::vector<float>& column = g_auto.values[i];
+            column.erase(column.begin(), column.begin() + std::min(kDrop, column.size()));
+            g_auto.first[i] = g_auto.first[i] > kDrop ? g_auto.first[i] - kDrop : 0;
+        }
     }
 
     const std::vector<Tracked>& tracked = Core::ListLocked();
@@ -272,7 +282,7 @@ DlssNrExposureAuto::Verdict CollectMatchLocked()
         g_auto.fit = v.fit;
         g_auto.level = level;
         g_auto.foundShape = tracked[slot].shape;
-        g_auto.foundKind = v.fit.kind;
+        g_auto.foundFit = v.fit;
         g_auto.validAt = std::chrono::steady_clock::now(); // the stale clock starts at the find
 
         const bool sameKind = g_auto.bestLevel > 0.0f && g_auto.bestLevelKind == v.fit.kind;
@@ -348,7 +358,7 @@ void StartMatchLocked()
     {
         std::thread(
             [job, meter = g_auto.meter, values = std::move(values), first = std::move(first),
-             refind = std::move(refind), kind = g_auto.foundKind]
+             refind = std::move(refind), found = g_auto.foundFit]
             {
                 DlssNrExposureMatch::Verdict v = DlssNrExposureMatch::MatchEach(meter, values, first);
 
@@ -364,7 +374,7 @@ void StartMatchLocked()
                         sf.push_back(first[c]);
                     }
 
-                    DlssNrExposureMatch::Verdict r = DlssNrExposureMatch::Refind(meter, sv, sf, kind);
+                    DlssNrExposureMatch::Verdict r = DlssNrExposureMatch::Refind(meter, sv, sf, found);
 
                     if (r.what == DlssNrExposureMatch::What::Found)
                     {
@@ -436,24 +446,28 @@ void StartOverLocked()
     const size_t bestLevelRows = g_auto.bestLevelRows;
     const DlssNrExposureMatch::Kind bestLevelKind = g_auto.bestLevelKind;
     const std::string foundShape = g_auto.foundShape;
-    const DlssNrExposureMatch::Kind foundKind = g_auto.foundKind;
+    const DlssNrExposureMatch::Fit foundFit = g_auto.foundFit;
     const DlssNrExposureAuto::PreExposureMotion pre = g_auto.pre;
     const unsigned long long frames = g_auto.frames;
     const unsigned int adoptions = g_auto.adoptions;
+    const bool foundBefore = g_auto.life.FoundBefore();
 
     g_auto = AutoState(); // not {}: an aggregate's {} copy-list-initialises Lifecycle, whose constructor is explicit
     g_auto.bestLevel = bestLevel;
     g_auto.bestLevelRows = bestLevelRows;
     g_auto.bestLevelKind = bestLevelKind;
     g_auto.foundShape = foundShape;
-    g_auto.foundKind = foundKind;
+    g_auto.foundFit = foundFit;
     g_auto.pre = pre;
     g_auto.frames = frames;
     g_auto.adoptions = adoptions;
     g_auto.adoptionsSeen = adoptions;
 
-    LOG_INFO("DLSS-NR exposure scan (Auto): back on, starting over; what was held was let go while it was off, so new "
-             "candidates come with the game's next loading screen");
+    if (foundBefore)
+        g_auto.life.NoteFoundBefore();
+
+    LOG_INFO("DLSS-NR exposure scan (Auto): back on, starting over (candidates the scan let go of meanwhile come back "
+             "with the game's next loading screen)");
 }
 
 // The found exposure for this frame (AutoState::now)
@@ -635,7 +649,13 @@ void DroppedAllLocked() { g_auto.wasOff = g_auto.wasOff || g_auto.started; }
 
 bool KeepsLocked(size_t slot)
 {
-    return On() && g_auto.life.Now() == DlssNrExposureAuto::Phase::Found && (int) slot == g_auto.found &&
+    // Only while NR is running (a frame within the last second): Tick's per-frame check is what lets go of the match
+    // once the game releases it, and a release with NR stopped (the game leaving its renderer, NR switched off) would
+    // pin it past the game's teardown -- what removed the device in Cyberpunk 2077 once
+    const bool running =
+        g_auto.started && std::chrono::duration<float>(std::chrono::steady_clock::now() - g_auto.nowAt).count() < 1.0f;
+
+    return On() && running && g_auto.life.Now() == DlssNrExposureAuto::Phase::Found && (int) slot == g_auto.found &&
            MatchAliveLocked();
 }
 } // namespace AutoScan

@@ -1698,8 +1698,15 @@ void ReleaseTrackedResources()
         // does not remake its exposure, and with the other candidates let go when it was found, dropping it left Auto
         // nothing to search for the session (2026-11-10). Tick lets go of it once the game releases it.
         if (t.alive && t.api == Api::D3D12 &&
-            std::chrono::duration<float>(now - t.adoptedAt).count() >= kFreshSeconds && !AutoScan::KeepsLocked(i))
-            Core::DropLocked(i);
+            std::chrono::duration<float>(now - t.adoptedAt).count() >= kFreshSeconds)
+        {
+            if (!AutoScan::KeepsLocked(i))
+                Core::DropLocked(i);
+            else
+                LOG_INFO("DLSS-NR exposure scan (Auto): feature released; keeping candidate {} ({}), the game's "
+                         "exposure",
+                         i + 1, t.shape);
+        }
     }
 
     ReleaseRetiredLocked(true);

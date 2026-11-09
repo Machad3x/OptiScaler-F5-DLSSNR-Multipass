@@ -600,21 +600,39 @@ inline Settings RefindSettings()
 }
 
 // MatchEach on lighter evidence (RefindSettings) over candidates shaped as the earlier find, accepted only as the same
-// kind of value: Found, or NotSure. Never Baked or None: those need a first search's evidence.
-inline Verdict Refind(const std::vector<float>& meter, const std::vector<std::vector<float>>& candidates,
-                      const std::vector<size_t>& first, Kind kind)
-{
-    Verdict v = MatchEach(meter, candidates, first, RefindSettings());
+// value behaving the same way: the same kind, at the earlier find's lag (within kRefindLagRows) and slope (within
+// kRefindSlope of it). Found, or NotSure; never Baked or None: those need a first search's evidence.
+//
+// The lag and slope matter: on 50-100 rows a decoy fits at an edge lag on a few overlapping rows. Replayed on the
+// recordings (Review Pass 2026-11-10), kind alone let Cyberpunk's c11 in at lag 27-29 (slope 0.39) and c9 at slope
+// 0.63, and Doom's scene luminance in as a divisor at lag -2/-3; the exposure itself came back at lag 0 (once -2) every
+// time.
+inline constexpr int kRefindLagRows = 3;
+inline constexpr float kRefindSlope = 0.3f;
 
-    if (v.what != What::Found || v.fit.kind != kind)
+inline Verdict Refind(const std::vector<float>& meter, const std::vector<std::vector<float>>& candidates,
+                      const std::vector<size_t>& first, const Fit& found)
+{
+    // Each candidate judged and gated on its own, then the tightest of those that pass: gated after MatchEach's pick, a
+    // decoy fitting tighter at the wrong lag hid the exposure beside it
+    Verdict best;
+
+    for (size_t c = 0; c < candidates.size(); ++c)
     {
-        Verdict none;
-        none.rows = v.rows;
-        none.meterTravelEv = v.meterTravelEv;
-        return none;
+        Verdict v = MatchEach(meter, { candidates[c] }, { c < first.size() ? first[c] : (size_t) 0 }, RefindSettings());
+
+        const bool sameWay = v.what == What::Found && v.fit.kind == found.kind &&
+                             std::abs(v.fit.lag - found.lag) <= kRefindLagRows && found.slope != 0.0f &&
+                             std::fabs(v.fit.slope / found.slope - 1.0f) <= kRefindSlope;
+
+        if (sameWay && (best.what != What::Found || std::fabs(v.fit.corr) > std::fabs(best.fit.corr)))
+        {
+            best = v;
+            best.index = (int) c;
+        }
     }
 
-    return v;
+    return best;
 }
 
 // A candidate's value as an exposure multiplier in our meter's sense, up to a constant factor; 0 when it has none.

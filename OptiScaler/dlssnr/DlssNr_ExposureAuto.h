@@ -28,16 +28,17 @@
 //   c61/c62) is let go too; reading one image of the pair is at most a frame late, and a lag of a row is eased.
 // - Baked: let go of every candidate.
 // - GaveUp: no verdict, or none found, within searchSeconds: Automatic. The likely candidates (a tiny texture or
-// buffer)
-//   stay held, not copied, the rest are let go. Once retrySeconds have passed, doubled with every search given up, the
-//   held ones (and any the game made since: a loading screen, a recreated feature) are searched again: a game that
-//   keeps making small buffers (Starfield remakes its frame generation resources hundreds of times) must not keep the
-//   scan copying for the whole session, and one that made its exposure once, at load, must not lose it for the session.
-//   Before 2026-11-10 everything was let go here and only a new creation could start a search.
+//   buffer) stay held, not copied, the rest are let go. Once retrySeconds have passed, doubled with every search given
+//   up, the held ones (and any the game made since: a loading screen, a recreated feature) are searched again, for the
+//   first kHeldRetries give-ups; after that only new candidates start a search. A game that keeps making small buffers
+//   (Starfield remakes its frame generation resources hundreds of times) must not keep the scan copying for the whole
+//   session, and one that made its exposure once, at load, must not lose it for the session. Before 2026-11-10
+//   everything was let go here and only a new creation could start a search.
 // - NoMeter: our meter is not running (Finished Picture, a frame that is not linear HDR, a pinned white point), so
-// there
-//   is nothing to match against: hold what was taken, copy nothing, and search once the meter runs again. Before
-//   2026-11-10 the scan searched for 5 minutes against an empty meter (Cyberpunk 2077 with Finished Picture on).
+//   there is nothing to match against: hold what was taken, copy nothing. When the meter runs again a search that was
+//   interrupted carries on where it was, its history kept and the time without the meter not counted (a pause menu
+//   every few minutes must neither restart the search nor keep it from ever giving up); otherwise a search starts.
+//   Before 2026-11-10 the scan searched for 5 minutes against an empty meter (Cyberpunk 2077 with Finished Picture on).
 // The backend lets go when a phase is entered; candidates taken after that, in Found, GaveUp or NoMeter, are held for
 // the next search without being copied. A match that goes away (the game destroyed it, or it gave no plausible value
 // for a while) searches again. A feature release keeps the match (DlssNr_ExposureScan.cpp ReleaseTrackedResources).
@@ -124,8 +125,22 @@ class Lifecycle
 
         case Phase::Done: // what was handed stopped being usable: search what the game makes from here
         case Phase::NotHere:
-        case Phase::NoMeter:
             Search(f);
+            break;
+
+        case Phase::NoMeter:
+            if (!f.metering)
+                break;
+
+            if (_paused)
+            {
+                // Carry on with the interrupted search: same number (the history stays), its clock stopped meanwhile
+                _phase = Phase::Searching;
+                _since += f.seconds - _pausedAt;
+                _paused = false;
+            }
+            else
+                Search(f);
             break;
 
         case Phase::Searching:
@@ -139,7 +154,11 @@ class Lifecycle
             else if (f.verdict == Verdict::Baked)
                 _phase = Phase::Baked;
             else if (!f.metering)
+            {
                 _phase = Phase::NoMeter;
+                _paused = true;
+                _pausedAt = f.seconds;
+            }
             else if (f.seconds - _since >= _s.searchSeconds)
                 GiveUp(f.seconds);
             break;
@@ -151,7 +170,7 @@ class Lifecycle
 
         case Phase::GaveUp:
             _newSince = _newSince || f.newCandidates;
-            if ((_newSince || f.holding) && f.metering && f.seconds - _since >= _retry)
+            if ((_newSince || (f.holding && _givenUp <= kHeldRetries)) && f.metering && f.seconds - _since >= _retry)
                 Search(f);
             break;
 
@@ -185,6 +204,12 @@ class Lifecycle
     // The game's exposure was found this session (a later Baked is a give-up, and a later search may Refind)
     bool FoundBefore() const { return _found; }
 
+    // For a lifecycle started over in the same session (Auto switched off and on): the session had found it
+    void NoteFoundBefore() { _found = true; }
+
+    // Give-ups after which held candidates alone still start a search; after these only new candidates do
+    static constexpr unsigned int kHeldRetries = 3;
+
     // A new search starts from no history: the backend clears what the matcher reads when this changes
     unsigned int SearchNumber() const { return _searches; }
 
@@ -200,6 +225,7 @@ class Lifecycle
 
         _phase = Phase::Searching;
         _since = f.seconds;
+        _paused = false;
         ++_searches;
     }
 
@@ -219,6 +245,8 @@ class Lifecycle
     float _retry = 0.0f;
     bool _newSince = false;
     bool _found = false;
+    bool _paused = false; // NoMeter interrupted a search, which carries on when the meter runs again
+    float _pausedAt = 0.0f;
 };
 
 // Whether the upscaler call's pre-exposure moves with the light (audit HC16: Dawnwalker, UE5, 1.0 -> 0.59 -> 0.45 ->
