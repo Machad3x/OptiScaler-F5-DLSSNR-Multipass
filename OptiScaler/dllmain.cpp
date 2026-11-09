@@ -843,7 +843,11 @@ static void CheckWorkingMode()
                 dllNamesW.push_back(L"d3d12.dll");
                 dllNamesW.push_back(L"d3d12");
 
-                D3d12Proxy::Init(originalModule);
+                if (!D3d12Proxy::Init(originalModule))
+                {
+                    LOG_ERROR("Original d3d12.dll binding is unavailable");
+                    break;
+                }
                 d3d12.LoadOriginalLibrary(originalModule);
 
                 State::Instance().workingMode = WorkingMode::D3d12;
@@ -939,8 +943,8 @@ static void CheckWorkingMode()
         if (Config::Instance()->OverlayMenu.value_or_default() && d3d12Module != nullptr)
         {
             LOG_DEBUG("d3d12.dll already in memory");
-            D3d12Proxy::Init(d3d12Module);
-            D3D12Hooks::Hook();
+            if (!D3d12Proxy::Init(d3d12Module) || !D3D12Hooks::Hook())
+                LibraryLoadHooks::RecordDeferredLoad(d3d12Module);
         }
     }
     else
@@ -952,8 +956,8 @@ static void CheckWorkingMode()
     if (D3d12Proxy::Module() == nullptr && State::Instance().gameQuirks & GameQuirk::LoadD3D12Manually)
     {
         LOG_DEBUG("Loading d3d12.dll manually");
-        D3d12Proxy::Init();
-        D3D12Hooks::Hook();
+        if (!D3d12Proxy::Init() || !D3D12Hooks::Hook())
+            LibraryLoadHooks::RecordDeferredLoad(D3d12Proxy::Module());
     }
 
     d3d12AgilityModule = GetDllNameWModule(&dx12agilityNamesW);
@@ -1874,6 +1878,10 @@ DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
     if (hModuleVoid)
         IdentifyGpu::updateD3d12Capabilities();
 
+    // This worker runs after DLL_PROCESS_ATTACH has returned: loads missed on threads without a TLS array are
+    // caught up here, not in DllMain.
+    LibraryLoadHooks::CatchUpDeferredLoads();
+
     return 0;
 }
 
@@ -2377,6 +2385,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     }
 
     case DLL_PROCESS_DETACH:
+        // ExitProcess from a thread without a static-TLS array (misc/ThreadTls.h; hk_K32_ExitProcess forwards those
+        // untouched) runs this detach on that thread. Nothing below runs on process exit anyway. The CRT runs our
+        // static destructors right after this on the same thread; the flag is set for any code that checks it during
+        // shutdown. State::Existing() reaches it without thread-local storage; there is no State to flag if it is null.
+        if (lpReserved != nullptr && ThreadHasNoTls())
+        {
+            if (auto* state = State::Existing())
+                state->isShuttingDown = true;
+
+            break;
+        }
+
         State::Instance().isShuttingDown = true;
 
         // ExitProcess has already stopped other threads. No DLL unloading, logging,
