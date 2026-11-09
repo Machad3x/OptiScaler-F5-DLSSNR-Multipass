@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Dxgi_Hooks.h"
+#include "LibraryLoad_Hooks.h"
 
 #include "DxgiFactory_Hooks.h"
 
@@ -96,6 +97,9 @@ static void CheckLumaAndReShade(IDXGIFactory* factory)
 VALIDATE_HOOK(hkCreateDXGIFactory, DxgiProxy::PFN_CreateDxgiFactory)
 inline static HRESULT hkCreateDXGIFactory(REFIID riid, IDXGIFactory** ppFactory)
 {
+    // A d3d12.dll that could not be set up when it loaded gets another try (LibraryLoadHooks::RecordDeferredLoad)
+    LibraryLoadHooks::CatchUpDeferredLoads();
+
     DxgiProxy::ScopedFactoryCreation factoryCreation {};
     auto caller = Util::WhoIsTheCaller(_ReturnAddress());
     LOG_DEBUG("Caller: {}", caller);
@@ -156,6 +160,9 @@ inline static HRESULT hkCreateDXGIFactory(REFIID riid, IDXGIFactory** ppFactory)
 VALIDATE_HOOK(hkCreateDXGIFactory1, DxgiProxy::PFN_CreateDxgiFactory1)
 inline static HRESULT hkCreateDXGIFactory1(REFIID riid, IDXGIFactory1** ppFactory)
 {
+    // A d3d12.dll that could not be set up when it loaded gets another try (LibraryLoadHooks::RecordDeferredLoad)
+    LibraryLoadHooks::CatchUpDeferredLoads();
+
     DxgiProxy::ScopedFactoryCreation factoryCreation {};
     auto caller = Util::WhoIsTheCaller(_ReturnAddress());
     LOG_DEBUG("Caller: {}", caller);
@@ -215,6 +222,9 @@ inline static HRESULT hkCreateDXGIFactory1(REFIID riid, IDXGIFactory1** ppFactor
 VALIDATE_HOOK(hkCreateDXGIFactory2, DxgiProxy::PFN_CreateDxgiFactory2)
 inline static HRESULT hkCreateDXGIFactory2(UINT Flags, REFIID riid, IDXGIFactory2** ppFactory)
 {
+    // A d3d12.dll that could not be set up when it loaded gets another try (LibraryLoadHooks::RecordDeferredLoad)
+    LibraryLoadHooks::CatchUpDeferredLoads();
+
     DxgiProxy::ScopedFactoryCreation factoryCreation {};
     auto caller = Util::WhoIsTheCaller(_ReturnAddress());
     LOG_DEBUG("Caller: {}", caller);

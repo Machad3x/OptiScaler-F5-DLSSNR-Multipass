@@ -20,6 +20,7 @@
 #include "Amdxc64_Hooks.h"
 #include <framegen/mfgunlock/MfgUnlock.h>
 #include <framegen/f5low/F5Low.h>
+#include <misc/LoaderBoundary.h>
 #pragma intrinsic(_ReturnAddress)
 
 namespace
@@ -65,14 +66,10 @@ static inline bool IsInsideWindowsDirectory(const std::string& path)
 }
 
 // nullptr: not handled, load as asked. F5Low::kBlockedLoad: the F5Low DLSS-G block, the callers fail the load.
-// dwFlags: LoadLibraryEx's, 0 for the others
-static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags = 0)
+// Loads that only map the file as data, or skip its initialization, don't come here (loader_boundary::NonExecutable).
+// ownLoadFailed: see LibraryLoadHooks::LoadLibraryCheckW
+static inline HMODULE CheckLoad(const std::wstring& name, bool* ownLoadFailed)
 {
-    // Loads that only map the file as data are not a module start
-    const bool dataOnly =
-        (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) !=
-        0;
-
     do
     {
         if (State::Instance().isShuttingDown || LibraryLoadHooks::IsApiSetName(name))
@@ -90,7 +87,7 @@ static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags = 0)
             }
         }
 
-        auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), dataOnly);
+        auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), ownLoadFailed);
 
         if (moduleHandle == F5Low::kBlockedLoad)
             return moduleHandle;
@@ -111,9 +108,46 @@ static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags = 0)
     return nullptr;
 }
 
+// LoadLibraryEx without initialization (DONT_RESOLVE_DLL_REFERENCES): the F5Low DLSS-G block still applies, as it
+// does on the ntdll path. Data-file loads are not a module start and are left alone.
+template <class C> static HMODULE FilterNoInitLoad(const C* path, DWORD flags)
+{
+    constexpr DWORD dataFile =
+        LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+    if (path == nullptr || (flags & DONT_RESOLVE_DLL_REFERENCES) == 0 || (flags & dataFile) != 0 || ThreadHasNoTls() ||
+        State::Instance().isShuttingDown)
+        return nullptr;
+
+    std::wstring name;
+    try
+    {
+        if constexpr (std::is_same_v<C, char>)
+            name = string_to_wstring(path);
+        else
+            name = path;
+    }
+    catch (const std::exception&)
+    {
+        return nullptr;
+    }
+
+    return F5Low::FilterGameDlssg(name, false);
+}
+
 VALIDATE_HOOK(hk_K32_GetProcAddress, Kernel32Proxy::PFN_GetProcAddress)
+static FARPROC ResolveAmdMarker(LPCSTR name, Kernel32Proxy::PFN_GetProcAddress getProc)
+{
+    if (reinterpret_cast<ULONG_PTR>(name) >= 0xF000 && lstrcmpA(name, "AmdExtD3DCreateInterface") == 0)
+        return reinterpret_cast<FARPROC>(&Amdxc64Hooks::hkAmdExtD3DCreateInterface);
+    return getProc(KernelBaseProxy::GetModuleHandleW_()(L"amdxc64.dll"), name);
+}
+
 FARPROC WINAPI KernelHooks::hk_K32_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 {
+    if (hModule == amdxc64Mark)
+        return ResolveAmdMarker(lpProcName, o_K32_GetProcAddress);
+    if (ThreadHasNoTls())
+        return o_K32_GetProcAddress(hModule, lpProcName);
 
     if ((size_t) lpProcName < 0x000000000000F000)
     {
@@ -129,20 +163,14 @@ FARPROC WINAPI KernelHooks::hk_K32_GetProcAddress(HMODULE hModule, LPCSTR lpProc
     //               Util::WhoIsTheCaller(_ReturnAddress()));
     // }
 
-    // FSR 4 Init in case of missing amdxc64.dll
-    // 2nd check is amdxcffx64.dll trying to queue amdxc64 but amdxc64 not being loaded.
-    // Also skip the internal call of amdxc64
-    if (lpProcName != nullptr && (hModule == amdxc64Mark || hModule == nullptr) &&
-        lstrcmpA(lpProcName, "AmdExtD3DCreateInterface") == 0 &&
+    // FSR 4 Init in case of missing amdxc64.dll (the fake amdxc64 handle is answered at the top, ResolveAmdMarker):
+    // amdxcffx64.dll trying to queue amdxc64 but amdxc64 not being loaded. Also skip the internal call of amdxc64
+    if (lpProcName != nullptr && hModule == nullptr && lstrcmpA(lpProcName, "AmdExtD3DCreateInterface") == 0 &&
         IdentifyGpu::getPrimaryGpu().fsr4Support != FSR4Support::None &&
         Util::GetCallerModule(_ReturnAddress()) != KernelBaseProxy::GetModuleHandleW_()(L"amdxc64.dll"))
     {
         LOG_TRACE("Giving hkAmdExtD3DCreateInterface");
         return (FARPROC) &Amdxc64Hooks::hkAmdExtD3DCreateInterface;
-    }
-    else if (hModule == amdxc64Mark)
-    {
-        return o_K32_GetProcAddress(KernelBaseProxy::GetModuleHandleW_()(L"amdxc64.dll"), lpProcName);
     }
 
     return o_K32_GetProcAddress(hModule, lpProcName);
@@ -151,6 +179,9 @@ FARPROC WINAPI KernelHooks::hk_K32_GetProcAddress(HMODULE hModule, LPCSTR lpProc
 VALIDATE_HOOK(hk_K32_GetModuleHandleA, Kernel32Proxy::PFN_GetModuleHandleA)
 HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleA(LPCSTR lpModuleName)
 {
+    if (ThreadHasNoTls())
+        return o_K32_GetModuleHandleA(lpModuleName);
+
     if (lpModuleName != NULL)
     {
         if (strcmp(lpModuleName, "nvngx_dlssg.dll") == 0)
@@ -189,6 +220,9 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleA(LPCSTR lpModuleName)
 VALIDATE_HOOK(hk_K32_GetModuleHandleW, Kernel32Proxy::PFN_GetModuleHandleW)
 HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
 {
+    if (ThreadHasNoTls())
+        return o_K32_GetModuleHandleW(lpModuleName);
+
     if (lpModuleName != NULL)
     {
         if (wcscmp(lpModuleName, L"amdxc64.dll") == 0)
@@ -287,6 +321,9 @@ bool KernelHooks::AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* resul
 
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModuleName, HMODULE* phModule)
 {
+    if (ThreadHasNoTls())
+        return o_K32_GetModuleHandleExA(dwFlags, lpModuleName, phModule);
+
     // Flags first: with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS lpModuleName is an address, not a name to compare
     if (dwFlags == 0 && lpModuleName && IsXellName(lpModuleName))
     {
@@ -302,6 +339,9 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModul
 VALIDATE_HOOK(hk_K32_GetModuleHandleExW, Kernel32Proxy::PFN_GetModuleHandleExW)
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModuleName, HMODULE* phModule)
 {
+    if (ThreadHasNoTls())
+        return o_K32_GetModuleHandleExW(dwFlags, lpModuleName, phModule);
+
     if (lpModuleName && dwFlags == GET_MODULE_HANDLE_EX_FLAG_PIN && lstrcmpW(L"nvapi64.dll", lpModuleName) == 0 &&
         phModule)
     {
@@ -325,6 +365,11 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModu
 VALIDATE_HOOK(hk_KB_GetProcAddress, KernelBaseProxy::PFN_GetProcAddress)
 FARPROC WINAPI KernelHooks::hk_KB_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 {
+    if (hModule == amdxc64Mark)
+        return ResolveAmdMarker(lpProcName, o_KB_GetProcAddress);
+    if (ThreadHasNoTls())
+        return o_KB_GetProcAddress(hModule, lpProcName);
+
     if ((size_t) lpProcName < 0x000000000000F000)
     {
         if (hModule == dllModule)
@@ -345,6 +390,9 @@ FARPROC WINAPI KernelHooks::hk_KB_GetProcAddress(HMODULE hModule, LPCSTR lpProcN
 VALIDATE_HOOK(hk_K32_GetFileAttributesW, Kernel32Proxy::PFN_GetFileAttributesW)
 DWORD WINAPI KernelHooks::hk_K32_GetFileAttributesW(LPCWSTR lpFileName)
 {
+    if (ThreadHasNoTls())
+        return o_K32_GetFileAttributesW(lpFileName);
+
     if (!State::Instance().nvngxExists && State::Instance().nvngxReplacement.has_value() &&
         (Config::Instance()->DxgiSpoofing.value_or_default() ||
          Config::Instance()->StreamlineSpoofing.value_or_default()))
@@ -372,6 +420,10 @@ HANDLE WINAPI KernelHooks::hk_K32_CreateFileW(LPCWSTR lpFileName, DWORD dwDesire
                                               LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition,
                                               DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)
 {
+    if (ThreadHasNoTls())
+        return o_K32_CreateFileW(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition,
+                                 dwFlagsAndAttributes, hTemplateFile);
+
     if (!State::Instance().nvngxExists && State::Instance().nvngxReplacement.has_value() &&
         (Config::Instance()->DxgiSpoofing.value_or_default() ||
          Config::Instance()->StreamlineSpoofing.value_or_default()))
@@ -399,7 +451,8 @@ HANDLE WINAPI KernelHooks::hk_K32_CreateFileW(LPCWSTR lpFileName, DWORD dwDesire
 }
 
 VALIDATE_HOOK(hk_K32_SetUnhandledExceptionFilter, Kernel32Proxy::PFN_SetUnhandledExceptionFilter)
-LPTOP_LEVEL_EXCEPTION_FILTER WINAPI KernelHooks::hk_K32_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpFilter)
+LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+KernelHooks::hk_K32_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpFilter)
 {
     // Logger.cpp keeps its own filter on top and calls the game's after it (the real API is only reached from there)
     return CrashFilterFromGame(lpFilter, o_K32_SetUnhandledExceptionFilter);
@@ -408,8 +461,16 @@ LPTOP_LEVEL_EXCEPTION_FILTER WINAPI KernelHooks::hk_K32_SetUnhandledExceptionFil
 VALIDATE_HOOK(hk_K32_ExitProcess, Kernel32Proxy::PFN_ExitProcess)
 VOID WINAPI KernelHooks::hk_K32_ExitProcess(UINT uExitCode)
 {
-    // Other threads (the log's writer) are stopped by ExitProcess and the loader's detach is skipped for it: this is the
-    // last chance for the queued log lines to reach the disk. Bounded.
+    // No log drain on a thread without a TLS array: posting the flush marker goes through spdlog's thread_local
+    // thread id and would fault. The last queued lines can be lost on that path.
+    if (ThreadHasNoTls())
+    {
+        o_K32_ExitProcess(uExitCode);
+        return;
+    }
+
+    // Other threads (the log's writer) are stopped by ExitProcess and the loader's detach is skipped for it: this is
+    // the last chance for the queued log lines to reach the disk. Bounded.
     DrainLogForExit();
     o_K32_ExitProcess(uExitCode);
 }
@@ -417,6 +478,9 @@ VOID WINAPI KernelHooks::hk_K32_ExitProcess(UINT uExitCode)
 VALIDATE_HOOK(hk_K32_OutputDebugStringW, Kernel32Proxy::PFN_OutputDebugStringW)
 VOID WINAPI KernelHooks::hk_K32_OutputDebugStringW(LPCWSTR lpOutputString)
 {
+    if (ThreadHasNoTls())
+        return o_K32_OutputDebugStringW(lpOutputString);
+
     o_K32_OutputDebugStringW(lpOutputString);
 
     std::wstring result(lpOutputString);
@@ -432,6 +496,9 @@ VOID WINAPI KernelHooks::hk_K32_OutputDebugStringW(LPCWSTR lpOutputString)
 VALIDATE_HOOK(hk_K32_OutputDebugStringA, Kernel32Proxy::PFN_OutputDebugStringA)
 VOID WINAPI KernelHooks::hk_K32_OutputDebugStringA(LPCSTR lpOutputString)
 {
+    if (ThreadHasNoTls())
+        return o_K32_OutputDebugStringA(lpOutputString);
+
     o_K32_OutputDebugStringA(lpOutputString);
 
     std::string result(lpOutputString);
@@ -449,138 +516,347 @@ VOID WINAPI KernelHooks::hk_K32_OutputDebugStringA(LPCSTR lpOutputString)
 VALIDATE_HOOK(hk_K32_LoadLibraryW, Kernel32Proxy::PFN_LoadLibraryW)
 HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
 {
+    const DWORD entryError = GetLastError();
+    const auto original = [&]()
+    {
+        SetLastError(entryError);
+        return o_K32_LoadLibraryW(lpLibFileName);
+    };
+
+    if (ThreadHasNoTls())
+    {
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordDeferredLoad(module);
+        SetLastError(error);
+        return module;
+    }
+
+    // Retain the historical local null-name return; do not manufacture a new original-call contract here.
     if (lpLibFileName == nullptr)
-        return NULL;
+    {
+        SetLastError(entryError);
+        return nullptr;
+    }
 
-    std::wstring name(lpLibFileName);
+    if (State::Instance().isShuttingDown)
+        return original();
 
-#ifdef _DEBUG
-    // LOG_TRACE("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
-#endif
+    std::wstring name;
+    if (!loader_boundary::CopyName(lpLibFileName, name))
+        return original();
 
-    auto result = CheckLoad(name);
-
-    if (result == F5Low::kBlockedLoad)
+    bool ownLoadFailed = false;
+    const auto handled = CheckLoad(name, &ownLoadFailed);
+    if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
     }
+    if (handled != nullptr)
+        return ObserveLoadedXeFG(name, handled);
 
-    if (result != nullptr)
-        return ObserveLoadedXeFG(name, result);
-
-    return ObserveLoadedXeFG(name, o_K32_LoadLibraryW(lpLibFileName));
+    const auto result = original();
+    const DWORD originalError = GetLastError();
+    if (ownLoadFailed && result != nullptr)
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
+    ObserveLoadedXeFG(name, result);
+    SetLastError(originalError);
+    return result;
 }
 
 VALIDATE_HOOK(hk_K32_LoadLibraryA, Kernel32Proxy::PFN_LoadLibraryA)
 HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
 {
+    const DWORD entryError = GetLastError();
+    const auto original = [&]()
+    {
+        SetLastError(entryError);
+        return o_K32_LoadLibraryA(lpLibFileName);
+    };
+
+    if (ThreadHasNoTls())
+    {
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordDeferredLoad(module);
+        SetLastError(error);
+        return module;
+    }
+
+    // Retain the historical local null-name return; do not manufacture a new original-call contract here.
     if (lpLibFileName == nullptr)
-        return NULL;
+    {
+        SetLastError(entryError);
+        return nullptr;
+    }
 
-    std::string nameA(lpLibFileName);
-    std::wstring name = string_to_wstring(nameA);
+    if (State::Instance().isShuttingDown)
+        return original();
 
-#ifdef _DEBUG
-    // LOG_TRACE("{}, caller: {}", nameA.data(), Util::WhoIsTheCaller(_ReturnAddress()));
-#endif
+    std::wstring name;
+    try
+    {
+        name = string_to_wstring(lpLibFileName);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return original();
+    }
 
-    auto result = CheckLoad(name);
-
-    if (result == F5Low::kBlockedLoad)
+    bool ownLoadFailed = false;
+    const auto handled = CheckLoad(name, &ownLoadFailed);
+    if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
     }
+    if (handled != nullptr)
+        return ObserveLoadedXeFG(name, handled);
 
-    if (result != nullptr)
-        return ObserveLoadedXeFG(name, result);
-
-    return ObserveLoadedXeFG(name, o_K32_LoadLibraryA(lpLibFileName));
+    const auto result = original();
+    const DWORD originalError = GetLastError();
+    if (ownLoadFailed && result != nullptr)
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
+    ObserveLoadedXeFG(name, result);
+    SetLastError(originalError);
+    return result;
 }
 
 VALIDATE_HOOK(hk_K32_LoadLibraryExW, Kernel32Proxy::PFN_LoadLibraryExW)
 HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
+    const DWORD entryError = GetLastError();
+    const auto original = [&]()
+    {
+        SetLastError(entryError);
+        return o_K32_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    };
+
+    if (loader_boundary::NonExecutable(dwFlags))
+    {
+        if (const auto filtered = FilterNoInitLoad(lpLibFileName, dwFlags))
+        {
+            if (filtered != F5Low::kBlockedLoad)
+                return filtered;
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return NULL;
+        }
+
+        // An image loaded without initialization is not bound or hooked (KnownNoInitImages)
+        const auto previous = GetModuleHandleW(lpLibFileName);
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordNonExecutable(module, previous);
+        SetLastError(error);
+        return module;
+    }
+
+    if (ThreadHasNoTls())
+    {
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordDeferredLoad(module);
+        SetLastError(error);
+        return module;
+    }
+
+    // Retain the historical local null-name return; do not manufacture a new original-call contract here.
     if (lpLibFileName == nullptr)
-        return NULL;
+    {
+        SetLastError(entryError);
+        return nullptr;
+    }
 
-    std::wstring name(lpLibFileName);
+    if (State::Instance().isShuttingDown)
+        return original();
 
-#ifdef _DEBUG
-    // LOG_TRACE("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
-#endif
+    std::wstring name;
+    if (!loader_boundary::CopyName(lpLibFileName, name))
+        return original();
 
-    auto result = CheckLoad(name, dwFlags);
-
-    if (result == F5Low::kBlockedLoad)
+    bool ownLoadFailed = false;
+    const auto handled = CheckLoad(name, &ownLoadFailed);
+    if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
     }
+    if (handled != nullptr)
+        return ObserveLoadedXeFG(name, handled);
 
-    if (result != nullptr)
-        return ObserveLoadedXeFG(name, result);
-
-    return ObserveLoadedXeFG(name, o_K32_LoadLibraryExW(lpLibFileName, hFile, dwFlags));
+    const auto result = original();
+    const DWORD originalError = GetLastError();
+    if (ownLoadFailed && result != nullptr)
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
+    ObserveLoadedXeFG(name, result);
+    SetLastError(originalError);
+    return result;
 }
 
 VALIDATE_HOOK(hk_K32_LoadLibraryExA, Kernel32Proxy::PFN_LoadLibraryExA)
 HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
+    const DWORD entryError = GetLastError();
+    const auto original = [&]()
+    {
+        SetLastError(entryError);
+        return o_K32_LoadLibraryExA(lpLibFileName, hFile, dwFlags);
+    };
+
+    if (loader_boundary::NonExecutable(dwFlags))
+    {
+        if (const auto filtered = FilterNoInitLoad(lpLibFileName, dwFlags))
+        {
+            if (filtered != F5Low::kBlockedLoad)
+                return filtered;
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return NULL;
+        }
+
+        // An image loaded without initialization is not bound or hooked (KnownNoInitImages)
+        const auto previous = GetModuleHandleA(lpLibFileName);
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordNonExecutable(module, previous);
+        SetLastError(error);
+        return module;
+    }
+
+    if (ThreadHasNoTls())
+    {
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordDeferredLoad(module);
+        SetLastError(error);
+        return module;
+    }
+
+    // Retain the historical local null-name return; do not manufacture a new original-call contract here.
     if (lpLibFileName == nullptr)
-        return NULL;
+    {
+        SetLastError(entryError);
+        return nullptr;
+    }
 
-    std::string nameA(lpLibFileName);
-    std::wstring name = string_to_wstring(nameA);
+    if (State::Instance().isShuttingDown)
+        return original();
 
-#ifdef _DEBUG
-    // LOG_TRACE("{}, caller: {}", nameA.data(), Util::WhoIsTheCaller(_ReturnAddress()));
-#endif
+    std::wstring name;
+    try
+    {
+        name = string_to_wstring(lpLibFileName);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return original();
+    }
 
-    auto result = CheckLoad(name, dwFlags);
-
-    if (result == F5Low::kBlockedLoad)
+    bool ownLoadFailed = false;
+    const auto handled = CheckLoad(name, &ownLoadFailed);
+    if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
     }
+    if (handled != nullptr)
+        return ObserveLoadedXeFG(name, handled);
 
-    if (result != nullptr)
-        return ObserveLoadedXeFG(name, result);
-
-    return ObserveLoadedXeFG(name, o_K32_LoadLibraryExA(lpLibFileName, hFile, dwFlags));
+    const auto result = original();
+    const DWORD originalError = GetLastError();
+    if (ownLoadFailed && result != nullptr)
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
+    ObserveLoadedXeFG(name, result);
+    SetLastError(originalError);
+    return result;
 }
 
 VALIDATE_HOOK(hk_KB_LoadLibraryExW, KernelBaseProxy::PFN_LoadLibraryExW)
 HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
+    const DWORD entryError = GetLastError();
+    const auto original = [&]()
+    {
+        SetLastError(entryError);
+        return o_KB_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    };
+
+    if (loader_boundary::NonExecutable(dwFlags))
+    {
+        if (const auto filtered = FilterNoInitLoad(lpLibFileName, dwFlags))
+        {
+            if (filtered != F5Low::kBlockedLoad)
+                return filtered;
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return NULL;
+        }
+
+        // An image loaded without initialization is not bound or hooked (KnownNoInitImages)
+        const auto previous = GetModuleHandleW(lpLibFileName);
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordNonExecutable(module, previous);
+        SetLastError(error);
+        return module;
+    }
+
+    if (ThreadHasNoTls())
+    {
+        const auto module = original();
+        const auto error = GetLastError();
+        LibraryLoadHooks::RecordDeferredLoad(module);
+        SetLastError(error);
+        return module;
+    }
+
+    // Retain the historical local null-name return; do not manufacture a new original-call contract here.
     if (lpLibFileName == nullptr)
-        return NULL;
+    {
+        SetLastError(entryError);
+        return nullptr;
+    }
 
-    std::wstring name(lpLibFileName);
+    if (State::Instance().isShuttingDown)
+        return original();
 
-#ifdef _DEBUG
-    // LOG_TRACE("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
-#endif
+    std::wstring name;
+    if (!loader_boundary::CopyName(lpLibFileName, name))
+        return original();
 
-    auto result = CheckLoad(name, dwFlags);
-
-    if (result == F5Low::kBlockedLoad)
+    bool ownLoadFailed = false;
+    const auto handled = CheckLoad(name, &ownLoadFailed);
+    if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
         return NULL;
     }
+    if (handled != nullptr)
+        return ObserveLoadedXeFG(name, handled);
 
-    if (result != nullptr)
-        return ObserveLoadedXeFG(name, result);
-
-    return ObserveLoadedXeFG(name, o_KB_LoadLibraryExW(lpLibFileName, hFile, dwFlags));
+    const auto result = original();
+    const DWORD originalError = GetLastError();
+    if (ownLoadFailed && result != nullptr)
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
+    ObserveLoadedXeFG(name, result);
+    SetLastError(originalError);
+    return result;
 }
 
 VALIDATE_HOOK(hk_K32_FreeLibrary, Kernel32Proxy::PFN_FreeLibrary)
 BOOL KernelHooks::hk_K32_FreeLibrary(HMODULE lpLibrary)
 {
+    LibraryLoadHooks::ForgetNonExecutable(lpLibrary);
+
+    if (ThreadHasNoTls())
+    {
+        // Still keep OptiScaler and the proxies loaded (their detours are live), the bookkeeping in modulesToFree
+        // is skipped: it needs State
+        if (LibraryLoadHooks::IsKeptLoaded(lpLibrary))
+            return TRUE;
+
+        return o_K32_FreeLibrary(lpLibrary);
+    }
+
     if (lpLibrary == nullptr)
         return STATUS_INVALID_PARAMETER;
 

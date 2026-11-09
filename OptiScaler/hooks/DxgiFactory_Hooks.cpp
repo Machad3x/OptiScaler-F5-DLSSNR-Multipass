@@ -6,6 +6,7 @@
 
 #include "D3D11_Hooks.h"
 #include "D3D12_Hooks.h"
+#include "LibraryLoad_Hooks.h"
 
 #include <Config.h>
 
@@ -517,6 +518,8 @@ void DxgiFactoryHooks::HookToDLSSGFactory(IDXGIFactory* pFactory)
 HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* pDevice, DXGI_SWAP_CHAIN_DESC* pDesc,
                                           IDXGISwapChain** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     *ppSwapChain = nullptr;
 
     if (State::Instance().vulkanCreatingSC)
@@ -947,6 +950,8 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
                                                  const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
                                                  IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     *ppSwapChain = nullptr;
 
     static bool firstCall = static_cast<bool>(State::Instance().gameQuirks & GameQuirk::NoFSRFGFirstSwapchain);
@@ -1413,6 +1418,8 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForCoreWindow(IDXGIFactory2* realFactor
                                                        const DXGI_SWAP_CHAIN_DESC1* pDesc,
                                                        IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     if (State::Instance().vulkanCreatingSC)
     {
         LOG_WARN("Vulkan is creating swapchain!");
@@ -1541,6 +1548,8 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForComposition(IDXGIFactory2* realFacto
                                                         IDXGIOutput* pRestrictToOutput,
                                                         IDXGISwapChain1** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     // Always call the trampoline, including pass-through/error cases. Calling the detoured virtual
     // method here re-enters this hook. Keep the composition descriptor intact: notably, a desktop
     // VSync override must not turn its FLIP_SEQUENTIAL swap effect into FLIP_DISCARD.
@@ -1611,6 +1620,8 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForComposition(IDXGIFactory2* realFacto
 HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnknown* pDevice,
                                                DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     *ppSwapChain = nullptr;
 
     if (State::Instance().vulkanCreatingSC)
@@ -1903,6 +1914,8 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
                                                       const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
                                                       IDXGIOutput* pRestrictToOutput, IDXGISwapChain1** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     *ppSwapChain = nullptr;
 
     static bool firstCall = static_cast<bool>(State::Instance().gameQuirks & GameQuirk::NoFSRFGFirstSwapchain);
@@ -2239,6 +2252,8 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForCoreWindow(IDXGIFactory2* realF
                                                             IDXGIOutput* pRestrictToOutput,
                                                             IDXGISwapChain1** ppSwapChain)
 {
+    LibraryLoadHooks::CatchUpDeferredLoads(); // a d3d12.dll that loaded after the last factory creation
+
     if (State::Instance().vulkanCreatingSC)
     {
         LOG_WARN("Vulkan is creating swapchain!");

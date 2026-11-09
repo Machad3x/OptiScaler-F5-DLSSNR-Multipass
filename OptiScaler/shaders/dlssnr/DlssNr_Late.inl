@@ -543,6 +543,12 @@ static void ApplyFinishedColor(ID3D12Resource* picture, ID3D12CommandQueue* queu
     }
     if (!picture || !queue || State::Instance().swapchainInteropApi != SwapchainInteropApi::None)
         return;
+    // Nothing captured from the game's own upscaler is waiting: leave the history alone. With native input the
+    // picture is owned by ApplyNativeInput, and rejecting a swapchain format here (B8G8R8A8 in World of Warcraft)
+    // would Cancel() and reset the shared history on every present.
+    if (std::none_of(Late::slots.begin(), Late::slots.end(),
+                     [](const auto& slot) { return slot.pending && slot.submitted; }))
+        return;
     Late::ComPtr<ID3D12Resource> color = picture;
     Late::ComPtr<ID3D12Device> currentDevice;
     if (FAILED(queue->GetDevice(IID_PPV_ARGS(&currentDevice))) || currentDevice != Late::device)

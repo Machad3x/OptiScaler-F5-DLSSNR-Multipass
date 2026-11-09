@@ -138,7 +138,9 @@ class KernelHooks
             if (o_K32_LoadLibraryExA == nullptr)
                 o_K32_LoadLibraryExA = Kernel32Proxy::Hook_LoadLibraryExA(hk_K32_LoadLibraryExA);
 
-            if (o_K32_LoadLibraryExW == nullptr)
+            // Forwarded exports share one target with KernelBase; do not detour that target twice.
+            if (o_K32_LoadLibraryExW == nullptr &&
+                Kernel32Proxy::LoadLibraryExW_Hooked() != KernelBaseProxy::LoadLibraryExW_Hooked())
                 o_K32_LoadLibraryExW = Kernel32Proxy::Hook_LoadLibraryExW(hk_K32_LoadLibraryExW);
         }
     }
@@ -152,6 +154,7 @@ class KernelHooks
         if (o_KB_GetProcAddress == nullptr)
             o_KB_GetProcAddress = KernelBaseProxy::Hook_GetProcAddress(hk_KB_GetProcAddress);
 
+        // With the ntdll hooks the loads are handled there (Ntdll_Hooks.h), these Win32 ones stay unhooked
         if (!Config::Instance()->UseNtdllHooks.value_or_default())
         {
             if (o_KB_LoadLibraryExW == nullptr)
