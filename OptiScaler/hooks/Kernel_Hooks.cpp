@@ -66,14 +66,10 @@ static inline bool IsInsideWindowsDirectory(const std::string& path)
 }
 
 // nullptr: not handled, load as asked. F5Low::kBlockedLoad: the F5Low DLSS-G block, the callers fail the load.
-// dwFlags: LoadLibraryEx's, 0 for the others. ownLoadFailed: see LibraryLoadHooks::HandleLibraryLoad
-static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags, bool* ownLoadFailed)
+// Loads that only map the file as data, or skip its initialization, don't come here (loader_boundary::NonExecutable).
+// ownLoadFailed: see LibraryLoadHooks::LoadLibraryCheckW
+static inline HMODULE CheckLoad(const std::wstring& name, bool* ownLoadFailed)
 {
-    // Loads that only map the file as data are not a module start
-    const bool dataOnly =
-        (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) !=
-        0;
-
     do
     {
         if (State::Instance().isShuttingDown || LibraryLoadHooks::IsApiSetName(name))
@@ -91,7 +87,7 @@ static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags, bool* o
             }
         }
 
-        auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), dataOnly, ownLoadFailed);
+        auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), ownLoadFailed);
 
         if (moduleHandle == F5Low::kBlockedLoad)
             return moduleHandle;
@@ -112,32 +108,30 @@ static inline HMODULE CheckLoad(const std::wstring& name, DWORD dwFlags, bool* o
     return nullptr;
 }
 
-// In native mode these Win32 hooks add only the supported D3D12 recovery boundary and no-init veto.
-// Forward other ordinary loads without suppressing the existing native provider policy.
-template <class C> static bool NativeLoadOnly(const C* path, DWORD flags = 0)
+// LoadLibraryEx without initialization (DONT_RESOLVE_DLL_REFERENCES): the F5Low DLSS-G block still applies, as it
+// does on the ntdll path. Data-file loads are not a module start and are left alone.
+template <class C> static HMODULE FilterNoInitLoad(const C* path, DWORD flags)
 {
-    if (ThreadHasNoTls() || !Config::Instance()->UseNtdllHooks.value_or_default() ||
-        loader_boundary::NonExecutable(flags))
-        return false;
-    std::basic_string_view<C> name = path ? path : std::basic_string_view<C> {};
-    for (size_t i = name.size(); i != 0; --i)
-        if (name[i - 1] == '/' || name[i - 1] == '\\')
-        {
-            name.remove_prefix(i);
-            break;
-        }
-    constexpr char target[] = "d3d12.dll";
-    if (name.size() != 5 && name.size() != 9)
-        return true;
-    for (size_t i = 0; i < name.size(); ++i)
+    constexpr DWORD dataFile =
+        LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+    if (path == nullptr || (flags & DONT_RESOLVE_DLL_REFERENCES) == 0 || (flags & dataFile) != 0 || ThreadHasNoTls() ||
+        State::Instance().isShuttingDown)
+        return nullptr;
+
+    std::wstring name;
+    try
     {
-        auto c = name[i];
-        if (c >= 'A' && c <= 'Z')
-            c = static_cast<C>(c + ('a' - 'A'));
-        if (c != target[i])
-            return true;
+        if constexpr (std::is_same_v<C, char>)
+            name = string_to_wstring(path);
+        else
+            name = path;
     }
-    return false;
+    catch (const std::exception&)
+    {
+        return nullptr;
+    }
+
+    return F5Low::FilterGameDlssg(name, false);
 }
 
 VALIDATE_HOOK(hk_K32_GetProcAddress, Kernel32Proxy::PFN_GetProcAddress)
@@ -169,11 +163,9 @@ FARPROC WINAPI KernelHooks::hk_K32_GetProcAddress(HMODULE hModule, LPCSTR lpProc
     //               Util::WhoIsTheCaller(_ReturnAddress()));
     // }
 
-    // FSR 4 Init in case of missing amdxc64.dll
-    // 2nd check is amdxcffx64.dll trying to queue amdxc64 but amdxc64 not being loaded.
-    // Also skip the internal call of amdxc64
-    if (lpProcName != nullptr && (hModule == amdxc64Mark || hModule == nullptr) &&
-        lstrcmpA(lpProcName, "AmdExtD3DCreateInterface") == 0 &&
+    // FSR 4 Init in case of missing amdxc64.dll (the fake amdxc64 handle is answered at the top, ResolveAmdMarker):
+    // amdxcffx64.dll trying to queue amdxc64 but amdxc64 not being loaded. Also skip the internal call of amdxc64
+    if (lpProcName != nullptr && hModule == nullptr && lstrcmpA(lpProcName, "AmdExtD3DCreateInterface") == 0 &&
         IdentifyGpu::getPrimaryGpu().fsr4Support != FSR4Support::None &&
         Util::GetCallerModule(_ReturnAddress()) != KernelBaseProxy::GetModuleHandleW_()(L"amdxc64.dll"))
     {
@@ -525,20 +517,11 @@ VALIDATE_HOOK(hk_K32_LoadLibraryW, Kernel32Proxy::PFN_LoadLibraryW)
 HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
 {
     const DWORD entryError = GetLastError();
-    if (NativeLoadOnly(lpLibFileName))
-    {
-        SetLastError(entryError);
-        return o_K32_LoadLibraryW(lpLibFileName);
-    }
     const auto original = [&]()
     {
-        loader_boundary::OriginalOnlyScope scope;
         SetLastError(entryError);
         return o_K32_LoadLibraryW(lpLibFileName);
     };
-
-    if (loader_boundary::OriginalOnly())
-        return original();
 
     if (ThreadHasNoTls())
     {
@@ -564,7 +547,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
         return original();
 
     bool ownLoadFailed = false;
-    const auto handled = CheckLoad(name, 0, &ownLoadFailed);
+    const auto handled = CheckLoad(name, &ownLoadFailed);
     if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
@@ -576,7 +559,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
     const auto result = original();
     const DWORD originalError = GetLastError();
     if (ownLoadFailed && result != nullptr)
-        LibraryLoadHooks::HandleCallerModule(name, name.c_str(), result);
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
     ObserveLoadedXeFG(name, result);
     SetLastError(originalError);
     return result;
@@ -586,20 +569,11 @@ VALIDATE_HOOK(hk_K32_LoadLibraryA, Kernel32Proxy::PFN_LoadLibraryA)
 HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
 {
     const DWORD entryError = GetLastError();
-    if (NativeLoadOnly(lpLibFileName))
-    {
-        SetLastError(entryError);
-        return o_K32_LoadLibraryA(lpLibFileName);
-    }
     const auto original = [&]()
     {
-        loader_boundary::OriginalOnlyScope scope;
         SetLastError(entryError);
         return o_K32_LoadLibraryA(lpLibFileName);
     };
-
-    if (loader_boundary::OriginalOnly())
-        return original();
 
     if (ThreadHasNoTls())
     {
@@ -631,7 +605,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
     }
 
     bool ownLoadFailed = false;
-    const auto handled = CheckLoad(name, 0, &ownLoadFailed);
+    const auto handled = CheckLoad(name, &ownLoadFailed);
     if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
@@ -643,7 +617,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
     const auto result = original();
     const DWORD originalError = GetLastError();
     if (ownLoadFailed && result != nullptr)
-        LibraryLoadHooks::HandleCallerModule(name, name.c_str(), result);
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
     ObserveLoadedXeFG(name, result);
     SetLastError(originalError);
     return result;
@@ -653,21 +627,23 @@ VALIDATE_HOOK(hk_K32_LoadLibraryExW, Kernel32Proxy::PFN_LoadLibraryExW)
 HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
     const DWORD entryError = GetLastError();
-    if (NativeLoadOnly(lpLibFileName, dwFlags))
-    {
-        SetLastError(entryError);
-        return o_K32_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-    }
     const auto original = [&]()
     {
-        loader_boundary::OriginalOnlyScope scope;
         SetLastError(entryError);
         return o_K32_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
     };
 
     if (loader_boundary::NonExecutable(dwFlags))
     {
-        // Preserve legacy preloaded-image behavior; a known fresh no-init image is vetoed thereafter.
+        if (const auto filtered = FilterNoInitLoad(lpLibFileName, dwFlags))
+        {
+            if (filtered != F5Low::kBlockedLoad)
+                return filtered;
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return NULL;
+        }
+
+        // An image loaded without initialization is not bound or hooked (KnownNoInitImages)
         const auto previous = GetModuleHandleW(lpLibFileName);
         const auto module = original();
         const auto error = GetLastError();
@@ -675,9 +651,6 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
         SetLastError(error);
         return module;
     }
-
-    if (loader_boundary::OriginalOnly())
-        return original();
 
     if (ThreadHasNoTls())
     {
@@ -703,7 +676,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
         return original();
 
     bool ownLoadFailed = false;
-    const auto handled = CheckLoad(name, dwFlags, &ownLoadFailed);
+    const auto handled = CheckLoad(name, &ownLoadFailed);
     if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
@@ -715,7 +688,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
     const auto result = original();
     const DWORD originalError = GetLastError();
     if (ownLoadFailed && result != nullptr)
-        LibraryLoadHooks::HandleCallerModule(name, name.c_str(), result);
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
     ObserveLoadedXeFG(name, result);
     SetLastError(originalError);
     return result;
@@ -725,21 +698,23 @@ VALIDATE_HOOK(hk_K32_LoadLibraryExA, Kernel32Proxy::PFN_LoadLibraryExA)
 HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
     const DWORD entryError = GetLastError();
-    if (NativeLoadOnly(lpLibFileName, dwFlags))
-    {
-        SetLastError(entryError);
-        return o_K32_LoadLibraryExA(lpLibFileName, hFile, dwFlags);
-    }
     const auto original = [&]()
     {
-        loader_boundary::OriginalOnlyScope scope;
         SetLastError(entryError);
         return o_K32_LoadLibraryExA(lpLibFileName, hFile, dwFlags);
     };
 
     if (loader_boundary::NonExecutable(dwFlags))
     {
-        // Preserve legacy preloaded-image behavior; a known fresh no-init image is vetoed thereafter.
+        if (const auto filtered = FilterNoInitLoad(lpLibFileName, dwFlags))
+        {
+            if (filtered != F5Low::kBlockedLoad)
+                return filtered;
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return NULL;
+        }
+
+        // An image loaded without initialization is not bound or hooked (KnownNoInitImages)
         const auto previous = GetModuleHandleA(lpLibFileName);
         const auto module = original();
         const auto error = GetLastError();
@@ -747,9 +722,6 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
         SetLastError(error);
         return module;
     }
-
-    if (loader_boundary::OriginalOnly())
-        return original();
 
     if (ThreadHasNoTls())
     {
@@ -781,7 +753,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
     }
 
     bool ownLoadFailed = false;
-    const auto handled = CheckLoad(name, dwFlags, &ownLoadFailed);
+    const auto handled = CheckLoad(name, &ownLoadFailed);
     if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
@@ -793,7 +765,7 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
     const auto result = original();
     const DWORD originalError = GetLastError();
     if (ownLoadFailed && result != nullptr)
-        LibraryLoadHooks::HandleCallerModule(name, name.c_str(), result);
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
     ObserveLoadedXeFG(name, result);
     SetLastError(originalError);
     return result;
@@ -803,21 +775,23 @@ VALIDATE_HOOK(hk_KB_LoadLibraryExW, KernelBaseProxy::PFN_LoadLibraryExW)
 HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 {
     const DWORD entryError = GetLastError();
-    if (NativeLoadOnly(lpLibFileName, dwFlags))
-    {
-        SetLastError(entryError);
-        return o_KB_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-    }
     const auto original = [&]()
     {
-        loader_boundary::OriginalOnlyScope scope;
         SetLastError(entryError);
         return o_KB_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
     };
 
     if (loader_boundary::NonExecutable(dwFlags))
     {
-        // Preserve legacy preloaded-image behavior; a known fresh no-init image is vetoed thereafter.
+        if (const auto filtered = FilterNoInitLoad(lpLibFileName, dwFlags))
+        {
+            if (filtered != F5Low::kBlockedLoad)
+                return filtered;
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return NULL;
+        }
+
+        // An image loaded without initialization is not bound or hooked (KnownNoInitImages)
         const auto previous = GetModuleHandleW(lpLibFileName);
         const auto module = original();
         const auto error = GetLastError();
@@ -825,9 +799,6 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
         SetLastError(error);
         return module;
     }
-
-    if (loader_boundary::OriginalOnly())
-        return original();
 
     if (ThreadHasNoTls())
     {
@@ -853,7 +824,7 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
         return original();
 
     bool ownLoadFailed = false;
-    const auto handled = CheckLoad(name, dwFlags, &ownLoadFailed);
+    const auto handled = CheckLoad(name, &ownLoadFailed);
     if (handled == F5Low::kBlockedLoad)
     {
         SetLastError(ERROR_MOD_NOT_FOUND);
@@ -865,7 +836,7 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
     const auto result = original();
     const DWORD originalError = GetLastError();
     if (ownLoadFailed && result != nullptr)
-        LibraryLoadHooks::HandleCallerModule(name, name.c_str(), result);
+        LibraryLoadHooks::ObserveOrdinaryModule(result);
     ObserveLoadedXeFG(name, result);
     SetLastError(originalError);
     return result;
@@ -874,6 +845,8 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
 VALIDATE_HOOK(hk_K32_FreeLibrary, Kernel32Proxy::PFN_FreeLibrary)
 BOOL KernelHooks::hk_K32_FreeLibrary(HMODULE lpLibrary)
 {
+    LibraryLoadHooks::ForgetNonExecutable(lpLibrary);
+
     if (ThreadHasNoTls())
     {
         // Still keep OptiScaler and the proxies loaded (their detours are live), the bookkeeping in modulesToFree

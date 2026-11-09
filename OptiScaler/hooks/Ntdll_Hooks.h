@@ -59,22 +59,18 @@ class NtdllHooks
                                        PHANDLE ModuleHandle)
     {
         const DWORD entryError = GetLastError();
-        if (loader_boundary::OriginalOnly())
-        {
-            SetLastError(entryError);
-            return o_LdrLoadDll(PathToFile, Flags, ModuleFileName, ModuleHandle);
-        }
         if (ThreadHasNoTls())
         {
             auto result = o_LdrLoadDll(PathToFile, Flags, ModuleFileName, ModuleHandle);
-            if (NT_SUCCESS(result) && ModuleHandle != nullptr)
-                LibraryLoadHooks::RecordDeferredLoad(static_cast<HMODULE>(*ModuleHandle), false);
+            // Not a no-init load (DONT_RESOLVE_DLL_REFERENCES): those are never set up
+            if (NT_SUCCESS(result) && ModuleHandle != nullptr &&
+                (Flags == nullptr || (*Flags & IMAGE_FILE_EXECUTABLE_IMAGE) == 0))
+                LibraryLoadHooks::RecordDeferredLoad(static_cast<HMODULE>(*ModuleHandle));
             return result;
         }
 
         const auto original = [&]()
         {
-            loader_boundary::OriginalOnlyScope scope;
             SetLastError(entryError);
             return o_LdrLoadDll(PathToFile, Flags, ModuleFileName, ModuleHandle);
         };
@@ -87,9 +83,9 @@ class NtdllHooks
             ModuleFileName->Length % sizeof(wchar_t) != 0 || ModuleFileName->Length > ModuleFileName->MaximumLength)
             return original();
 
-        // Native flag values are not Win32 dwFlags. Unrecognized native modes are original-only.
-        if (Flags != nullptr && *Flags != 0)
-            return original();
+        // DONT_RESOLVE_DLL_REFERENCES arrives here as IMAGE_FILE_EXECUTABLE_IMAGE: the image is mapped without its
+        // initialization, so nothing is set up for it; only the F5Low DLSS-G block applies (below)
+        const bool noInit = Flags != nullptr && (*Flags & IMAGE_FILE_EXECUTABLE_IMAGE) != 0;
         const std::wstring_view view(ModuleFileName->Buffer, ModuleFileName->Length / sizeof(wchar_t));
         if (State::Instance().isShuttingDown || LibraryLoadHooks::IsApiSetName(view) ||
             view.find(L'\0') != std::wstring_view::npos)
@@ -98,6 +94,26 @@ class NtdllHooks
         std::wstring name;
         if (!loader_boundary::CopyName(view, name))
             return original();
+
+        if (noInit)
+        {
+            const auto filtered = F5Low::FilterGameDlssg(name, false);
+            if (filtered == F5Low::kBlockedLoad)
+                return STATUS_DLL_NOT_FOUND;
+            if (filtered != nullptr)
+            {
+                *ModuleHandle = (HANDLE) filtered;
+                return (NTSTATUS) 0x00000000L;
+            }
+
+            const auto previous = KernelBaseProxy::GetModuleHandleW_()(name.c_str());
+            const NTSTATUS status = original();
+            const DWORD error = GetLastError();
+            if (NT_SUCCESS(status))
+                LibraryLoadHooks::RecordNonExecutable(static_cast<HMODULE>(*ModuleHandle), previous);
+            SetLastError(error);
+            return status;
+        }
 
 #ifdef _DEBUG
         // LOG_DEBUG("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
@@ -119,7 +135,7 @@ class NtdllHooks
 
         // if (originalModule != Util::GetCallerModule(_ReturnAddress()))
         {
-            auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), false, &ownLoadFailed);
+            auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), name.data(), &ownLoadFailed);
 
             // skip loading of dll
             if (moduleHandle == (HMODULE) 1337 || moduleHandle == F5Low::kBlockedLoad)
@@ -135,11 +151,13 @@ class NtdllHooks
             }
         }
 
-        SetLastError(entryError);
         const NTSTATUS status = ObserveXeFGLoadResult(original(), name, ModuleHandle);
         const DWORD originalError = GetLastError();
 
-        // Arbitrary native recovery has no supported caller-context/provenance contract.
+        // OptiScaler's own load of the file failed and the caller's worked: set it up from the caller's module
+        if (ownLoadFailed && NT_SUCCESS(status) && *ModuleHandle != nullptr)
+            LibraryLoadHooks::ObserveOrdinaryModule(static_cast<HMODULE>(*ModuleHandle));
+
         SetLastError(originalError);
         return status;
     }
@@ -148,22 +166,18 @@ class NtdllHooks
                                       PHANDLE ModuleHandle)
     {
         const DWORD entryError = GetLastError();
-        if (loader_boundary::OriginalOnly())
-        {
-            SetLastError(entryError);
-            return o_NtLoadDll(PathToFile, Flags, ModuleFileName, ModuleHandle);
-        }
         if (ThreadHasNoTls())
         {
             auto result = o_NtLoadDll(PathToFile, Flags, ModuleFileName, ModuleHandle);
-            if (NT_SUCCESS(result) && ModuleHandle != nullptr)
-                LibraryLoadHooks::RecordDeferredLoad(static_cast<HMODULE>(*ModuleHandle), false);
+            // Not a no-init load (DONT_RESOLVE_DLL_REFERENCES): those are never set up
+            if (NT_SUCCESS(result) && ModuleHandle != nullptr &&
+                (Flags == nullptr || (*Flags & IMAGE_FILE_EXECUTABLE_IMAGE) == 0))
+                LibraryLoadHooks::RecordDeferredLoad(static_cast<HMODULE>(*ModuleHandle));
             return result;
         }
 
         const auto original = [&]()
         {
-            loader_boundary::OriginalOnlyScope scope;
             SetLastError(entryError);
             return o_NtLoadDll(PathToFile, Flags, ModuleFileName, ModuleHandle);
         };
@@ -176,9 +190,9 @@ class NtdllHooks
             ModuleFileName->Length % sizeof(wchar_t) != 0 || ModuleFileName->Length > ModuleFileName->MaximumLength)
             return original();
 
-        // Native flag values are not Win32 dwFlags. Unrecognized native modes are original-only.
-        if (Flags != nullptr && *Flags != 0)
-            return original();
+        // DONT_RESOLVE_DLL_REFERENCES arrives here as IMAGE_FILE_EXECUTABLE_IMAGE: the image is mapped without its
+        // initialization, so nothing is set up for it; only the F5Low DLSS-G block applies (below)
+        const bool noInit = Flags != nullptr && (*Flags & IMAGE_FILE_EXECUTABLE_IMAGE) != 0;
         const std::wstring_view view(ModuleFileName->Buffer, ModuleFileName->Length / sizeof(wchar_t));
         if (State::Instance().isShuttingDown || LibraryLoadHooks::IsApiSetName(view) ||
             view.find(L'\0') != std::wstring_view::npos)
@@ -187,6 +201,26 @@ class NtdllHooks
         std::wstring name;
         if (!loader_boundary::CopyName(view, name))
             return original();
+
+        if (noInit)
+        {
+            const auto filtered = F5Low::FilterGameDlssg(name, false);
+            if (filtered == F5Low::kBlockedLoad)
+                return STATUS_DLL_NOT_FOUND;
+            if (filtered != nullptr)
+            {
+                *ModuleHandle = (HANDLE) filtered;
+                return (NTSTATUS) 0x00000000L;
+            }
+
+            const auto previous = KernelBaseProxy::GetModuleHandleW_()(name.c_str());
+            const NTSTATUS status = original();
+            const DWORD error = GetLastError();
+            if (NT_SUCCESS(status))
+                LibraryLoadHooks::RecordNonExecutable(static_cast<HMODULE>(*ModuleHandle), previous);
+            SetLastError(error);
+            return status;
+        }
 
 #ifdef _DEBUG
         // LOG_DEBUG("{}, caller: {}", wstring_to_string(name.data()), Util::WhoIsTheCaller(_ReturnAddress()));
@@ -212,7 +246,7 @@ class NtdllHooks
         // Do not interfere with original modules calls
         if (originalModule != Util::GetCallerModule(_ReturnAddress()))
         {
-            auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), path.data(), false, &ownLoadFailed);
+            auto moduleHandle = LibraryLoadHooks::LoadLibraryCheckW(name.data(), path.data(), &ownLoadFailed);
 
             // skip loading of dll
             if (moduleHandle == (HMODULE) 1337 || moduleHandle == F5Low::kBlockedLoad)
@@ -228,21 +262,26 @@ class NtdllHooks
             }
         }
 
-        SetLastError(entryError);
         const NTSTATUS status = original();
         const DWORD originalError = GetLastError();
 
-        // Arbitrary native recovery has no supported caller-context/provenance contract.
+        // OptiScaler's own load of the file failed and the caller's worked: set it up from the caller's module
+        if (ownLoadFailed && NT_SUCCESS(status) && *ModuleHandle != nullptr)
+            LibraryLoadHooks::ObserveOrdinaryModule(static_cast<HMODULE>(*ModuleHandle));
+
         SetLastError(originalError);
         return status;
     }
 
     static NTSTATUS NTAPI hkLdrUnloadDll(PVOID lpLibrary)
     {
+        LibraryLoadHooks::ForgetNonExecutable(static_cast<HMODULE>(lpLibrary));
+
         if (ThreadHasNoTls())
         {
-            // See KernelHooks::hk_K32_FreeLibrary
-            if (LibraryLoadHooks::IsKeptLoaded(lpLibrary))
+            // See KernelHooks::hk_K32_FreeLibrary. The MFG unlock's module tracking needs TLS: while it is on, a
+            // module freed here stays loaded rather than unloading under its patches.
+            if (LibraryLoadHooks::IsKeptLoaded(lpLibrary) || MfgUnlock::AnyFamilyEnabled())
                 return (NTSTATUS) 0x00000000L;
 
             return o_LdrUnloadDll(lpLibrary);

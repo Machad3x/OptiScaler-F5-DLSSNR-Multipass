@@ -2456,8 +2456,6 @@ bool D3D12Hooks::Hook()
     d3d12_binding::Claim claim;
     if (!claim || D3d12Proxy::Module() == nullptr)
         return false;
-    loader_boundary::OriginalOnlyScope scope;
-
     if (o_D3D12CreateDevice == nullptr)
         D3d12Proxy::Hook_D3D12CreateDevice(hkD3D12CreateDevice, &o_D3D12CreateDevice);
 

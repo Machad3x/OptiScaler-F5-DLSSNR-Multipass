@@ -1,14 +1,16 @@
-# Bounded loader recovery
+# D3D12 setup when a load could not be handled
 
-The ordinary failed speculative load -> exact original load -> observe returned image path is retained.
-**New synchronous recovery supports `d3d12.dll` only, from ordinary executable Win32 loads outside foreign DLL initialization callouts.** This is a caller support precondition, not a runtime loader-lock detector. TLS availability, an EXE return address, a retained HMODULE, a filename and successful LoadLibrary do not prove either initialization provenance or loader context. Arbitrary native/DllMain recovery is unsupported. Existing ordinary provider, local/game/FG and startup discovery policies are otherwise retained.
+OptiScaler normally sets up its D3D12 hooks while the game loads `d3d12.dll`. Three cases stop that from happening at that moment:
 
-Ex data/resource/no-init modes run original-only, including their nested Win32/native calls. Unknown nonzero native modes run original-only without interpreting native bits as Win32 flags. Bounded, non-TLS scope slots never wait; capacity exhaustion conservatively bypasses interception on concurrent threads while an overflow scope is active.
+- the load runs on a thread without a TLS array (World of Warcraft's loader does this), where OptiScaler's load handling cannot run;
+- OptiScaler's own load of the file fails, but the game's load works (an older `d3d12.dll` next to the exe can do this);
+- another thread is setting up D3D12 at that moment.
 
-A fresh observed untagged non-executable mapping is vetoed in later discovery and D3D12 binding. Up to 64 veto identities are independently retained until process exit to prevent address-reuse mistakes; repeated observations do not grow their references. Retention/capacity failure refuses further image interception. A request returning a previously present mapping does not overwrite legacy accepted provenance. **Unknown pre-hook initialization provenance is an inherited limitation**: an existing no-init image can satisfy normal identity/reference/load checks and still reach preserved legacy discovery. This patch does not make that universally safe. Path aliases/concurrent preexisting-image loads are not an initialization witness either.
+**What happens then.** If the game's load succeeded, the module is set up right away when possible. Otherwise it is recorded, with one reference, and set up later: after DLL attach (the GPU info worker) and at every DXGI factory creation, until it works.
 
-D3D12 binding retains the actual image and validates its full path before publication. Export publication and export-hook installation share one nonblocking owner across normal, direct and recovery entries. Readiness requires the required stages to commit; partial stages retain the image and retry missing stages. Another image, unsupported families and failed/disabled stages are not reported recovered. No recovered input/output-provider equivalence is claimed for DXGI, Agility, Streamline, XeSS, FFX, FSR, NVNGX, NVAPI, AMD or Vulkan. Their existing normal behavior is not removed.
+**Limits.**
 
-Missed-load publication remains atomic. The existing post-attach GPU-information worker has one bounded opportunity to process at most 32 independently retained ordinary Win32 candidates. Queries, version and unload hooks never consume it. Native-only marks cannot promote arbitrary images. No waiting worker, loader-lock query, draw/present scan or automatic later retry is introduced. Loads after this opportunity, busy/failed attempts, capacity failures, worker creation failure and shutdown can remain unrecovered. A successful load's handle, status, arguments, output and outgoing LastError are not changed by observation.
-
-Recovery cannot replay redirects, blocks, cached addresses/capabilities or earlier API calls. Existing depth/list/provider locks, private-vtable first-sighting allocation and process-wide Detours interactions outside the supported leaf remain separate inherited constraints. Host fixtures establish their stated contracts, not active in-game frame generation or universal loader safety.
+- Only `d3d12.dll` is recovered this way. Redirects and blocks for other DLLs on a thread without TLS do not happen, and a handle already returned to the game is not changed.
+- Up to 32 modules wait at once. A path longer than 1023 characters is not recognised.
+- Images loaded with `DONT_RESOLVE_DLL_REFERENCES` are never set up, because their initialization did not run. OptiScaler remembers up to 64 of them, without a reference, until the game frees them. When the list is full, new ones are not remembered. The F5Low DLSS-G block still applies to these loads.
+- Files loaded as data or resources are left alone.

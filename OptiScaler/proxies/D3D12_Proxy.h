@@ -11,7 +11,6 @@
 
 #include <d3d12.h>
 #include <misc/D3d12Binding.h>
-#include <misc/LoaderBoundary.h>
 #include <hooks/LibraryLoad_Hooks.h>
 
 class D3d12Proxy
@@ -35,7 +34,6 @@ class D3d12Proxy
         if (bound != nullptr)
             return module == nullptr || module == bound;
 
-        loader_boundary::OriginalOnlyScope scope;
         bool ownReference = false;
         if (module == nullptr)
         {
@@ -62,9 +60,7 @@ class D3d12Proxy
         if (!acquired)
             return false;
 
-        wchar_t path[32768];
-        const auto length = GetModuleFileNameW(retained, path, static_cast<DWORD>(std::size(path)));
-        if (retained != module || length == 0 || length >= std::size(path))
+        if (retained != module)
         {
             NtdllProxy::FreeLibrary_Ldr(retained);
             return false;

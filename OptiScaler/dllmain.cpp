@@ -956,8 +956,8 @@ static void CheckWorkingMode()
     if (D3d12Proxy::Module() == nullptr && State::Instance().gameQuirks & GameQuirk::LoadD3D12Manually)
     {
         LOG_DEBUG("Loading d3d12.dll manually");
-        if (!D3d12Proxy::Init() || !D3D12Hooks::Hook())
-            LibraryLoadHooks::RecordDeferredLoad(D3d12Proxy::Module());
+        if (D3d12Proxy::Init())
+            D3D12Hooks::Hook();
     }
 
     d3d12AgilityModule = GetDllNameWModule(&dx12agilityNamesW);

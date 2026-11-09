@@ -78,17 +78,19 @@ static HANDLE seenFile=nullptr; static DWORD seenFlags=0;
 static void* seenSearch=nullptr; static PULONG seenNativeFlags=nullptr;
 static PUNICODE_STRING seenUnicode=nullptr; static PHANDLE seenOutput=nullptr;
 static bool writeOutput=true;
+struct KernelBaseProxy { static auto GetModuleHandleW_() { return &GetModuleHandleW; } };
 struct LibraryLoadHooks {
     static void CatchUpDeferredLoads() { SetLastError(0xaaaa); }
     static void RecordNonExecutable(HMODULE, HMODULE) {}
     static void RecordDeferredLoad(HMODULE m, bool = true) { if (m) ++marks; }
     static bool IsApiSetName(std::wstring_view n) { return n.starts_with(L"api-ms-"); }
     static bool EndsWithInsensitive(std::wstring_view, std::wstring_view) { return false; }
-    static HMODULE LoadLibraryCheckW(std::wstring name, LPCWSTR, bool, bool* failed) {
+    static HMODULE LoadLibraryCheckW(std::wstring name, LPCWSTR, bool* failed) {
         ++checks; checkedName = std::move(name); *failed = failOwn;
         SetLastError(0xbbbb); return speculative;
     }
-    static void HandleCallerModule(const std::wstring&, LPCWSTR, HMODULE m) {
+    static void ForgetNonExecutable(HMODULE) {}
+    static void ObserveOrdinaryModule(HMODULE m) {
         CHECK(m == actual); ++observations; SetLastError(0xcccc);
     }
 };
@@ -106,7 +108,8 @@ static NTSTATUS NTAPI OriginalLdr(PWSTR path, PULONG flags, PUNICODE_STRING n, P
 static NTSTATUS NTAPI OriginalNt(PUNICODE_STRING path, PULONG flags, PUNICODE_STRING n, PHANDLE out) {
     const auto status=OriginalLdr(nullptr,flags,n,out); seenSearch=path; return status;
 }
-namespace F5Low { inline const HMODULE kBlockedLoad = reinterpret_cast<HMODULE>(static_cast<ULONG_PTR>(0x1339)); }
+namespace F5Low { inline const HMODULE kBlockedLoad = reinterpret_cast<HMODULE>(static_cast<ULONG_PTR>(0x1339));
+inline HMODULE FilterGameDlssg(const std::wstring&, bool) { return nullptr; } }
 static HMODULE ObserveLoadedXeFG(std::wstring_view, HMODULE m) { return m; }
 struct KernelHooks {
     inline static auto o_K32_LoadLibraryW = OriginalW;
@@ -142,14 +145,18 @@ int main() {
     Reset(); CHECK(KernelHooks::hk_K32_LoadLibraryExW(name, nullptr, 0) == actual); CheckOriginalOutcome();
     Reset(); CHECK(KernelHooks::hk_K32_LoadLibraryExA("d3d12.dll", nullptr, 0) == actual); CheckOriginalOutcome();
     Reset(); CHECK(KernelHooks::hk_KB_LoadLibraryExW(name, nullptr, 0) == actual); CheckOriginalOutcome();
+    // Own load failed, the caller's worked: the native hooks hand the caller's module on, like the Win32 ones
     Reset(); CHECK(NtdllHooks::hkLdrLoadDll(nullptr, nullptr, &u, &out) == originalStatus);
-    CHECK(out == actual); CheckOriginalOutcome(0);
+    CHECK(out == actual); CheckOriginalOutcome();
     Reset(); CHECK(NtdllHooks::hkNtLoadDll(nullptr, nullptr, &u, &out) == originalStatus);
-    CHECK(out == actual); CheckOriginalOutcome(0);
+    CHECK(out == actual); CheckOriginalOutcome();
     ULONG nativeFlags=0x1000; wchar_t search[]=L"C:/original-search";
     Reset(); NtdllHooks::hkLdrLoadDll(search,&nativeFlags,&u,&out);
     CHECK(seenSearch==search && seenNativeFlags==&nativeFlags && seenUnicode==&u && seenOutput==&out);
-    CHECK(checks==0); CHECK(originalIncoming==0x1234);
+    CHECK(checks==1); CHECK(originalIncoming==0x1234); // other native flags are checked, as before
+    ULONG noInitFlags=IMAGE_FILE_EXECUTABLE_IMAGE; // DONT_RESOLVE_DLL_REFERENCES: not set up, only the F5Low filter
+    Reset(); NtdllHooks::hkLdrLoadDll(search,&noInitFlags,&u,&out); CHECK(checks==0); CHECK(originalCalls==1);
+    Reset(); NtdllHooks::hkNtLoadDll(&u,&noInitFlags,&u,&out); CHECK(checks==0); CHECK(originalCalls==1);
     Reset(); NtdllHooks::hkNtLoadDll(&u,&nativeFlags,&u,&out);
     CHECK(seenSearch==&u && seenNativeFlags==&nativeFlags && seenUnicode==&u && seenOutput==&out);
     Reset(); originalStatus=STATUS_DLL_NOT_FOUND; writeOutput=false;out=reinterpret_cast<HANDLE>(0x7777);
@@ -186,12 +193,6 @@ int main() {
         CHECK(checks == 0); CHECK(observations == 0);
         Reset(); CHECK(KernelHooks::hk_KB_LoadLibraryExW(name, nullptr, flags) == actual);
         CHECK(checks == 0); CHECK(observations == 0);
-    }
-    // The ABI originals remain safe stand-ins; exercise nesting without invoking a real loader with cleared TLS.
-    {
-        loader_boundary::OriginalOnlyScope outer;
-        Reset(); NtdllHooks::hkLdrLoadDll(nullptr,nullptr,&u,&out); CHECK(checks==0); CHECK(observations==0);
-        NtdllHooks::hkNtLoadDll(nullptr,nullptr,&u,&out); CHECK(checks==0);
     }
     for (int which=0; which!=2; ++which) {
         for (UNICODE_STRING malformed : {UNICODE_STRING{1,sizeof(name),name},
@@ -264,6 +265,8 @@ def main():
     if 'static bool NativeLoadOnly(' in kernel:
         parts += [function_body(kernel, 'template <class C> static bool NativeLoadOnly(')]
     parts += [function_body(kernel, "static inline HMODULE CheckLoad(")]
+    if 'static HMODULE FilterNoInitLoad(' in kernel:
+        parts += [function_body(kernel, 'template <class C> static HMODULE FilterNoInitLoad(')]
     parts += [function_body(kernel, f"HMODULE KernelHooks::{name}(") for name in (
         "hk_K32_LoadLibraryW", "hk_K32_LoadLibraryA", "hk_K32_LoadLibraryExW",
         "hk_K32_LoadLibraryExA", "hk_KB_LoadLibraryExW")]

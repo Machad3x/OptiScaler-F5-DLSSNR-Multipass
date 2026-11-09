@@ -124,28 +124,13 @@ static HMODULE OurXeCopyFor(const char* what, LPCWSTR lpLibFullPath, HMODULE our
     return result;
 }
 
-HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibFullPath, bool dataOnly,
-                                            bool* ownLoadFailed)
+HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibFullPath, bool* ownLoadFailed)
 {
-    return HandleLibraryLoad(std::move(libName), lpLibFullPath, nullptr, dataOnly, ownLoadFailed);
-}
-
-HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibFullPath, HMODULE loadedModule,
-                                            bool dataOnly, bool* ownLoadFailed)
-{
-    if (KnownNonExecutable(KernelBaseProxy::GetModuleHandleW_()(lpLibFullPath)))
-        return nullptr;
-    loader_boundary::OriginalOnlyScope internalWork;
-    const bool alreadyLoaded = loadedModule != nullptr;
-
     // This load doesn't always resolve to the file the caller's own load gets: an older same-named runtime next to
     // the exe can be found first and fail to load. A failed load is reported back, so the caller's original load
-    // runs and this is called again with the module it returned.
-    const auto load = [loadedModule, ownLoadFailed](LPCWSTR path, HANDLE file, DWORD flags)
+    // runs and the caller passes its module to ObserveOrdinaryModule.
+    const auto load = [ownLoadFailed](LPCWSTR path, HANDLE file, DWORD flags)
     {
-        if (loadedModule != nullptr)
-            return loadedModule;
-
         const HMODULE module = NtdllProxy::LoadLibraryExW_Ldr(path, file, flags);
         if (module == nullptr && ownLoadFailed != nullptr)
             *ownLoadFailed = true;
@@ -153,11 +138,8 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
         return module;
     };
 
-    if (!alreadyLoaded)
-    {
-        if (auto isolated = StreamlineHooks::LoadIsolatedGamePlugin(lpLibFullPath))
-            return isolated;
-    }
+    if (auto isolated = StreamlineHooks::LoadIsolatedGamePlugin(lpLibFullPath))
+        return isolated;
 
     auto libNameA = wstring_to_string(libName);
 
@@ -183,7 +165,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
     // F5Low runs DLSS-G in a Streamline of its own: a second nvngx_dlssg.dll, the game's, faults the GPU. It is kept
     // out (kBlockedLoad), or the load is handed F5Low's copy when that one is loaded already. A bare-name load by the
     // game's Streamline, once ours is loaded, gets our module from the loader: intended.
-    if (const auto filtered = F5Low::FilterGameDlssg(libName, dataOnly))
+    if (const auto filtered = F5Low::FilterGameDlssg(libName, false))
         return filtered;
 
     std::filesystem::path localSlPath(Config::Instance()->MainDllPath.value());
@@ -200,14 +182,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
     auto pos = libName.rfind(exePath);
 
-    if (alreadyLoaded && CheckDllNameW(&libName, &nvngxNamesW))
-    {
-        NVNGXProxy::InitNVNGX(loadedModule);
-        return loadedModule;
-    }
-
-    if (!alreadyLoaded && Config::Instance()->EnableDlssInputs.value_or_default() &&
-        CheckDllNameW(&libName, &nvngxNamesW) &&
+    if (Config::Instance()->EnableDlssInputs.value_or_default() && CheckDllNameW(&libName, &nvngxNamesW) &&
         (!Config::Instance()->HookOriginalNvngxOnly.value_or_default() || pos == std::string::npos))
     {
         LOG_INFO("nvngx call: {0}, returning this dll!", libNameA);
@@ -218,8 +193,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
         return dllModule;
     }
 
-    if (!alreadyLoaded &&
-        (State::Instance().workingMode != WorkingMode::Dxgi || !State::Instance().skipDxgiLoadChecks) &&
+    if ((State::Instance().workingMode != WorkingMode::Dxgi || !State::Instance().skipDxgiLoadChecks) &&
         CheckDllNameW(&libName, &dllNamesW))
     {
         if (!State::Instance().ServeOriginal())
@@ -235,8 +209,8 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
     }
 
     // nvngx_dlss
-    if (!alreadyLoaded && Config::Instance()->DLSSEnabled.value_or_default() &&
-        Config::Instance()->NVNGX_DLSS_Library.has_value() && CheckDllNameW(&libName, &nvngxDlssNamesW))
+    if (Config::Instance()->DLSSEnabled.value_or_default() && Config::Instance()->NVNGX_DLSS_Library.has_value() &&
+        CheckDllNameW(&libName, &nvngxDlssNamesW))
     {
         auto nvngxDlss = LoadNvngxDlss(libName);
 
@@ -273,12 +247,6 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
     {
         LOG_INFO("{} call!", libNameA);
 
-        if (alreadyLoaded)
-        {
-            NvApiHooks::Hook(loadedModule);
-            return loadedModule;
-        }
-
         return LibraryLoadHooks::LoadNvApi();
     }
 
@@ -292,8 +260,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
         if (streamlineModule != nullptr && streamlineModule != State::Instance().optiSlInterposer)
         {
-            if (!alreadyLoaded || !StreamlineHooks::isInterposerHooked())
-                StreamlineHooks::hookInterposer(streamlineModule);
+            StreamlineHooks::hookInterposer(streamlineModule);
             slInterposerModule = streamlineModule;
         }
         else
@@ -314,8 +281,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
         if (dlssModule != nullptr)
         {
-            if (!alreadyLoaded || !StreamlineHooks::isDlssHooked())
-                StreamlineHooks::hookDlss(dlssModule);
+            StreamlineHooks::hookDlss(dlssModule);
         }
         else
         {
@@ -336,15 +302,9 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
             const bool localDlssg = pathInsideLocalSlPath && State::Instance().activeFgOutput == FGOutput::DLSSG;
 
             if (!localDlssg && dlssgModule != State::Instance().optiSlDLSSG)
-            {
-                if (!alreadyLoaded || !StreamlineHooks::isDlssgHooked())
-                    StreamlineHooks::hookDlssg(dlssgModule);
-            }
+                StreamlineHooks::hookDlssg(dlssgModule);
             else
-            {
-                if (!alreadyLoaded || !StreamlineHooks::isLocalDlssgHooked())
-                    StreamlineHooks::hookLocalDlssg(dlssgModule);
-            }
+                StreamlineHooks::hookLocalDlssg(dlssgModule);
         }
         else
         {
@@ -362,8 +322,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
         if (reflexModule != nullptr && reflexModule != State::Instance().optiSlReflex)
         {
-            if (!alreadyLoaded || !StreamlineHooks::isReflexHooked())
-                StreamlineHooks::hookReflex(reflexModule);
+            StreamlineHooks::hookReflex(reflexModule);
         }
         else
         {
@@ -381,8 +340,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
         if (pclModule != nullptr && pclModule != State::Instance().optiSlPCL)
         {
-            if (!alreadyLoaded || !StreamlineHooks::isPclHooked())
-                StreamlineHooks::hookPcl(pclModule);
+            StreamlineHooks::hookPcl(pclModule);
         }
         else
         {
@@ -400,8 +358,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
         if (commonModule != nullptr && commonModule != State::Instance().optiSlCommon)
         {
-            if (!alreadyLoaded || !StreamlineHooks::isCommonHooked())
-                StreamlineHooks::hookCommon(commonModule);
+            StreamlineHooks::hookCommon(commonModule);
         }
         else
         {
@@ -412,25 +369,24 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
     }
 
     // Make EOS block separate as it's the only one having issues with non-OptiFG FGs
-    if (!alreadyLoaded && !Config::Instance()->DisableOverlays.has_value() &&
-        State::Instance().activeFgOutput != FGOutput::NoFG && CheckDllNameW(&libName, &eosOverlayNamesW))
+    if (!Config::Instance()->DisableOverlays.has_value() && State::Instance().activeFgOutput != FGOutput::NoFG &&
+        CheckDllNameW(&libName, &eosOverlayNamesW))
     {
         LOG_DEBUG("Blocking overlay dll: {}", wstring_to_string(libName));
         return (HMODULE) 1337;
     }
 
-    if (!alreadyLoaded && CheckDllNameW(&libName, &blockedDllNamesW))
+    if (CheckDllNameW(&libName, &blockedDllNamesW))
     {
         LOG_DEBUG("Blocking dll: {}", wstring_to_string(libName));
         return (HMODULE) 1337;
     }
-    else if (!alreadyLoaded && Config::Instance()->DisableOverlays.value_or_default() &&
-             CheckDllNameW(&libName, &blockOverlayNamesW))
+    else if (Config::Instance()->DisableOverlays.value_or_default() && CheckDllNameW(&libName, &blockOverlayNamesW))
     {
         LOG_DEBUG("Blocking overlay dll: {}", wstring_to_string(libName));
         return (HMODULE) 1337;
     }
-    else if (!alreadyLoaded && CheckDllNameW(&libName, &overlayNamesW))
+    else if (CheckDllNameW(&libName, &overlayNamesW))
     {
         // If we hook CreateSwapChainForHwnd & CreateSwapChainForCoreWindow here
         // Order of CreateSwapChain calls become
@@ -520,6 +476,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
         if (module != nullptr)
         {
+            // A busy binding (another thread is setting it up) or a failed install is retried later
             if (!D3d12Proxy::Init(module) || !D3D12Hooks::Hook())
                 RecordDeferredLoad(module);
         }
@@ -560,9 +517,6 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
             DxgiProxy::Init(module);
             DxgiHooks::Hook();
         }
-
-        if (alreadyLoaded)
-            return module;
     }
 
     if (CheckDllNameW(&libName, &fsr2NamesW))
@@ -653,9 +607,9 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
 
     if (CheckDllNameW(&libName, &amdxc64NamesW))
     {
-        HMODULE moduleAmdxc64 = loadedModule;
+        HMODULE moduleAmdxc64 = nullptr;
 
-        if (!alreadyLoaded && Config::Instance()->LoadCustomAmdxc64OnRdna2.value_or_default())
+        if (Config::Instance()->LoadCustomAmdxc64OnRdna2.value_or_default())
         {
             auto allDetectedGpus = IdentifyGpu::getAllGpus();
             GpuInformation gpuMatchingDriverStore {};
@@ -787,8 +741,7 @@ HMODULE LibraryLoadHooks::HandleLibraryLoad(std::wstring libName, LPCWSTR lpLibF
         return module;
     }
 
-    if (!alreadyLoaded)
-        CheckModulesInMemory();
+    CheckModulesInMemory();
 
     return nullptr;
 }
@@ -811,102 +764,99 @@ HMODULE RetainImage(HMODULE image) noexcept
     return retained;
 }
 void ReleaseImage(HMODULE image) noexcept { NtdllProxy::FreeLibrary_Ldr(image); }
+
+// The module's file is ...\d3d12.dll (ASCII case-insensitive). No heap or CRT: threads without a TLS array call this.
+// A path longer than the buffer is not matched.
+bool IsD3d12Image(HMODULE image) noexcept
+{
+    wchar_t path[1024];
+    const DWORD length = GetModuleFileNameW(image, path, static_cast<DWORD>(std::size(path)));
+    constexpr wchar_t suffix[] = L"\\d3d12.dll";
+    constexpr DWORD suffixLength = static_cast<DWORD>(std::size(suffix) - 1);
+    if (length == 0 || length >= std::size(path) || length < suffixLength)
+        return false;
+    for (DWORD i = 0; i < suffixLength; ++i)
+    {
+        wchar_t c = path[length - suffixLength + i];
+        if (c >= L'A' && c <= L'Z')
+            c = static_cast<wchar_t>(c - L'A' + L'a');
+        else if (c == L'/')
+            c = L'\\';
+        if (c != suffix[i])
+            return false;
+    }
+    return true;
+}
 } // namespace
 
 bool LibraryLoadHooks::KnownNonExecutable(HMODULE module) { return _noInit.Contains(module); }
 
-void LibraryLoadHooks::RecordNonExecutable(HMODULE module, HMODULE previous)
-{
-    _noInit.Record(module, previous, RetainImage, ReleaseImage);
-}
+void LibraryLoadHooks::RecordNonExecutable(HMODULE module, HMODULE previous) { _noInit.Record(module, previous); }
 
-void LibraryLoadHooks::RecordDeferredLoad(HMODULE module, bool ordinaryWin32)
+void LibraryLoadHooks::ForgetNonExecutable(HMODULE module) { _noInit.Forget(module); }
+
+// Plain atomics and loader calls only: threads without a TLS array call this
+void LibraryLoadHooks::RecordDeferredLoad(HMODULE module)
 {
-    if (module == nullptr)
+    if (module == nullptr || (reinterpret_cast<ULONG_PTR>(module) & 3) != 0 || KnownNonExecutable(module) ||
+        !IsD3d12Image(module))
         return;
-    _deferredScan.Mark();
-    if (!ordinaryWin32 || _workerClosed.load(std::memory_order_acquire) || KnownNonExecutable(module))
-        return;
+
     const auto retained = RetainImage(module);
     if (!retained)
         return;
+
+    for (auto& slot : _deferredImages)
+    {
+        if (slot.load(std::memory_order_acquire) == retained)
+        {
+            ReleaseImage(retained); // already waiting
+            _deferredScan.Mark();
+            return;
+        }
+    }
+
     for (auto& slot : _deferredImages)
     {
         HMODULE empty = nullptr;
         if (slot.compare_exchange_strong(empty, retained, std::memory_order_acq_rel))
         {
-            if (_workerClosed.load(std::memory_order_acquire))
-            {
-                auto expected = retained;
-                if (slot.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel))
-                    ReleaseImage(retained);
-            }
+            _deferredScan.Mark();
             return;
         }
-        if (empty == retained)
-            break;
     }
-    ReleaseImage(retained);
-}
 
-LibraryLoadHooks::RecoveryResult LibraryLoadHooks::HandleCallerModule(const std::wstring&, LPCWSTR, HMODULE module)
-{
-    return ObserveOrdinaryModule(module);
+    ReleaseImage(retained);
 }
 
 LibraryLoadHooks::RecoveryResult LibraryLoadHooks::ObserveOrdinaryModule(HMODULE module)
 {
     if (!module || module == dllModule || (reinterpret_cast<ULONG_PTR>(module) & 3) != 0)
         return RecoveryResult::NotApplicable;
-    if (State::Instance().isShuttingDown || KnownNonExecutable(module))
+    if (State::Instance().isShuttingDown || KnownNonExecutable(module) || !IsD3d12Image(module))
         return RecoveryResult::Unsupported;
-    if (loader_boundary::OriginalOnly() || State::SkipDllChecks() || DxgiProxy::InsideFactoryCreation())
+    // Another d3d12.dll is bound already
+    if (D3d12Proxy::Module() != nullptr && D3d12Proxy::Module() != module)
+        return RecoveryResult::Unsupported;
+    if (State::SkipDllChecks() || DxgiProxy::InsideFactoryCreation() || !D3d12Proxy::Init(module) ||
+        !D3D12Hooks::Hook())
     {
         RecordDeferredLoad(module);
-        return RecoveryResult::Retry;
-    }
-    const auto retained = RetainImage(module);
-    if (!retained)
-        return RecoveryResult::Retry;
-    struct Reference
-    {
-        HMODULE image;
-        ~Reference() { ReleaseImage(image); }
-    } reference { retained };
-    wchar_t path[32768];
-    const auto length = GetModuleFileNameW(retained, path, static_cast<DWORD>(std::size(path)));
-    if (length == 0 || length >= std::size(path))
-        return RecoveryResult::Retry;
-    const std::wstring_view actualPath(path, length);
-    // Output-provider readiness is not recovered input interception. Only this family is supported here.
-    if (!EndsWithInsensitive(actualPath, L"\\d3d12.dll"))
-        return RecoveryResult::Unsupported;
-    if (D3d12Proxy::Module() != nullptr && D3d12Proxy::Module() != retained)
-        return RecoveryResult::Unsupported;
-    if (!D3d12Proxy::Init(retained) || !D3D12Hooks::Hook())
-    {
-        RecordDeferredLoad(retained);
         return RecoveryResult::Retry;
     }
     return RecoveryResult::Ready;
 }
 
-// One post-attach opportunity; marks after it and busy/failed attempts have no eventual-retry guarantee.
 void LibraryLoadHooks::CatchUpDeferredLoads()
 {
-    if (_workerClosed.exchange(true, std::memory_order_acq_rel))
-        return;
     const DWORD error = GetLastError();
     _deferredScan.Run([] { ScanLoadedModules(); });
-    for (auto& slot : _deferredImages)
-        if (const auto image = slot.exchange(nullptr, std::memory_order_acq_rel))
-            ReleaseImage(image);
     SetLastError(error);
 }
 
 void LibraryLoadHooks::ScanLoadedModules()
 {
-    // Retained ordinary-load candidates only; no promotion of arbitrary snapshot/native images.
+    // A module that still can't be set up is recorded again by ObserveOrdinaryModule, for the next call
     for (auto& slot : _deferredImages)
     {
         if (const auto image = slot.exchange(nullptr, std::memory_order_acq_rel))
