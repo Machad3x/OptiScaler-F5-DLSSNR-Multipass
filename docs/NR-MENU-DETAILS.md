@@ -254,7 +254,7 @@ That output already reconstructed detail at that ratio, so NR running at the sam
 
 ## Upscale Mode: Superior Scaling
 
-Superior Scaling uses Area downsampling, frequency shaping and guided reconstruction of the NR edit. The **DLSS to temporally stabilize NR** menu offers **No DLSS**, **CNN (recommended)** and **Transformer**. CNN uses D in motion and switches to resident E in still scenes at reduced model resolution. At higher model resolution it uses E under the existing guided range rule. Transformer uses K and applies a disocclusion mask to its output. The installed DLSS runtime must support the requested presets.
+Superior Scaling uses Area downsampling, frequency shaping and guided reconstruction of the NR edit. The **DLSS to temporally stabilize NR** menu offers **No DLSS**, **CNN (recommended)** and **Transformer**. CNN uses D in motion and switches to resident E in still scenes at reduced model resolution. At higher model resolution it uses E under the existing guided range rule. On surfaces that were just uncovered, both CNN and Transformer are told to drop their history; Transformer also repairs any ghost left in its output. The installed DLSS runtime must support the requested presets.
 
 It needs DirectX 12 (or a DirectX 12 bridge), the game's depth and motion, and NVIDIA DLSS through NGX. Where any of these is missing (Vulkan, a non-NVIDIA card, the vendor-neutral port) Matched residual runs instead and the menu says why; select Superior Scaling again to retry. Upscale Method has no effect with it. Details: [Superior-Scaling-port.md](Superior-Scaling-port.md).
 

@@ -31,6 +31,7 @@ namespace DlssNr::Superior::Bytecode
 #include "precompile/private_ghost_rings_Shader.h"
 #include "precompile/private_ghost_rings_apply_Shader.h"
 #include "precompile/private_ghost_rings_inplace_Shader.h"
+#include "precompile/private_ghost_bias_Shader.h"
 } // namespace DlssNr::Superior::Bytecode
 
 bool DlssNr_Dx12::EnsureSuperiorRing()
@@ -135,7 +136,7 @@ bool DlssNr_Dx12::DispatchSuperiorPass(ID3D12GraphicsCommandList* InCmdList,
     using namespace DlssNr::Superior::Bytecode;
     using namespace DlssNr::Superior;
     const bool privatePass = InConstants.Mode >= DlssNrMode_SuperiorCarrierMotion &&
-                             InConstants.Mode <= DlssNrMode_PrivateGhostFeatherInPlace;
+                             InConstants.Mode <= DlssNrMode_PrivateGhostBias;
     ID3D12PipelineState* pipeline = privatePass ? nullptr : SuperiorPipeline(InConstants, InSource);
     const auto get = [&](unsigned index, const void* blob, size_t size)
     {
@@ -165,9 +166,10 @@ bool DlssNr_Dx12::DispatchSuperiorPass(ID3D12GraphicsCommandList* InCmdList,
             { private_ghost_rings_cso, sizeof(private_ghost_rings_cso) },
             { private_ghost_rings_apply_cso, sizeof(private_ghost_rings_apply_cso) },
             { private_ghost_rings_inplace_cso, sizeof(private_ghost_rings_inplace_cso) },
+            { private_ghost_bias_cso, sizeof(private_ghost_bias_cso) },
         };
         static_assert(std::size(privateBlobs) ==
-                      DlssNrMode_PrivateGhostFeatherInPlace - DlssNrMode_SuperiorCarrierMotion + 1);
+                      DlssNrMode_PrivateGhostBias - DlssNrMode_SuperiorCarrierMotion + 1);
         const unsigned index = InConstants.Mode - DlssNrMode_SuperiorCarrierMotion;
         pipeline = get(16u + index, privateBlobs[index].data, privateBlobs[index].bytes);
         if (!pipeline)

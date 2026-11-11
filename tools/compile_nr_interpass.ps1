@@ -92,6 +92,7 @@ try {
     Build (Join-Path $private "GhostOutwardFeather.hlsl") "GhostOutwardFeather" @("-D", "DLSSNR_GHOST_FEATHER_STAGE=0", "-D", "DLSSNR_GHOST_FEATHER_RINGS=1") "private_ghost_rings"
     Build (Join-Path $private "GhostOutwardFeather.hlsl") "GhostOutwardFeather" @("-D", "DLSSNR_GHOST_FEATHER_STAGE=1", "-D", "DLSSNR_GHOST_FEATHER_RINGS=1") "private_ghost_rings_apply"
     Build (Join-Path $private "GhostOutwardFeather.hlsl") "GhostOutwardFeather" @("-D", "DLSSNR_GHOST_FEATHER_STAGE=1", "-D", "DLSSNR_GHOST_FEATHER_RINGS=1", "-D", "DLSSNR_GHOST_FEATHER_INPLACE=1") "private_ghost_rings_inplace"
+    Build (Join-Path $private "GhostBiasMask.hlsl") "GhostBiasMask" @() "private_ghost_bias"
 
     foreach ($variant in @("carrier", "resolve", "cross5", "normal", "sdr", "hdr2", "hdr4", "encode", "low", "area", "meter", "exposure", "hdr0")) {
         $stem = "dlssnr_superior_$variant"

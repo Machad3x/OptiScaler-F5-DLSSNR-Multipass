@@ -217,6 +217,27 @@ bool UpdateGhostHistory(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComman
     return true;
 }
 
+// The quarter-size disocclusion field, enlarged to the working raster, for DLSS's bias-current-colour input.
+// Null when the field could not be made this frame (DLSS then runs without a mask).
+ID3D12Resource* GhostBiasMask(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd,
+                              ID3D12Resource* depth, ID3D12Resource* proxy, ID3D12Resource* answer,
+                              const DlssNrFrameInfo& frame, bool reset, float precision)
+{
+    if (!depth || !UpdateGhostHistory(g, shader, cmd, depth, proxy, answer, frame, reset, precision))
+        return nullptr;
+    auto& h = *g.ghosts;
+    if (!Ensure(h.bias, g.device.Get(), DXGI_FORMAT_R16_FLOAT, g.workWidth, g.workHeight))
+        return nullptr;
+    Constants c {};
+    c.Mode = DlssNrMode_PrivateGhostBias;
+    c.Width = g.workWidth;
+    c.Height = g.workHeight;
+    c.WhitePoint = 1.f; // mask strength
+    if (!Dispatch(shader, cmd, c, h.field.Get(), nullptr, nullptr, nullptr, nullptr, nullptr, h.bias))
+        return nullptr;
+    return h.bias.Get();
+}
+
 bool RejectTransformerGhosts(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd,
                              const Constants& baseDecode, ID3D12Resource* depth, ID3D12Resource* proxy,
                              ID3D12Resource* answer, const DlssNrFrameInfo& frame, bool reset, float precision)

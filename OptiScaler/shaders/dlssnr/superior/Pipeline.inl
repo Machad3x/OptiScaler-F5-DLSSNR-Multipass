@@ -56,7 +56,7 @@ struct ResidentCnn
 struct GhostHistory
 {
     Texture reconstructed, state[2], raw[2], reference[2], field, expanded;
-    Texture rings, featherOutput;
+    Texture rings, featherOutput, bias;
     bool initialized = false, submitted = false;
     bool checkedTypedLoad = false, typedLoad = false;
     unsigned index = 0;
@@ -666,8 +666,17 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
         idle = probe.selection.idle;
         mix *= probe.selection.fade.weight;
     }
+    // The private DLSS sees only NR's small edit on a flat grey carrier, so it cannot tell a moved-away object from
+    // the surface behind it by colour and keeps the old edit there: the ghost. Where the picture was just uncovered
+    // (the disocclusion field, from depth and motion alone, so it exists before DLSS) it is told to take the current
+    // frame instead. Transformer K holds history longest and still gets the repair after DLSS on top.
+    ID3D12Resource* bias =
+        GhostBiasMask(g, shader, cmd, temporalDepth, proxy, answer, frame, reset || g.reset, packedDepthPrecision);
     g.temporalOutput.To(cmd, Uav);
     auto* p = idle ? g.resident->parameters : g.parameters;
+    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, bias);
+    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X, 0u);
+    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y, 0u);
     auto* feature = idle ? g.resident->feature : g.feature;
     p->Set(NVSDK_NGX_Parameter_Color, g.carrier.Get());
     p->Set(NVSDK_NGX_Parameter_Output, g.temporalOutput.Get());

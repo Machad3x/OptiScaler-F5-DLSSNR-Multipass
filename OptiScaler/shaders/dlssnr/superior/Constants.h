@@ -33,7 +33,8 @@ enum DlssNrMode : uint32_t
     DlssNrMode_PrivateGhostDecode = 47,
     DlssNrMode_PrivateGhostRings = 48,
     DlssNrMode_PrivateGhostFeather = 49,
-    DlssNrMode_PrivateGhostFeatherInPlace = 50
+    DlssNrMode_PrivateGhostFeatherInPlace = 50,
+    DlssNrMode_PrivateGhostBias = 51 // quarter-size disocclusion field -> the private DLSS's bias-current-colour mask
 };
 
 struct alignas(256) DlssNrConstants

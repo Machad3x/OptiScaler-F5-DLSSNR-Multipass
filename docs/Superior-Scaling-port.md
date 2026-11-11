@@ -60,6 +60,11 @@ The incoming preset resets its own DLSS history on its first evaluation. Only th
 Changing the selection preserves the NR history when its geometry is compatible.
 
 Transformer uses K with a quarter-grid disocclusion mask at strength 1, an 18-frame window and a 6-frame return.
+
+Before the private DLSS runs, the same disocclusion field (from depth and motion only) is enlarged to the working
+raster and passed as DLSS's bias-current-colour mask, for CNN and Transformer alike: on newly uncovered surfaces
+DLSS takes the current edit instead of history. The carrier is NR's edit on a flat 0.5 grey, so DLSS cannot reject
+the old occluder's edit by colour on its own. Transformer keeps the repair after DLSS on top of it.
 The relative motion gate is 2.5 pixels in 1080p-height units. One coarse texel of expansion is followed by output
 evidence filtering at 0.18 and three coarse boundary rings. K does not sample motion for CNN switching.
 The private features always request IsHDR, AutoExposure and MVLowRes with applicable reversed-depth flags.
