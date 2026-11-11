@@ -252,7 +252,7 @@ bool DlssNr_Dx12::DispatchSuperiorPass(ID3D12GraphicsCommandList* InCmdList,
     const bool decodeSeed = InConstants.Mode == DlssNrMode_PrivateGhostDecodeSeed;
     const UINT threadsX = applyRings ? 32u : (decodeSeed ? 16u : _numThreadsX);
     const UINT dispatchWidth =
-        InConstants.Mode == DlssNrMode_Meter ? InConstants.Width : (InConstants.Width + threadsX - 1) / threadsX;
+        InConstants.Mode == DlssNr::Superior::DlssNrMode_Meter ? InConstants.Width : (InConstants.Width + threadsX - 1) / threadsX;
     // Final-low PSO uses 8x16, the generic fallback 8x8; dispatch for the selected PSO.
     const bool tallLow = pipeline == _superiorPipeline[8] || pipeline == _superiorRawLow;
     const UINT threadsY = applyRings ? 16u : (tallLow ? DlssNr::SuperiorScaling::LowGroupHeight : _numThreadsY);
