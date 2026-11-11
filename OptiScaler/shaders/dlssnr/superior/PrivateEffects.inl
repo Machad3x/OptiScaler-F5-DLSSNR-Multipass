@@ -73,8 +73,9 @@ void UpdateMotion(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList*
                      normal * perSecond;
     const bool suspended =
         hold || !motion || !region.valid() || !std::isfinite(sx) || !std::isfinite(sy) || sx == 0.f || sy == 0.f;
-    // Each sample carries its own region and scale, so a moving render size (dynamic resolution) or frame time does
-    // not invalidate the readings; only a suspension (held, no vectors) does.
+    // A reading is a count out of 576 sampled over whatever region and scale that frame had, so a moving render size
+    // (dynamic resolution) or frame time does not invalidate the readings; only a suspension (held, a reset frame, no
+    // vectors) does.
     if (probe.suspended != suspended)
     {
         ++probe.context;
@@ -177,6 +178,10 @@ bool UpdateGhostHistory(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComman
     if (!h.stateLoad)
         return false;
     const auto identity = Util::RealObjectIdentity(cmd);
+    // Built already for this frame on this list (the mask before DLSS, then the Transformer repair): reuse it, also on a
+    // reset frame, whose first build already started from scratch.
+    if (h.initialized && h.epoch == frame.SubmissionEpoch && h.commands == identity && h.builtWithReset == reset)
+        return true;
     if (h.initialized && h.epoch == frame.SubmissionEpoch && (h.commands == identity || h.submitted) && !reset)
         return true;
 
@@ -226,6 +231,7 @@ bool UpdateGhostHistory(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComman
         return false;
     h.index = next;
     h.epoch = frame.SubmissionEpoch;
+    h.builtWithReset = reset;
     h.initialized = true;
     return true;
 }

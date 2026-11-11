@@ -94,24 +94,24 @@ bool Active()
     return hooked.load(std::memory_order_acquire) && wanted.load(std::memory_order_acquire) && GetKeys().valid;
 }
 
+// Every off->on and on->off change of either switch starts a new session: bindings from before are never trusted.
 void SetHooked(bool on)
 {
-    if (!on && hooked.exchange(false, std::memory_order_acq_rel))
+    if (hooked.exchange(on, std::memory_order_acq_rel) != on)
         Stop();
-    else if (on)
-        hooked.store(true, std::memory_order_release);
 }
 
 void SetWanted(bool on)
 {
-    if (!on && wanted.exchange(false, std::memory_order_acq_rel))
+    if (wanted.exchange(on, std::memory_order_acq_rel) != on)
         Stop();
-    else if (on && !wanted.exchange(true, std::memory_order_acq_rel))
-        Stop(); // a fresh session: nothing written while it was off is trusted
 }
 
 void ListReset(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocator)
 {
+    // The session is read before the Active() check: a switch flipped while this runs leaves the binding stamped with
+    // the old session, which Capture then ignores (the safe direction).
+    const auto current = session.load(std::memory_order_acquire);
     if (!list || !Active())
         return;
     const auto& keys = GetKeys();
@@ -123,7 +123,7 @@ void ListReset(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocato
     auto token = allocator ? Ensure<AllocatorToken>(allocator, keys.allocator) : ComPtr<AllocatorToken>();
     std::lock_guard lock(binding->mutex);
     binding->allocator = std::move(token);
-    binding->session = session.load(std::memory_order_acquire);
+    binding->session = current;
 }
 
 void AllocatorReset(ID3D12CommandAllocator* allocator)

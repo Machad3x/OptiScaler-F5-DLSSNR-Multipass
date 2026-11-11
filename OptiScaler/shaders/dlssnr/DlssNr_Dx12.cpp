@@ -6547,9 +6547,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                                     g.packed ? (g.warpCache.Get() ? g.warpCache.Get() : g.warp.Get()) : motionIn,
                                     exposureTex, resolveTarget, nullptr, low, pso);
             if (!composed)
-                SuperiorRun::Say("Superior reconstruction failed; keeping the game frame.", true);
+                SuperiorRun::Fail("Superior reconstruction failed; keeping the game frame.", frame.SubmissionEpoch);
             else
-                SuperiorRun::Composed();
+                SuperiorRun::Composed(frame.SubmissionEpoch);
         }
         else
         {
@@ -8120,7 +8120,8 @@ void Shutdown()
 std::string DlssNr::SuperiorScaling::Status()
 {
     std::lock_guard<std::recursive_mutex> lock(g_nrMutex);
-    return SuperiorRun::GetState().status;
+    const auto& s = SuperiorRun::GetState();
+    return s.failure.empty() ? s.status : s.failure;
 }
 
 std::string DlssNr::SuperiorScaling::Unavailable()

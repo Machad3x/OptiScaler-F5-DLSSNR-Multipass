@@ -57,7 +57,7 @@ struct GhostHistory
 {
     Texture reconstructed, state[2], raw[2], reference[2], field, expanded;
     Texture rings, featherOutput, bias;
-    bool initialized = false, submitted = false;
+    bool initialized = false, submitted = false, builtWithReset = false;
     bool checkedTypedLoad = false, typedLoad = false;   // R16G16B16A16_FLOAT, the in-place feather
     bool checkedStateLoad = false, stateLoad = false;   // R32G32_UINT, the compact stage's own state
     unsigned index = 0;
@@ -183,7 +183,9 @@ struct State
     std::string status;
     std::string unavailable;   // why Superior is not running this session; empty while it runs
     bool allocatorHookAttempted = false;
-    bool statusTransient = false;
+    // A frame that failed (Fail): shown over `status` until a later frame composes, logged once per run of failures.
+    std::string failure;
+    uint64_t failedEpoch = 0;
     // The NGX DLSS SR runtime itself cannot be used here (no NVIDIA DLSS, the vendor-neutral port): no private DLSS
     // is tried again until Superior is selected again; Superior composes the current NR edit meanwhile.
     bool srUnavailable = false;
@@ -195,6 +197,8 @@ struct State
     bool RetirePending()
     {
         std::erase_if(retiringPrivate, [](const auto& g) { return g.expired(); });
+        if (retiringPrivate.empty())
+            retireWaitFrames = 0; // every wait gets its full bound
         return !retiringPrivate.empty();
     }
 };
@@ -207,12 +211,10 @@ State& GetState()
 // Set by the first Superior frame. Until then the NGX shutdown path does not touch the NR lock at all.
 std::atomic_bool g_used = false;
 
-// The menu's status line. A transient one (a single frame failed) is cleared again by the next composed frame;
-// the others describe a state and stay until Superior moves on.
-void Say(const char* text, bool transient = false)
+// The menu's status line: a state that lasts until Superior moves on.
+void Say(const char* text)
 {
     auto& s = GetState();
-    s.statusTransient = transient && *text;
     if (s.status == text)
         return;
     s.status = text;
@@ -220,10 +222,24 @@ void Say(const char* text, bool transient = false)
         LOG_INFO("Superior Scaling: {}", text);
 }
 
-void Composed()
+// One frame (SubmissionEpoch `epoch`) failed. Shown over the lasting status, which it does not replace; repeated every
+// frame it is still logged once.
+void Fail(const char* text, uint64_t epoch)
 {
-    if (GetState().statusTransient)
-        Say("");
+    auto& s = GetState();
+    if (s.failure != text)
+        LOG_INFO("Superior Scaling: {}", text);
+    s.failure = text;
+    s.failedEpoch = epoch;
+}
+
+// A frame composed: a failure from an earlier frame is over (one from this same frame, which fell back and still
+// composed, stays for the next frame to decide).
+void Composed(uint64_t epoch)
+{
+    auto& s = GetState();
+    if (!s.failure.empty() && epoch != s.failedEpoch)
+        s.failure.clear();
 }
 
 // Retire the current generation: its resources and NGX handles go once every list that used them has completed.
@@ -232,6 +248,7 @@ void Drop()
     auto& s = GetState();
     if (!s.current)
         return;
+    s.failure.clear();
     auto old = std::move(s.current);
     if (old->feature || old->resident)
         s.retiringPrivate.push_back(old);
@@ -425,8 +442,9 @@ bool CreateWarp(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* c
 enum class Created
 {
     Ok,
-    ResourcesFailed, // our own surfaces or passes: worth another try once Superior is selected again
-    SrUnavailable    // the NGX DLSS SR runtime: not here on this machine/runtime
+    ResourcesFailed, // our own surfaces or passes: this generation runs without a private DLSS
+    FeatureFailed,   // NGX is there but would not give parameters or a feature now (size, memory): this generation
+    SrUnavailable    // the NGX DLSS SR runtime itself: not here on this machine/runtime, latched for the session
 };
 
 NVSDK_NGX_Result CreateFeature(NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle*& feature, ID3D12GraphicsCommandList* cmd,
@@ -483,7 +501,7 @@ Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommand
     if (NVNGXProxy::D3D12_AllocateParameters()(&g.parameters) != NVSDK_NGX_Result_Success || !g.parameters)
     {
         g.parameters = nullptr;
-        return Created::SrUnavailable;
+        return Created::FeatureFailed;
     }
     SetCreationParameters(g, g.parameters);
     LOG_INFO("Superior Scaling: creating private DLSS preset {}", g.preset);
@@ -501,7 +519,7 @@ Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommand
         result = CreateFeature(g.parameters, g.feature, cmd, NVSDK_NGX_DLSS_Hint_Render_Preset_Default);
     }
     g.creation = Util::RealObjectIdentity(cmd);
-    return result == NVSDK_NGX_Result_Success && g.feature ? Created::Ok : Created::SrUnavailable;
+    return result == NVSDK_NGX_Result_Success && g.feature ? Created::Ok : Created::FeatureFailed;
 }
 
 static_assert(unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_D) == 4u &&
@@ -708,7 +726,7 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     if (NVNGXProxy::D3D12_EvaluateFeature()(cmd, feature, p, nullptr) != NVSDK_NGX_Result_Success)
     {
         g.reset = true;
-        Say("Private DLSS evaluation failed; using the current NR edit.", true);
+        Fail("Private DLSS evaluation failed; using the current NR edit.", frame.SubmissionEpoch);
         return nullptr;
     }
     g.temporalOutput.To(cmd, Srv);
@@ -825,9 +843,12 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
         g.preset = preset;
     }
     auto& g = *state.current;
-    // Allocator tracking (an earlier retire of the private DLSS) only while there is one to retire. Set before Record,
-    // so this frame's recording already carries the allocator it uses.
-    const bool track = g.feature || g.resident || state.RetirePending();
+    // Allocator tracking (an earlier retire of the private DLSS) while one is wanted, exists or retires. A session only
+    // trusts bindings written after it began, so the list this frame records into (reset before) is unbound when the
+    // tracking has just come on: it is turned on as soon as a private DLSS is wanted, not when it exists, so every
+    // frame from the one after its creation is bound.
+    const bool wantPrivate = temporal && haveDepth && !g.privateFailed && !state.srUnavailable;
+    const bool track = wantPrivate || g.feature || g.resident || state.RetirePending();
     if (track && !state.allocatorHookAttempted)
     {
         state.allocatorHookAttempted = true;

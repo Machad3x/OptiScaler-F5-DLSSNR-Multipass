@@ -58,7 +58,8 @@ checks 576 vectors against 0.1 pixel per 60 Hz frame in 1080p-height units (abou
 rate; each frame's vectors are scaled by 16.7 ms / its frame time). At least 432 moving samples classify a reading as
 moving, fewer than 288 as still, and anything in between keeps the last reading. A reading has to hold for 0.05 s
 before the preset follows it, in both directions; then the active preset fades toward the current edit over 0.3 s.
-A moving render size (dynamic resolution) does not reset the probe; holding or losing the motion vectors does.
+A moving render size (dynamic resolution) does not reset the probe; holding the frame, a reset frame or losing the
+motion vectors does (back to D).
 The incoming preset resets its own DLSS history on its first evaluation. Only the active preset evaluates.
 Changing the selection preserves the NR history when its geometry is compatible.
 
