@@ -15,7 +15,6 @@ constexpr auto Srv = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
 // Frames to wait for the private DLSS creation's submission before giving up on it for this session.
 constexpr unsigned kCreationWaitFrames = 240;
-constexpr unsigned kRetireWaitFrames = 240; // about 2-4 s; a normal retire takes 2-3 frames
 
 struct Texture
 {
@@ -182,23 +181,23 @@ struct State
     bool wasSelected = false, wasActive = false;
     std::string status;
     std::string unavailable;   // why Superior is not running this session; empty while it runs
-    bool allocatorHookAttempted = false;
-    // A frame that failed (Fail): shown over `status` until a later frame composes, logged once per run of failures.
+    DlssNr::SuperiorPrivate::HookRetry allocatorHook;
+    DlssNr::SuperiorPrivate::IdleWatch idle;
+    // A frame that failed (Fail): shown over `status` until a later frame composes. Each text is logged once per run of
+    // failures (two that alternate in one frame are not logged every frame).
     std::string failure;
+    std::vector<std::string> loggedFailures;
     uint64_t failedEpoch = 0;
     // The NGX DLSS SR runtime itself cannot be used here (no NVIDIA DLSS, the vendor-neutral port): no private DLSS
     // is tried again until Superior is selected again; Superior composes the current NR edit meanwhile.
     bool srUnavailable = false;
-    // Generations whose private DLSS is still retiring. A new one is created only once they are gone (one feature
-    // at a time), but never waited on longer than kRetireWaitFrames: a recording that never closes (no Reset hook, a
-    // list the game keeps for good) must not keep the private DLSS off for the session.
+    // Generations whose private DLSS is still retiring (DlssNr::SuperiorPrivate::RetireWait). One the wait gave up on
+    // leaves this list: its resources still go when its recordings close, but nothing waits or tracks for it any more.
     std::vector<std::weak_ptr<Generation>> retiringPrivate;
-    unsigned retireWaitFrames = 0;
+    DlssNr::SuperiorPrivate::RetireWait retireWait;
     bool RetirePending()
     {
         std::erase_if(retiringPrivate, [](const auto& g) { return g.expired(); });
-        if (retiringPrivate.empty())
-            retireWaitFrames = 0; // every wait gets its full bound
         return !retiringPrivate.empty();
     }
 };
@@ -227,8 +226,11 @@ void Say(const char* text)
 void Fail(const char* text, uint64_t epoch)
 {
     auto& s = GetState();
-    if (s.failure != text)
+    if (std::find(s.loggedFailures.begin(), s.loggedFailures.end(), text) == s.loggedFailures.end())
+    {
+        s.loggedFailures.emplace_back(text);
         LOG_INFO("Superior Scaling: {}", text);
+    }
     s.failure = text;
     s.failedEpoch = epoch;
 }
@@ -239,7 +241,10 @@ void Composed(uint64_t epoch)
 {
     auto& s = GetState();
     if (!s.failure.empty() && epoch != s.failedEpoch)
+    {
         s.failure.clear();
+        s.loggedFailures.clear();
+    }
 }
 
 // Retire the current generation: its resources and NGX handles go once every list that used them has completed.
@@ -249,6 +254,7 @@ void Drop()
     if (!s.current)
         return;
     s.failure.clear();
+    s.loggedFailures.clear();
     auto old = std::move(s.current);
     if (old->feature || old->resident)
         s.retiringPrivate.push_back(old);
@@ -444,7 +450,7 @@ enum class Created
     Ok,
     ResourcesFailed, // our own surfaces or passes: this generation runs without a private DLSS
     FeatureFailed,   // NGX is there but would not give parameters or a feature now (size, memory): this generation
-    SrUnavailable    // the NGX DLSS SR runtime itself: not here on this machine/runtime, latched for the session
+    SrUnavailable    // no usable NGX DLSS SR here (no runtime, no SR feature, too old): latched for the session
 };
 
 NVSDK_NGX_Result CreateFeature(NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle*& feature, ID3D12GraphicsCommandList* cmd,
@@ -519,8 +525,28 @@ Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommand
         result = CreateFeature(g.parameters, g.feature, cmd, NVSDK_NGX_DLSS_Hint_Render_Preset_Default);
     }
     g.creation = Util::RealObjectIdentity(cmd);
-    return result == NVSDK_NGX_Result_Success && g.feature ? Created::Ok : Created::FeatureFailed;
+    switch (DlssNr::SuperiorPrivate::ClassifyCreate((unsigned) result, g.feature != nullptr))
+    {
+    case DlssNr::SuperiorPrivate::CreateVerdict::Ok:
+        return Created::Ok;
+    case DlssNr::SuperiorPrivate::CreateVerdict::Session:
+        LOG_WARN("Superior Scaling: private DLSS cannot be created here ({:X}); not tried again this session",
+                 (unsigned) result);
+        return Created::SrUnavailable;
+    default:
+        return Created::FeatureFailed;
+    }
 }
+
+namespace SuperiorPrivatePolicyCheck
+{
+using namespace DlssNr::SuperiorPrivate;
+static_assert(unsigned(NVSDK_NGX_Result_Success) == 1u && unsigned(NVSDK_NGX_Result_Fail) == NgxFail &&
+              unsigned(NVSDK_NGX_Result_FAIL_FeatureNotSupported) == NgxFeatureNotSupported &&
+              unsigned(NVSDK_NGX_Result_FAIL_PlatformError) == NgxPlatformError &&
+              unsigned(NVSDK_NGX_Result_FAIL_FeatureNotFound) == NgxFeatureNotFound &&
+              unsigned(NVSDK_NGX_Result_FAIL_OutOfDate) == NgxOutOfDate);
+} // namespace SuperiorPrivatePolicyCheck
 
 static_assert(unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_D) == 4u &&
               unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_E) == 5u &&
@@ -849,11 +875,9 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
     // frame from the one after its creation is bound.
     const bool wantPrivate = temporal && haveDepth && !g.privateFailed && !state.srUnavailable;
     const bool track = wantPrivate || g.feature || g.resident || state.RetirePending();
-    if (track && !state.allocatorHookAttempted)
-    {
-        state.allocatorHookAttempted = true;
+    state.idle.Ran();
+    if (track && state.allocatorHook.Due(DlssNr::AllocatorEpochs::Hooked()))
         ResTrack_Dx12::HookLateAllocatorReset(device);
-    }
     DlssNr::AllocatorEpochs::SetWanted(track);
     Record(cmd);
     const auto identity = Util::RealObjectIdentity(cmd);
@@ -883,16 +907,20 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
     }
     if (!g.feature)
     {
-        if (state.RetirePending() && state.retireWaitFrames++ < kRetireWaitFrames)
+        using Step = DlssNr::SuperiorPrivate::RetireWait::Step;
+        const auto step = state.retireWait.Next(state.RetirePending());
+        if (step == Step::Wait)
         {
             Say("Waiting for the previous private DLSS to retire. Using the current NR edit.");
             return Began::Run;
         }
-        if (state.retireWaitFrames > kRetireWaitFrames)
-            LOG_WARN("Superior Scaling: the previous private DLSS has not retired after {} frames; creating the new "
-                     "one beside it",
-                     kRetireWaitFrames);
-        state.retireWaitFrames = 0;
+        if (step == Step::GiveUp)
+        {
+            LOG_WARN("Superior Scaling: {} previous private DLSS not retired after {} frames; creating the new one "
+                     "beside it (the old ones go when the game resets their command lists)",
+                     state.retiringPrivate.size(), DlssNr::SuperiorPrivate::RetireWaitFrames);
+            state.retiringPrivate.clear();
+        }
         if (const auto created = CreateTemporal(g, shader, cmd); created != Created::Ok)
         {
             g.privateFailed = true;
@@ -961,6 +989,14 @@ void Idle()
         return;
     s.lifetime.Collect();
     DlssNr::AllocatorEpochs::SetWanted(s.RetirePending());
+}
+
+// Every NR evaluate, before anything can return early: when Superior has not run for a while (NR off, another
+// transfer), Idle runs here, since the NR dispatch that calls it may never be reached.
+void Evaluated()
+{
+    if (g_used && GetState().idle.Due())
+        Idle();
 }
 
 bool MatchGuides(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Resource* depth,

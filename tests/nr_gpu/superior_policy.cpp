@@ -300,6 +300,50 @@ int main() {
             require(PerSecondScale(0.f) == 1.f && PerSecondScale(-5.f) == 1.f && PerSecondScale(NAN) == 1.f);
             require(PerSecondScale(1e-3f) == 10.f && PerSecondScale(1e5f) == .1f);
         }
+        {
+            // Retire wait: the full bound, then give up once; nothing pending resets it; a later wait gets the full
+            // bound again.
+            using namespace DlssNr::SuperiorPrivate;
+            using Step = RetireWait::Step;
+            RetireWait wait;
+            require(wait.Next(false) == Step::Go);
+            for (unsigned i = 0; i < RetireWaitFrames; ++i)
+                require(wait.Next(true) == Step::Wait);
+            require(wait.Next(true) == Step::GiveUp);
+            require(wait.Next(true) == Step::Wait); // only reached if the caller kept the stuck ones: a fresh bound
+            for (unsigned i = 0; i < 10; ++i)
+                require(wait.Next(true) == Step::Wait);
+            require(wait.Next(false) == Step::Go);
+            for (unsigned i = 0; i < RetireWaitFrames; ++i)
+                require(wait.Next(true) == Step::Wait);
+            require(wait.Next(true) == Step::GiveUp);
+
+            // Hook retry: first attempt at once; throttled while it fails; at once again after the hook came off.
+            HookRetry hook;
+            require(hook.Due(false));
+            for (unsigned i = 0; i < HookRetryFrames; ++i)
+                require(!hook.Due(false));
+            require(hook.Due(false));
+            require(!hook.Due(true) && !hook.Due(true));
+            require(hook.Due(false)); // came off: no throttle
+            require(!hook.Due(false));
+
+            // Idle: only after IdleAfterCalls evaluates without a Superior frame, then on every one until it runs.
+            IdleWatch idle;
+            for (unsigned i = 1; i < IdleAfterCalls; ++i)
+                require(!idle.Due());
+            require(idle.Due() && idle.Due());
+            idle.Ran();
+            require(!idle.Due());
+
+            // Creation: runtime/feature missing or too old latches for the session; the rest is per generation.
+            require(ClassifyCreate(1u, true) == CreateVerdict::Ok);
+            require(ClassifyCreate(1u, false) == CreateVerdict::Generation);
+            for (unsigned r : { NgxFeatureNotSupported, NgxPlatformError, NgxFeatureNotFound, NgxOutOfDate })
+                require(ClassifyCreate(r, false) == CreateVerdict::Session);
+            for (unsigned r : { NgxFail, NgxFail | 5u /* InvalidParameter */, NgxFail | 13u /* OutOfGPUMemory */ })
+                require(ClassifyCreate(r, false) == CreateVerdict::Generation);
+        }
 
         // Native-scale fallback is tested by the host integration contract.
         DlssNrConstants input{};input.Mode=0;input.Width=1920;input.Height=1080;input.DirectResolveFlags=ShaderFlag;

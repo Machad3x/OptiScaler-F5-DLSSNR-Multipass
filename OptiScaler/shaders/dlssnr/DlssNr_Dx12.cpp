@@ -6943,6 +6943,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
                       uint32_t gameFeature)
 {
     std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
+    SuperiorRun::Evaluated();
     const Config& cfg = *Config::Instance();
     // The virtual upscaler's backend pass under frame generation (ScopedNrInList) works in its own list: the
     // present-time Finished Picture pass would run on the presenting queue, which is not the game's when the library

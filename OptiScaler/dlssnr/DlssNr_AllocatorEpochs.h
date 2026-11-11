@@ -21,6 +21,7 @@ void AllocatorReset(ID3D12CommandAllocator* allocator);
 void SetHooked(bool hooked);
 // A user has recordings that should close at an allocator reset (reference-free: one user, Superior).
 void SetWanted(bool wanted);
+bool Hooked();
 bool Active();
 
 // What a recording keeps: its allocator's token and that allocator's reset count when the recording began.
