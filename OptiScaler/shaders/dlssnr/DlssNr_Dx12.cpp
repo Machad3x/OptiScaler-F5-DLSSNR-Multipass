@@ -3691,6 +3691,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     {
         superiorState.wasSelected = superiorSelected;
         superiorState.unavailable.clear();
+        superiorState.srUnavailable = false;
     }
     const bool superior = superiorSelected && superiorState.unavailable.empty() && !g_multiRun && !g_contextRun;
     // A secondary game feature's own model never runs it: that is no change of the main picture's choice
@@ -5985,7 +5986,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         finalAnswer = passOutput;
         MakeModelReadable(finalAnswer);
         superiorCompleted = pass + 1u;
-        if (superiorGeneration && (superiorGeneration->temporal || (spatial && superiorGainScales.low < 1.0f)) &&
+        // Frequency shaping between passes needs no private DLSS: No DLSS shapes like CNN and Transformer do.
+        if (superiorGeneration && (superiorGeneration->shaping || (spatial && superiorGainScales.low < 1.0f)) &&
             pass + 1u < effectivePasses)
         {
             const bool due = superiorSchedule.Due(pass, superiorCovered);
@@ -6545,7 +6547,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                                     g.packed ? (g.warpCache.Get() ? g.warpCache.Get() : g.warp.Get()) : motionIn,
                                     exposureTex, resolveTarget, nullptr, low, pso);
             if (!composed)
-                SuperiorRun::Say("Superior reconstruction failed; keeping the game frame.");
+                SuperiorRun::Say("Superior reconstruction failed; keeping the game frame.", true);
+            else
+                SuperiorRun::Composed();
         }
         else
         {

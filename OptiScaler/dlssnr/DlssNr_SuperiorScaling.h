@@ -12,7 +12,8 @@ namespace DlssNr::SuperiorScaling
 // Runtime state, defined with the D3D12 pipeline (DlssNr_Dx12.cpp). Status: the last thing worth telling the user.
 std::string Status();
 // Why Superior is not running this session (empty while it runs); the ordinary path uses Matched residual meanwhile.
-// Selecting Superior again retries. SrUnavailable: the NGX DLSS SR runtime itself could not be used here.
+// Selecting Superior again retries. SrUnavailable: the NGX DLSS SR runtime itself could not be used here; Superior
+// then runs without its private DLSS (like No DLSS) until it is selected again.
 std::string Unavailable();
 bool SrUnavailable();
 // The game's NGX D3D12 runtime is shutting down: every NGX handle is about to be destroyed by NGX itself.
@@ -79,6 +80,16 @@ inline bool CanSelectUpscaleMode(unsigned mode, float scale, bool nativeVulkan)
     return mode == Transfer ? !nativeVulkan : mode == 0u || (mode <= 2u && scale < .999f);
 }
 // -1 keeps the generic PSO. Specialization changes no user setting or colour calculation.
+// The fallback resolve PSO slot (DlssNr_Dx12::_superiorResolve, 9 slots). The raw (non-temporal) resolve compiles
+// to the same bytecode for SDR and HDR: one blob, one PSO (slot 2). Guided raw: the No DLSS / not-yet-ready
+// private path, unpacked 6, packed 7, packed with the cached warp 8.
+inline unsigned ResolveIndex(bool rawAnswer, bool guidedRaw, bool packed, bool cachedWarp, bool sdr)
+{
+    return guidedRaw   ? (packed ? (cachedWarp ? 8u : 7u) : 6u)
+           : packed    ? 4u + (sdr ? 1u : 0u)
+           : rawAnswer ? 2u
+                       : (sdr ? 1u : 0u);
+}
 inline int NormalResolveVariant(bool rawAnswer, bool packed, unsigned passthrough, unsigned mapping, unsigned debugView,
                                 unsigned compareMode, unsigned applyModel)
 {

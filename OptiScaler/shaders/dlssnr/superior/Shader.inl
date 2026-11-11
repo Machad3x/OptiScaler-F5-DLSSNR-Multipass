@@ -322,12 +322,17 @@ ID3D12PipelineState* DlssNr_Dx12::SuperiorResolvePipeline(const DlssNrConstants&
         if (pso)
             return pso;
     }
-    const bool sdr = params.Passthrough != 0;
-    // The raw (non-temporal) resolve compiles to the same bytecode for SDR and HDR: one blob, one PSO (slot 2).
-    const auto index = guidedRaw   ? (packed ? (cachedWarp ? 8u : 7u) : 6u)
-                       : packed    ? 4u + (sdr ? 1u : 0u)
-                       : rawAnswer ? 2u
-                                   : (sdr ? 1u : 0u);
+    // The packed resolves without guidedRaw add a decoded signed DLSS residual to the proxy: a raw NR answer there
+    // would be added as if it were one. Packed raw answers always take the guided-raw PSOs (a packed generation always
+    // shapes), so this only guards that invariant: no PSO, the game frame is kept.
+    if (packed && rawAnswer && !guidedRaw)
+    {
+        static std::once_flag once;
+        std::call_once(once, [] { LOG_ERROR("Superior Scaling: packed resolve asked for a raw NR answer; skipped"); });
+        return nullptr;
+    }
+    const auto index =
+        DlssNr::SuperiorScaling::ResolveIndex(rawAnswer, guidedRaw, packed, cachedWarp, params.Passthrough != 0);
     auto*& pso = _superiorResolve[index];
     if (!_superiorResolveAttempted[index])
     {

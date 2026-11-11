@@ -54,8 +54,11 @@ No K/headroom analysis is introduced. Native Vulkan is outside the original v59 
 Superior runs on DirectX 12 and compatible bridges. Native Vulkan falls back to Matched residual.
 With **No DLSS**, the current NR answer supplies the guided reconstruction directly, including when it is packed.
 CNN uses D or E under the existing guided range rule. When D is selected and E is resident, the camera motion probe
-checks 576 vectors using a threshold of 0.1 pixel in 1080p-height units. At least 432 samples must exceed the threshold
-to classify a frame as moving. After 0.05 s of observed quiet, the active preset fades toward the current edit over 0.3 s.
+checks 576 vectors against 0.1 pixel per 60 Hz frame in 1080p-height units (about 6 pixels per second at any frame
+rate; each frame's vectors are scaled by 16.7 ms / its frame time). At least 432 moving samples classify a reading as
+moving, fewer than 288 as still, and anything in between keeps the last reading. A reading has to hold for 0.05 s
+before the preset follows it, in both directions; then the active preset fades toward the current edit over 0.3 s.
+A moving render size (dynamic resolution) does not reset the probe; holding or losing the motion vectors does.
 The incoming preset resets its own DLSS history on its first evaluation. Only the active preset evaluates.
 Changing the selection preserves the NR history when its geometry is compatible.
 
@@ -88,7 +91,16 @@ is the live shader compiled with `superior/HostResolve.hlsli` (`host_resolve_*`,
 
 The private carrier stores `clamp(0.5 + NR - proxy, 0, 65504)` in RGBA16F with the subtraction performed
 before the offset. It decodes as `DLSS(carrier) - 0.5`. The range is shared by the matched and packed guide
-paths. The carrier uses the edit at its original magnitude. Nonfinite DLSS output decodes to zero edit.
+paths. Nonfinite DLSS output decodes to zero edit. The limits, not measured in game:
+
+- Range: an edit that darkens by more than 0.5 (proxy units) is clipped to -0.5 by the encode, so CNN and Transformer
+  bring such pixels (firefly or highlight removal) back at most -0.5 while No DLSS keeps the full edit. Brightening
+  edits are not clipped (the old encode stopped at +1.5). A larger bias would lift the floor; it was not changed here
+  because it shifts every value DLSS sees and needs its own game check.
+- Precision: around the 0.5 bias FP16 has a step of 2^-11 (about 4.9e-4) for carrier values in [0.5, 1) and 2^-10
+  above 1, so residuals are quantised to about 2.4e-4 (4.9e-4 above E = 0.5) before DLSS sees them; smaller detail
+  survives only through DLSS's own accumulation.
+- Where the Transformer repair takes the raw edit, that pixel is unclipped next to clipped neighbours.
 
 ### Calibrating new models and styles
 

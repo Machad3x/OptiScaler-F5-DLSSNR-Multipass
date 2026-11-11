@@ -65,20 +65,20 @@ void UpdateMotion(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList*
     const unsigned rw = frame.MotionVectorsLowResolution ? frame.RenderSubrectWidth : frame.OutputWidth;
     const unsigned rh = frame.MotionVectorsLowResolution ? frame.RenderSubrectHeight : frame.OutputHeight;
     const float normal = frame.OutputHeight ? 1080.f / float(frame.OutputHeight) : 0.f;
-    const float sx = DlssNr::SuperiorScaling::MotionScale(frame.MvScaleX, frame.OutputWidth, rw, region.width) * normal;
-    const float sy =
-        DlssNr::SuperiorScaling::MotionScale(frame.MvScaleY, frame.OutputHeight, rh, region.height) * normal;
+    // Pixels per 60 Hz frame in 1080p-height units, so the threshold means the same speed at any frame rate.
+    const float perSecond = Private::PerSecondScale(frame.FrameTimeMs);
+    const float sx = DlssNr::SuperiorScaling::MotionScale(frame.MvScaleX, frame.OutputWidth, rw, region.width) *
+                     normal * perSecond;
+    const float sy = DlssNr::SuperiorScaling::MotionScale(frame.MvScaleY, frame.OutputHeight, rh, region.height) *
+                     normal * perSecond;
     const bool suspended =
         hold || !motion || !region.valid() || !std::isfinite(sx) || !std::isfinite(sy) || sx == 0.f || sy == 0.f;
-    const auto old = probe.region;
-    if (probe.suspended != suspended || old.x != region.x || old.y != region.y || old.width != region.width ||
-        old.height != region.height || sx != probe.scaleX || sy != probe.scaleY)
+    // Each sample carries its own region and scale, so a moving render size (dynamic resolution) or frame time does
+    // not invalidate the readings; only a suspension (held, no vectors) does.
+    if (probe.suspended != suspended)
     {
         ++probe.context;
         probe.selection.Invalidate();
-        probe.region = region;
-        probe.scaleX = sx;
-        probe.scaleY = sy;
         probe.suspended = suspended;
         probe.nextSample = 0;
     }
@@ -113,7 +113,7 @@ void UpdateMotion(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList*
 
     if (now < probe.nextSample)
         return;
-    probe.nextSample = now + 1. / 30.; // Enough samples to resolve a 50 ms quiet interval.
+    probe.nextSample = now + 1. / 30.; // Enough samples to resolve the 50 ms dwell.
     auto slot = std::find_if(probe.samples.begin(), probe.samples.end(),
                              [](const auto& sample) { return !sample || !sample->busy; });
     if (slot == probe.samples.end())
@@ -163,6 +163,19 @@ bool UpdateGhostHistory(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComman
     if (!g.ghosts)
         g.ghosts = std::make_unique<GhostHistory>();
     auto& h = *g.ghosts;
+    // The compact stage reads its own R32G32_UINT state UAV back (typed UAV load, optional for that format in
+    // D3D12). Without it there is no field: no mask for DLSS and no repair, DLSS runs as before.
+    if (!h.checkedStateLoad)
+    {
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT support { DXGI_FORMAT_R32G32_UINT };
+        h.stateLoad = SUCCEEDED(g.device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support))) &&
+                      (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0;
+        h.checkedStateLoad = true;
+        if (!h.stateLoad)
+            LOG_WARN("Superior Scaling: this GPU cannot read R32G32_UINT UAVs back; no disocclusion mask");
+    }
+    if (!h.stateLoad)
+        return false;
     const auto identity = Util::RealObjectIdentity(cmd);
     if (h.initialized && h.epoch == frame.SubmissionEpoch && (h.commands == identity || h.submitted) && !reset)
         return true;

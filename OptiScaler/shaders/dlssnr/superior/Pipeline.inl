@@ -58,7 +58,8 @@ struct GhostHistory
     Texture reconstructed, state[2], raw[2], reference[2], field, expanded;
     Texture rings, featherOutput, bias;
     bool initialized = false, submitted = false;
-    bool checkedTypedLoad = false, typedLoad = false;
+    bool checkedTypedLoad = false, typedLoad = false;   // R16G16B16A16_FLOAT, the in-place feather
+    bool checkedStateLoad = false, stateLoad = false;   // R32G32_UINT, the compact stage's own state
     unsigned index = 0;
     uint64_t epoch = 0;
     const void* commands = nullptr;
@@ -78,8 +79,6 @@ struct MotionProbe
 {
     std::array<std::shared_ptr<MotionSample>, 8> samples;
     Private::CnnMotion selection;
-    DlssNr::GuideRegion region {};
-    float scaleX = 0, scaleY = 0;
     double nextSample = 0;
     uint64_t context = 0;
     bool suspended = false;
@@ -184,6 +183,9 @@ struct State
     std::string status;
     std::string unavailable;   // why Superior is not running this session; empty while it runs
     bool allocatorHookAttempted = false;
+    bool statusTransient = false;
+    // The NGX DLSS SR runtime itself cannot be used here (no NVIDIA DLSS, the vendor-neutral port): no private DLSS
+    // is tried again until Superior is selected again; Superior composes the current NR edit meanwhile.
     bool srUnavailable = false;
     // Generations whose private DLSS is still retiring. A new one is created only once they are gone (one feature
     // at a time), but never waited on longer than kRetireWaitFrames: a recording that never closes (no Reset hook, a
@@ -205,14 +207,23 @@ State& GetState()
 // Set by the first Superior frame. Until then the NGX shutdown path does not touch the NR lock at all.
 std::atomic_bool g_used = false;
 
-void Say(const char* text)
+// The menu's status line. A transient one (a single frame failed) is cleared again by the next composed frame;
+// the others describe a state and stay until Superior moves on.
+void Say(const char* text, bool transient = false)
 {
     auto& s = GetState();
+    s.statusTransient = transient && *text;
     if (s.status == text)
         return;
     s.status = text;
     if (*text)
         LOG_INFO("Superior Scaling: {}", text);
+}
+
+void Composed()
+{
+    if (GetState().statusTransient)
+        Say("");
 }
 
 // Retire the current generation: its resources and NGX handles go once every list that used them has completed.
@@ -229,11 +240,10 @@ void Drop()
 }
 
 // For the rest of the session (until Superior is selected again) the ordinary path runs, with Matched residual.
-void GiveUp(const std::string& reason, bool srUnavailable)
+void GiveUp(const std::string& reason)
 {
     auto& s = GetState();
     s.unavailable = reason;
-    s.srUnavailable = s.srUnavailable || srUnavailable;
     LOG_WARN("Superior Scaling unavailable: {}; using Matched residual instead", reason);
     Say("");
     Drop();
@@ -698,7 +708,7 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     if (NVNGXProxy::D3D12_EvaluateFeature()(cmd, feature, p, nullptr) != NVSDK_NGX_Result_Success)
     {
         g.reset = true;
-        Say("Private DLSS evaluation failed; keeping the game frame.");
+        Say("Private DLSS evaluation failed; using the current NR edit.", true);
         return nullptr;
     }
     g.temporalOutput.To(cmd, Srv);
@@ -706,7 +716,9 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     decode.Mode = 38u;
     decode.Width = g.workWidth;
     decode.Height = g.workHeight;
-    if (g.preset == DlssNr::SuperiorScaling::TransformerK)
+    // The repair is tuned for K: it follows the model that runs, not the one asked for (a runtime without K runs its
+    // default instead).
+    if (g.actualPreset == DlssNr::SuperiorScaling::TransformerK)
     {
         if (!RejectTransformerGhosts(g, shader, cmd, decode, temporalDepth, proxy, answer, frame, reset || g.reset,
                                      packedDepthPrecision))
@@ -753,7 +765,7 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
     // same frame, so they are equal; refuse a layout that is not rather than warp with the wrong scale.
     if (layout && (layout->nativeW != width || layout->nativeH != height))
     {
-        GiveUp("its packed layout does not match the frame size", false);
+        GiveUp("its packed layout does not match the frame size");
         return Began::Unavailable;
     }
     const auto& cfg = *Config::Instance();
@@ -828,7 +840,7 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
     {
         if (!CreateWarp(g, shader, cmd))
         {
-            GiveUp("its packed warp could not be created", false);
+            GiveUp("its packed warp could not be created");
             return Began::Unavailable;
         }
         g.creation = identity;
@@ -842,6 +854,12 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
         g.reset = true;
     if (!temporal || !haveDepth || g.privateFailed)
         return Began::Run;
+    if (!g.feature && state.srUnavailable)
+    {
+        g.privateFailed = true;
+        Say("NVIDIA DLSS is not available here. Using the current NR edit.");
+        return Began::Run;
+    }
     if (!g.feature)
     {
         if (state.RetirePending() && state.retireWaitFrames++ < kRetireWaitFrames)
@@ -854,10 +872,16 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
                      "one beside it",
                      kRetireWaitFrames);
         state.retireWaitFrames = 0;
-        if (CreateTemporal(g, shader, cmd) != Created::Ok)
+        if (const auto created = CreateTemporal(g, shader, cmd); created != Created::Ok)
         {
             g.privateFailed = true;
-            Say("Private DLSS unavailable. Using the current NR edit.");
+            if (created == Created::SrUnavailable)
+            {
+                state.srUnavailable = true;
+                Say("NVIDIA DLSS is not available here. Using the current NR edit.");
+            }
+            else
+                Say("Private DLSS could not be created. Using the current NR edit.");
             return Began::Run;
         }
         g.creationSubmitted = false;
@@ -878,7 +902,9 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
         }
         g.waitedFrames = UINT_MAX;
         LOG_INFO("Superior Scaling: private DLSS preset {} ready after submission", g.actualPreset);
-        Say("");
+        Say(g.actualPreset == g.preset ? ""
+                                       : "This DLSS version does not have the selected model; it runs its own default "
+                                         "model instead.");
     }
     UpdateResidentCnn(g, cmd, frame);
     return Began::Run;

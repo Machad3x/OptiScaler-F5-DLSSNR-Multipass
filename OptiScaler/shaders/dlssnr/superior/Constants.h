@@ -20,20 +20,20 @@ enum DlssNrMode : uint32_t
     DlssNrMode_GuidedResidualLow = 18,     // 1/8-size low-frequency field of the residual (final shaping)
     DlssNrMode_InterPassLow36 = 34,        // between passes: 1/8-size low field
     DlssNrMode_InterPassFastCross5 = 36,   // between passes: guided working-raster reconstruction
-    DlssNrMode_SuperiorCarrierEncode = 37, // fixed clamp(0.5 + N-P, -1, 2), no gain analysis
+    DlssNrMode_SuperiorCarrierEncode = 37, // fixed clamp(0.5 + N-P, 0, 65504), no gain analysis
     DlssNrMode_SuperiorCarrierDecode = 38, // fixed DLAA(carrier)-0.5, no gain texture
     DlssNrMode_SuperiorCarrierMotion = 39, // fixed carrier plus exact private motion resize
-    DlssNrMode_PrivateFade = 40,
-    DlssNrMode_PrivateMotion = 41,
-    DlssNrMode_PrivateGhostClear = 42,
-    DlssNrMode_PrivateGhostScatter = 43,
-    DlssNrMode_PrivateGhostAge = 44,
-    DlssNrMode_PrivateGhostReference = 45,
-    DlssNrMode_PrivateGhostDilate = 46,
-    DlssNrMode_PrivateGhostDecode = 47,
-    DlssNrMode_PrivateGhostRings = 48,
-    DlssNrMode_PrivateGhostFeather = 49,
-    DlssNrMode_PrivateGhostFeatherInPlace = 50,
+    DlssNrMode_PrivateFade = 40,           // carrier decode blended toward the current edit (CNN D/E switch fade)
+    DlssNrMode_PrivateMotion = 41,         // CNN motion probe: 576 vectors -> moving count, 1x1 for readback
+    DlssNrMode_PrivateGhostClear = 42,     // clear the quarter-size reprojected-depth buffer before the scatter
+    DlssNrMode_PrivateGhostScatter = 43,   // this frame's state; its nearest depth scattered to last frame's spot
+    DlssNrMode_PrivateGhostAge = 44,       // compare with last frame: disocclusion age per cell
+    DlssNrMode_PrivateGhostReference = 45, // keep the occluder's colour where a surface was uncovered
+    DlssNrMode_PrivateGhostDilate = 46,    // one-texel dilation -> the disocclusion field and its references
+    DlssNrMode_PrivateGhostDecode = 47,    // Transformer decode: raw edit where the output still shows the occluder
+    DlssNrMode_PrivateGhostRings = 48,     // quarter-size boundary rings around the repaired area
+    DlssNrMode_PrivateGhostFeather = 49,   // outward feather of the repair into a second texture
+    DlssNrMode_PrivateGhostFeatherInPlace = 50, // the same, in place (needs typed UAV loads on RGBA16F)
     DlssNrMode_PrivateGhostBias = 51 // quarter-size disocclusion field -> the private DLSS's bias-current-colour mask
 };
 

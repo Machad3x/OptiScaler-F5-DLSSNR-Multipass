@@ -204,23 +204,102 @@ int main() {
         latch = {};
         require(latch.Select(CnnPreference, true, .65f, .65f) == CnnD);
 
-        // 431 / 576 is quiet, 432 / 576 is camera motion. Only a switch resets the next instance.
-        DlssNr::SuperiorPrivate::CnnMotion motion;
-        motion.Observe(431, 1.0);
-        require(!motion.Advance(1.0));
-        motion.Observe(431, 1.04);
-        require(!motion.Advance(1.04) && motion.fade.weight == 1.f);
-        motion.Observe(431, 1.06);
-        require(!motion.Advance(1.06) && motion.fade.weight == 1.f);
-        require(!motion.Advance(1.2) && !motion.idle && motion.fade.weight < 1.f);
-        require(!motion.Advance(1.35) && !motion.idle);
-        require(motion.Advance(1.36) && motion.idle && motion.fade.weight == 1.f);
-        require(!motion.Advance(1.37));
-        motion.Observe(432, 1.39);
-        require(!motion.Advance(1.39));
-        require(motion.Advance(1.69) && !motion.idle);
-        motion.Invalidate();
-        require(!motion.Advance(2.0) && motion.fade.weight == 1.f);
+        // Still below 288 / 576 moving samples, moving from 432; in between the last reading stands. A reading has to
+        // hold 50 ms before the preset follows it (both ways), then a 0.3 s fade; only a switch resets the next one.
+        using DlssNr::SuperiorPrivate::CnnMotion;
+        {
+            CnnMotion motion;
+            motion.Observe(287, 1.0);
+            require(!motion.Advance(1.0));
+            motion.Observe(287, 1.04);
+            require(!motion.Advance(1.04) && motion.fade.weight == 1.f);
+            motion.Observe(287, 1.06);
+            require(!motion.Advance(1.06) && motion.fade.weight == 1.f);
+            require(!motion.Advance(1.2) && !motion.idle && motion.fade.weight < 1.f);
+            require(!motion.Advance(1.35) && !motion.idle);
+            require(motion.Advance(1.36) && motion.idle && motion.fade.weight == 1.f);
+            require(!motion.Advance(1.37));
+            // A single moving reading while on E does not switch back (R2-F4: symmetric dwell).
+            motion.Observe(432, 1.39);
+            require(!motion.Advance(1.39) && !motion.Advance(1.43) && motion.fade.weight == 1.f);
+            motion.Observe(100, 1.42);
+            require(!motion.Advance(1.6) && motion.idle && motion.fade.weight == 1.f);
+            // Two moving readings 50 ms apart do: fade from then, switch 0.3 s later.
+            motion.Observe(432, 1.62);
+            motion.Observe(432, 1.68);
+            require(!motion.Advance(1.68) && motion.fade.weight == 1.f);
+            require(!motion.Advance(1.9) && motion.idle && motion.fade.weight < 1.f);
+            require(motion.Advance(1.98) && !motion.idle);
+            motion.Invalidate();
+            require(!motion.Advance(2.0) && motion.fade.weight == 1.f);
+        }
+        {
+            // Hysteresis: from still, counts between 288 and 431 keep it still; from moving, they keep it moving.
+            CnnMotion motion;
+            motion.Observe(431, 1.0); // no earlier reading: in-between counts as moving
+            require(!motion.quiet);
+            motion.Observe(100, 1.05);
+            motion.Observe(431, 1.08);
+            require(motion.quiet);
+            motion.Observe(432, 1.1);
+            motion.Observe(300, 1.12);
+            require(!motion.quiet);
+        }
+        {
+            // Time going backwards or standing still is ignored; a gap over 0.5 s restarts the dwell.
+            CnnMotion motion;
+            motion.Observe(0, 1.0);
+            motion.Observe(0, 0.9);
+            require(motion.observed == 1.0);
+            motion.Observe(0, 1.0);
+            require(motion.observed == 1.0 && motion.since == 1.0);
+            motion.Observe(0, 1.7);
+            require(motion.since == 1.7);
+        }
+        {
+            // A stale reading (over 0.5 s old) drops E back to D through the fade.
+            CnnMotion motion;
+            motion.Observe(0, 1.0);
+            motion.Observe(0, 1.06);
+            require(!motion.Advance(1.06));
+            require(motion.Advance(1.4) && motion.idle);
+            require(!motion.Advance(1.6) && motion.idle && motion.fade.weight == 1.f); // still fresh at 1.56 s
+            require(!motion.Advance(1.7) && motion.fade.weight < 1.f);
+            require(motion.Advance(2.0) && !motion.idle);
+        }
+        {
+            // Fade on its own: reversal mid-fade climbs back without a switch; a long gap jumps the whole way.
+            DlssNr::SuperiorPrivate::Fade fade;
+            require(fade.Advance(false, 1.0) == 1.f); // the starting frame takes no time
+            require(fade.Advance(false, 1.15) < 1.f && fade.weight > 0.f);
+            require(fade.Advance(true, 1.2) > .5f && fade.Advance(true, 1.6) == 1.f);
+            DlssNr::SuperiorPrivate::Fade gap;
+            gap.Advance(false, 1.0);
+            gap.Advance(false, 1.01);
+            require(gap.Advance(false, 5.0) == 0.f);
+        }
+        // Resolve PSO slots: every combination lands in the 9-slot table, guided raw always in 6..8.
+        for (bool raw : { false, true })
+            for (bool guided : { false, true })
+                for (bool packed : { false, true })
+                    for (bool cached : { false, true })
+                        for (bool sdr : { false, true })
+                        {
+                            const unsigned i = ResolveIndex(raw, guided, packed, cached, sdr);
+                            require(i < 9u);
+                            require(!guided || (i == (packed ? (cached ? 8u : 7u) : 6u)));
+                        }
+        require(ResolveIndex(true, false, false, false, false) == 2u && ResolveIndex(true, false, false, false, true) == 2u);
+        require(ResolveIndex(false, false, true, false, true) == 5u && ResolveIndex(false, false, false, false, false) == 0u);
+        // Frame-rate independence: 0.1 px per 60 Hz frame whatever the frame time; nonsense frame times count as 60 Hz.
+        {
+            using DlssNr::SuperiorPrivate::PerSecondScale;
+            require(PerSecondScale(1000.f / 60.f) == 1.f);
+            require(std::abs(PerSecondScale(1000.f / 240.f) - 4.f) < 1e-4f);
+            require(std::abs(PerSecondScale(1000.f / 30.f) - .5f) < 1e-4f);
+            require(PerSecondScale(0.f) == 1.f && PerSecondScale(-5.f) == 1.f && PerSecondScale(NAN) == 1.f);
+            require(PerSecondScale(1e-3f) == 10.f && PerSecondScale(1e5f) == .1f);
+        }
 
         // Native-scale fallback is tested by the host integration contract.
         DlssNrConstants input{};input.Mode=0;input.Width=1920;input.Height=1080;input.DirectResolveFlags=ShaderFlag;

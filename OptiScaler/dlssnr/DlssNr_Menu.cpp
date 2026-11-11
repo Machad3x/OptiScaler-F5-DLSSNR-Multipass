@@ -4535,7 +4535,7 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
             const auto selected =
                 DlssNr::SuperiorScaling::Preset(config->DlssNrSuperiorScalingPreset.value_or_default());
             int preset = selected == choices[0] ? 0 : selected == choices[2] ? 2 : 1;
-            ImGui::BeginDisabled(nr.vulkan);
+            ImGui::BeginDisabled(nr.vulkan || DlssNr::SuperiorScaling::SrUnavailable());
             if (ImGui::Combo("DLSS to temporally stabilize NR", &preset, presets, IM_ARRAYSIZE(presets)))
                 config->DlssNrSuperiorScalingPreset = choices[preset];
             ImGui::EndDisabled();
