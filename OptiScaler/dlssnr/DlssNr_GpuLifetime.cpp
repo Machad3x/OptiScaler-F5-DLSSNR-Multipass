@@ -1,7 +1,9 @@
 #include "pch.h"
 #include "DlssNr_GpuLifetime.h"
+#include "DlssNr_AllocatorEpochs.h"
 #include <Util.h>
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 #include <map>
 #include <wrl/client.h>
@@ -15,6 +17,7 @@ namespace
 {
 // Identity only (never dereferenced later); no log line, this runs for every notification.
 template <typename T> T* Identity(T* object) { return static_cast<T*>(Util::RealObjectIdentity(object)); }
+
 } // namespace
 
 struct GpuLifetime::Impl
@@ -38,10 +41,13 @@ struct GpuLifetime::Impl
     struct Recording
     {
         std::atomic_bool open { true };
-        bool signalFailed = false;
+        bool signalFailed = false, singleSubmit = false;
         // Only the latest value on each queue is needed, including when the list is replayed.
         std::map<std::shared_ptr<Timeline>, UINT64> completions;
-        bool Complete() const { return !open && Finished(); }
+        // The allocator the list recorded into (AllocatorEpochs): its reset ends the recording like the list's own.
+        AllocatorEpochs::Stamp allocator;
+        bool Open() const { return open && !allocator.Expired(); }
+        bool Complete() const { return !Open() && Finished(); }
         bool Finished() const
         {
             return !signalFailed && std::all_of(completions.begin(), completions.end(),
@@ -145,11 +151,11 @@ struct GpuLifetime::Impl
     {
         const auto entry = lists->byIdentity.find(commands);
         if (entry != lists->byIdentity.end())
-            if (auto use = entry->second.recording.lock(); use && use->open)
+            if (auto use = entry->second.recording.lock(); use && use->Open())
                 return use;
         // A list whose destruction cannot be watched is still tracked by its recordings vector entry.
         for (const auto& [identity, use] : recordings)
-            if (identity == commands && use->open)
+            if (identity == commands && use->Open())
                 return use;
         return {};
     }
@@ -187,7 +193,7 @@ GpuLifetime::~GpuLifetime()
     if (!impl->recordings.empty() || !impl->retired.empty())
         (void) impl.release();
 }
-void GpuLifetime::Record(ID3D12GraphicsCommandList* commands)
+void GpuLifetime::Record(ID3D12GraphicsCommandList* commands, bool trackAllocator)
 {
     if (!commands)
         return;
@@ -201,6 +207,8 @@ void GpuLifetime::Record(ID3D12GraphicsCommandList* commands)
         return;
     }
     auto use = std::make_shared<Impl::Recording>();
+    if (trackAllocator)
+        use->allocator = AllocatorEpochs::Capture(commands);
     auto entry = impl->lists->byIdentity.find(commands);
     if (entry == impl->lists->byIdentity.end() && impl->watchKeyValid)
     {
@@ -216,6 +224,12 @@ void GpuLifetime::Record(ID3D12GraphicsCommandList* commands)
         entry->second.recording = use;
     impl->currentGeneration.push_back(use);
     impl->recordings.emplace_back(commands, std::move(use));
+}
+void GpuLifetime::MarkSingleSubmit(ID3D12GraphicsCommandList* commands)
+{
+    std::lock_guard lock(impl->mutex);
+    if (auto use = impl->OpenRecording(Identity(commands)))
+        use->singleSubmit = true;
 }
 bool GpuLifetime::Open(ID3D12CommandList* commands)
 {
@@ -253,6 +267,8 @@ void GpuLifetime::Submitted(ID3D12CommandQueue* queue, UINT count, ID3D12Command
             use->completions[timeline] = 0; // nothing will execute on a removed device
         else
             use->signalFailed = true; // unresolved: retained rather than released under the GPU
+        if (use->singleSubmit)
+            use->open = false;
     }
 }
 void GpuLifetime::ResetRecording(ID3D12CommandList* commands)
@@ -274,6 +290,16 @@ void GpuLifetime::Retire(std::function<void()> destroy, std::weak_ptr<const void
 {
     std::lock_guard lock(impl->mutex);
     impl->retired.push_back({ impl->currentGeneration, std::move(destroy), std::move(owner), true });
+}
+bool GpuLifetime::AfterRecording(ID3D12GraphicsCommandList* commands, std::function<void(bool)> completed)
+{
+    std::lock_guard lock(impl->mutex);
+    auto use = impl->OpenRecording(Identity(commands));
+    if (!use)
+        return false;
+    impl->retired.push_back(
+        { { use }, [use, completed = std::move(completed)] { completed(!use->completions.empty()); } });
+    return true;
 }
 void GpuLifetime::BeginGeneration()
 {

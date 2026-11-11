@@ -12,7 +12,8 @@ namespace DlssNr::SuperiorScaling
 // Runtime state, defined with the D3D12 pipeline (DlssNr_Dx12.cpp). Status: the last thing worth telling the user.
 std::string Status();
 // Why Superior is not running this session (empty while it runs); the ordinary path uses Matched residual meanwhile.
-// Selecting Superior again retries. SrUnavailable: the NGX DLSS SR runtime itself could not be used here.
+// Selecting Superior again retries. SrUnavailable: the NGX DLSS SR runtime itself could not be used here; Superior
+// then runs without its private DLSS (like No DLSS) until it is selected again.
 std::string Unavailable();
 bool SrUnavailable();
 // The game's NGX D3D12 runtime is shutting down: every NGX handle is about to be destroyed by NGX itself.
@@ -24,24 +25,29 @@ constexpr uint32_t ShaderFlag = 65536u;
 constexpr uint32_t LowGroupHeight = 16u;
 inline bool Enabled(uint32_t transfer) { return transfer == Transfer; }
 template <class C> inline bool Enabled(const C& cfg) { return Enabled(cfg.DlssNrTransfer.value_or_default()); }
-inline unsigned Preset(unsigned preset) { return preset == 11u ? 11u : 1u; } // K or A; no default/latest ambiguity.
-// Preserve the saved CNN/Transformer preference. CNN switches from A to E only
+constexpr unsigned NoPrivateDlss = 0, CnnPreference = 1, CnnD = 4, CnnE = 5, TransformerK = 11;
+inline unsigned Preset(unsigned preset)
+{
+    return preset == NoPrivateDlss || preset == TransformerK ? preset : CnnPreference;
+}
+// Preserve the saved CNN/Transformer preference. CNN switches from D to E only
 // below the range-sigma threshold; compression itself does not choose the model.
 inline unsigned PrivatePreset(unsigned saved, float rangeSigma)
 {
-    return Preset(saved) == 11u ? 11u : rangeSigma < .01f ? 5u : 1u;
+    const auto preference = Preset(saved);
+    return preference == CnnPreference ? (rangeSigma < .01f ? CnnE : CnnD) : preference;
 }
 inline float GuidedRange(float scale)
 {
     const float t = std::isfinite(scale) ? std::clamp((scale - .5f) * 2.f, 0.f, 1.f) : 0.f;
     return .015f - .012f * t * t * t;
 }
-// CNN's A or E is picked once from the scale it starts at, also under Auto: following a moving render size would
+// CNN's D or E is picked once from the scale it starts at, also under Auto: following a moving render size would
 // recreate the private DLSS and reset history. A changed setting picks again, and so does NR or NGX shutdown (a new
 // device or runtime). Recreating resources must not unlatch it.
 struct PrivatePresetChoice
 {
-    unsigned preference = 0, selected = 1;
+    unsigned preference = 0, selected = CnnD;
     float manualScale = 0.f;
     bool automatic = false, valid = false;
     unsigned Select(unsigned saved, bool isAuto, float configuredScale, float effectiveScale)
@@ -74,6 +80,16 @@ inline bool CanSelectUpscaleMode(unsigned mode, float scale, bool nativeVulkan)
     return mode == Transfer ? !nativeVulkan : mode == 0u || (mode <= 2u && scale < .999f);
 }
 // -1 keeps the generic PSO. Specialization changes no user setting or colour calculation.
+// The fallback resolve PSO slot (DlssNr_Dx12::_superiorResolve, 9 slots). The raw (non-temporal) resolve compiles
+// to the same bytecode for SDR and HDR: one blob, one PSO (slot 2). Guided raw: the No DLSS / not-yet-ready
+// private path, unpacked 6, packed 7, packed with the cached warp 8.
+inline unsigned ResolveIndex(bool rawAnswer, bool guidedRaw, bool packed, bool cachedWarp, bool sdr)
+{
+    return guidedRaw   ? (packed ? (cachedWarp ? 8u : 7u) : 6u)
+           : packed    ? 4u + (sdr ? 1u : 0u)
+           : rawAnswer ? 2u
+                       : (sdr ? 1u : 0u);
+}
 inline int NormalResolveVariant(bool rawAnswer, bool packed, unsigned passthrough, unsigned mapping, unsigned debugView,
                                 unsigned compareMode, unsigned applyModel)
 {

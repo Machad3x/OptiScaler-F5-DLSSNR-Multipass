@@ -7,12 +7,15 @@ namespace SuperiorRun
 {
 using Constants = DlssNr::Superior::DlssNrConstants;
 namespace Fields = DlssNr::Superior::Fields;
+namespace Private = DlssNr::SuperiorPrivate;
+using namespace DlssNr::Superior;
 using Microsoft::WRL::ComPtr;
 constexpr auto Uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 constexpr auto Srv = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
 // Frames to wait for the private DLSS creation's submission before giving up on it for this session.
 constexpr unsigned kCreationWaitFrames = 240;
+constexpr unsigned kRetireWaitFrames = 240; // about 2-4 s; a normal retire takes 2-3 frames
 
 struct Texture
 {
@@ -31,14 +34,70 @@ struct Texture
 // block itself, so after it (or after a restart) the handle is dropped rather than released or evaluated.
 bool NgxAlive(uint64_t epoch) { return NVNGXProxy::IsDx12Inited() && NVNGXProxy::Dx12Epoch() == epoch; }
 
+struct ResidentCnn
+{
+    NVSDK_NGX_Parameter* parameters = nullptr;
+    NVSDK_NGX_Handle* feature = nullptr;
+    uint64_t ngxEpoch = 0, createEpoch = 0;
+    const void* creation = nullptr;
+    unsigned waitedFrames = 0;
+    bool submitted = false, ready = false;
+    ~ResidentCnn()
+    {
+        if (!NgxAlive(ngxEpoch))
+            return;
+        if (feature && NVNGXProxy::D3D12_ReleaseFeature())
+            NVNGXProxy::D3D12_ReleaseFeature()(feature);
+        if (parameters && NVNGXProxy::D3D12_DestroyParameters())
+            NVNGXProxy::D3D12_DestroyParameters()(parameters);
+    }
+};
+
+struct GhostHistory
+{
+    Texture reconstructed, state[2], raw[2], reference[2], field, expanded;
+    Texture rings, featherOutput, bias;
+    bool initialized = false, submitted = false, builtWithReset = false;
+    bool checkedTypedLoad = false, typedLoad = false;   // R16G16B16A16_FLOAT, the in-place feather
+    bool checkedStateLoad = false, stateLoad = false;   // R32G32_UINT, the compact stage's own state
+    unsigned index = 0;
+    uint64_t epoch = 0;
+    const void* commands = nullptr;
+};
+
+struct MotionSample
+{
+    Texture result;
+    ComPtr<ID3D12Resource> readback, input;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};
+    bool busy = false, recorded = false, ready = false;
+    double measuredAt = 0;
+    uint64_t context = 0;
+};
+
+struct MotionProbe
+{
+    std::array<std::shared_ptr<MotionSample>, 8> samples;
+    Private::CnnMotion selection;
+    double nextSample = 0;
+    uint64_t context = 0;
+    bool suspended = false;
+};
+
 struct Generation
 {
     ComPtr<ID3D12Device> device;
     unsigned width = 0, height = 0, workWidth = 0, workHeight = 0;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     bool inverted = false, beforeSr = false, reset = true;
-    bool temporal = false, packed = false;
-    bool disableIsHDR = false; // creation identity, independent of the game's HDR and AutoExposure
+    bool temporal = false, shaping = false, packed = false;
+    bool privateFailed = false, residentAttempted = false;
+    unsigned actualPreset = 0;
+    Private::Fade presetFade;
+    std::shared_ptr<ResidentCnn> resident;
+    std::unique_ptr<MotionProbe> motionProbe;
+    std::unique_ptr<GhostHistory> ghosts;
+    bool PrivateReady() const { return temporal && !privateFailed && feature && waitedFrames == UINT_MAX; }
     bool guidesMatched = false;
     DlssNr::Spatial::Layout layout {};
     Texture warp, warpCache;
@@ -123,7 +182,25 @@ struct State
     bool wasSelected = false, wasActive = false;
     std::string status;
     std::string unavailable;   // why Superior is not running this session; empty while it runs
-    bool srUnavailable = false; // the NGX DLSS SR runtime itself failed: the menu greys Superior out
+    bool allocatorHookAttempted = false;
+    // A frame that failed (Fail): shown over `status` until a later frame composes, logged once per run of failures.
+    std::string failure;
+    uint64_t failedEpoch = 0;
+    // The NGX DLSS SR runtime itself cannot be used here (no NVIDIA DLSS, the vendor-neutral port): no private DLSS
+    // is tried again until Superior is selected again; Superior composes the current NR edit meanwhile.
+    bool srUnavailable = false;
+    // Generations whose private DLSS is still retiring. A new one is created only once they are gone (one feature
+    // at a time), but never waited on longer than kRetireWaitFrames: a recording that never closes (no Reset hook, a
+    // list the game keeps for good) must not keep the private DLSS off for the session.
+    std::vector<std::weak_ptr<Generation>> retiringPrivate;
+    unsigned retireWaitFrames = 0;
+    bool RetirePending()
+    {
+        std::erase_if(retiringPrivate, [](const auto& g) { return g.expired(); });
+        if (retiringPrivate.empty())
+            retireWaitFrames = 0; // every wait gets its full bound
+        return !retiringPrivate.empty();
+    }
 };
 // Same process-local ownership as janblade's g_nr. Keep unresolved GPU ownership at teardown.
 State& GetState()
@@ -134,6 +211,7 @@ State& GetState()
 // Set by the first Superior frame. Until then the NGX shutdown path does not touch the NR lock at all.
 std::atomic_bool g_used = false;
 
+// The menu's status line: a state that lasts until Superior moves on.
 void Say(const char* text)
 {
     auto& s = GetState();
@@ -144,23 +222,45 @@ void Say(const char* text)
         LOG_INFO("Superior Scaling: {}", text);
 }
 
+// One frame (SubmissionEpoch `epoch`) failed. Shown over the lasting status, which it does not replace; repeated every
+// frame it is still logged once.
+void Fail(const char* text, uint64_t epoch)
+{
+    auto& s = GetState();
+    if (s.failure != text)
+        LOG_INFO("Superior Scaling: {}", text);
+    s.failure = text;
+    s.failedEpoch = epoch;
+}
+
+// A frame composed: a failure from an earlier frame is over (one from this same frame, which fell back and still
+// composed, stays for the next frame to decide).
+void Composed(uint64_t epoch)
+{
+    auto& s = GetState();
+    if (!s.failure.empty() && epoch != s.failedEpoch)
+        s.failure.clear();
+}
+
 // Retire the current generation: its resources and NGX handles go once every list that used them has completed.
 void Drop()
 {
     auto& s = GetState();
     if (!s.current)
         return;
+    s.failure.clear();
     auto old = std::move(s.current);
+    if (old->feature || old->resident)
+        s.retiringPrivate.push_back(old);
     s.lifetime.Retire([old] {});
     s.lifetime.BeginGeneration();
 }
 
 // For the rest of the session (until Superior is selected again) the ordinary path runs, with Matched residual.
-void GiveUp(const std::string& reason, bool srUnavailable)
+void GiveUp(const std::string& reason)
 {
     auto& s = GetState();
     s.unavailable = reason;
-    s.srUnavailable = s.srUnavailable || srUnavailable;
     LOG_WARN("Superior Scaling unavailable: {}; using Matched residual instead", reason);
     Say("");
     Drop();
@@ -169,8 +269,14 @@ void GiveUp(const std::string& reason, bool srUnavailable)
 void Record(ID3D12GraphicsCommandList* cmd)
 {
     auto& s = GetState();
-    s.lifetime.Record(cmd);
+    s.lifetime.Record(cmd, true);
     Watch(Util::RealObjectIdentity(cmd));
+}
+
+void MarkSingleSubmit(ID3D12GraphicsCommandList* cmd)
+{
+    if (g_used)
+        GetState().lifetime.MarkSingleSubmit(cmd);
 }
 
 void Submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
@@ -179,10 +285,18 @@ void Submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* 
     s.lifetime.Submitted(queue, count, lists);
     // The hook stopped watching these lists after this submission. A list whose recording is still open can be
     // submitted again (replayed) and is still to be Reset, so it stays watched until then; others are forgotten.
-    if (s.current && s.current->creation)
+    if (s.current)
         for (UINT i = 0; i < count; ++i)
-            if (lists[i] == s.current->creation)
-                s.current->creationSubmitted = true;
+        {
+            auto& g = *s.current;
+            const auto identity = Util::RealObjectIdentity(lists[i]);
+            if (g.creation && identity == g.creation)
+                g.creationSubmitted = true;
+            if (g.resident && g.resident->creation == identity)
+                g.resident->submitted = true;
+            if (g.ghosts && g.ghosts->commands == identity)
+                g.ghosts->submitted = true;
+        }
     for (UINT i = 0; i < count; ++i)
         if (s.lifetime.Open(lists[i]))
             Watch(lists[i]);
@@ -197,11 +311,23 @@ void ResetRecording(ID3D12CommandList* cmd)
     Forget(cmd);
     // The private DLSS creation was recorded on a list that is being reset without ever being submitted:
     // those creation commands never run, so the feature must be built again.
-    if (s.current && s.current->feature && s.current->creation == cmd && !s.current->creationSubmitted)
+    if (!s.current)
+        return;
+    const auto identity = Util::RealObjectIdentity(cmd);
+    auto& g = *s.current;
+    if (g.ghosts && g.ghosts->commands == identity && !g.ghosts->submitted)
     {
-        Drop();
-        g_nr.reset = true;
+        auto abandoned = std::shared_ptr<GhostHistory>(std::move(g.ghosts));
+        s.lifetime.Retire([abandoned] {});
     }
+    if (g.resident && g.resident->creation == identity && !g.resident->submitted)
+    {
+        auto abandoned = std::move(g.resident);
+        s.lifetime.Retire([abandoned] {});
+        g.residentAttempted = false;
+    }
+    if (g.creation == identity && !g.creationSubmitted)
+        Drop();
 }
 
 bool Ensure(Texture& t, ID3D12Device* device, DXGI_FORMAT format, unsigned w, unsigned h)
@@ -221,7 +347,8 @@ bool Ensure(Texture& t, ID3D12Device* device, DXGI_FORMAT format, unsigned w, un
 
 bool Dispatch(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, const Constants& c, ID3D12Resource* source,
               ID3D12Resource* model, ID3D12Resource* original, ID3D12Resource* motion, ID3D12Resource* previous,
-              ID3D12Resource* low, Texture& output, Texture* keep = nullptr, uint32_t* immutableSlot = nullptr)
+              ID3D12Resource* low, Texture& output, Texture* keep = nullptr, uint32_t* immutableSlot = nullptr,
+              bool outputStaysUav = false, bool keepStaysUav = false)
 {
     output.To(cmd, Uav);
     if (keep)
@@ -229,9 +356,19 @@ bool Dispatch(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, const Constan
     if (!shader.DispatchSuperiorPass(cmd, c, source, model, original, motion, previous, low, output.Get(),
                                      keep ? keep->Get() : nullptr, immutableSlot))
         return false;
-    output.To(cmd, Srv);
-    if (keep)
-        keep->To(cmd, Srv);
+    const auto finish = [&](Texture& texture, bool staysUav)
+    {
+        if (!staysUav)
+            texture.To(cmd, Srv);
+        else
+        {
+            auto barrier = CD3DX12_RESOURCE_BARRIER::UAV(texture.Get());
+            cmd->ResourceBarrier(1, &barrier);
+        }
+    };
+    finish(output, outputStaysUav);
+    if (keep && keep != &output)
+        finish(*keep, keepStaysUav);
     return true;
 }
 
@@ -305,13 +442,14 @@ bool CreateWarp(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* c
 enum class Created
 {
     Ok,
-    ResourcesFailed, // our own surfaces or passes: worth another try once Superior is selected again
-    SrUnavailable    // the NGX DLSS SR runtime: not here on this machine/runtime
+    ResourcesFailed, // our own surfaces or passes: this generation runs without a private DLSS
+    FeatureFailed,   // NGX is there but would not give parameters or a feature now (size, memory): this generation
+    SrUnavailable    // the NGX DLSS SR runtime itself: not here on this machine/runtime, latched for the session
 };
 
-NVSDK_NGX_Result CreateFeature(Generation& g, ID3D12GraphicsCommandList* cmd, unsigned preset)
+NVSDK_NGX_Result CreateFeature(NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle*& feature, ID3D12GraphicsCommandList* cmd,
+                               unsigned preset)
 {
-    auto* p = g.parameters;
     for (const char* key :
          { NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
@@ -319,8 +457,24 @@ NVSDK_NGX_Result CreateFeature(Generation& g, ID3D12GraphicsCommandList* cmd, un
            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance,
            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality })
         p->Set(key, preset);
-    g.feature = nullptr;
-    return NVNGXProxy::D3D12_CreateFeature()(cmd, NVSDK_NGX_Feature_SuperSampling, p, &g.feature);
+    feature = nullptr;
+    return NVNGXProxy::D3D12_CreateFeature()(cmd, NVSDK_NGX_Feature_SuperSampling, p, &feature);
+}
+
+void SetCreationParameters(const Generation& g, NVSDK_NGX_Parameter* p)
+{
+    const auto w = g.workWidth, h = g.workHeight;
+    p->Set(NVSDK_NGX_Parameter_Width, w);
+    p->Set(NVSDK_NGX_Parameter_Height, h);
+    p->Set(NVSDK_NGX_Parameter_OutWidth, w);
+    p->Set(NVSDK_NGX_Parameter_OutHeight, h);
+    p->Set(NVSDK_NGX_Parameter_CreationNodeMask, 1u);
+    p->Set(NVSDK_NGX_Parameter_VisibilityNodeMask, 1u);
+    p->Set(NVSDK_NGX_Parameter_PerfQualityValue, (int) NVSDK_NGX_PerfQuality_Value_DLAA);
+    const unsigned flags = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure |
+                           NVSDK_NGX_DLSS_Feature_Flags_IsHDR |
+                           (g.inverted ? NVSDK_NGX_DLSS_Feature_Flags_DepthInverted : 0u);
+    p->Set(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, flags);
 }
 
 Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd)
@@ -329,7 +483,7 @@ Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommand
     const auto w = g.workWidth, h = g.workHeight;
     if (!Ensure(g.carrier, g.device.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, w, h) ||
         !Ensure(g.temporalOutput, g.device.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, w, h) ||
-        !Ensure(g.temporalMotion, g.device.Get(), DXGI_FORMAT_R32G32_FLOAT, w, h) || !CreateWarp(g, shader, cmd) ||
+        !Ensure(g.temporalMotion, g.device.Get(), DXGI_FORMAT_R32G32_FLOAT, w, h) ||
         !Ensure(g.unit, g.device.Get(), DXGI_FORMAT_R32_FLOAT, 1, 1))
         return Created::ResourcesFailed;
     Constants unit {};
@@ -347,24 +501,13 @@ Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommand
     if (NVNGXProxy::D3D12_AllocateParameters()(&g.parameters) != NVSDK_NGX_Result_Success || !g.parameters)
     {
         g.parameters = nullptr;
-        return Created::SrUnavailable;
+        return Created::FeatureFailed;
     }
-    auto* p = g.parameters;
-    p->Set(NVSDK_NGX_Parameter_Width, w);
-    p->Set(NVSDK_NGX_Parameter_Height, h);
-    p->Set(NVSDK_NGX_Parameter_OutWidth, w);
-    p->Set(NVSDK_NGX_Parameter_OutHeight, h);
-    p->Set(NVSDK_NGX_Parameter_CreationNodeMask, 1u);
-    p->Set(NVSDK_NGX_Parameter_VisibilityNodeMask, 1u);
-    p->Set(NVSDK_NGX_Parameter_PerfQualityValue, (int) NVSDK_NGX_PerfQuality_Value_DLAA);
-    const unsigned flags = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure |
-                           (g.disableIsHDR ? 0u : NVSDK_NGX_DLSS_Feature_Flags_IsHDR) |
-                           (g.inverted ? NVSDK_NGX_DLSS_Feature_Flags_DepthInverted : 0u);
-    p->Set(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, flags);
-    LOG_INFO("Superior Scaling: creating private DLSS preset {}, IsHDR {}, AutoExposure enabled", g.preset,
-             !g.disableIsHDR);
+    SetCreationParameters(g, g.parameters);
+    LOG_INFO("Superior Scaling: creating private DLSS preset {}", g.preset);
     Record(cmd);
-    auto result = CreateFeature(g, cmd, g.preset);
+    auto result = CreateFeature(g.parameters, g.feature, cmd, g.preset);
+    g.actualPreset = g.preset;
     if (result != NVSDK_NGX_Result_Success || !g.feature)
     {
         // A runtime without the requested preset (newer 310.x DLLs dropped the CNN presets A-E): its default.
@@ -372,15 +515,18 @@ Created CreateTemporal(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommand
         std::call_once(once, [&]
                        { LOG_WARN("Superior Scaling: private DLSS preset {} unavailable ({:X}); using the runtime's "
                                   "default preset", g.preset, (unsigned) result); });
-        result = CreateFeature(g, cmd, NVSDK_NGX_DLSS_Hint_Render_Preset_Default);
+        g.actualPreset = 0;
+        result = CreateFeature(g.parameters, g.feature, cmd, NVSDK_NGX_DLSS_Hint_Render_Preset_Default);
     }
     g.creation = Util::RealObjectIdentity(cmd);
-    return result == NVSDK_NGX_Result_Success && g.feature ? Created::Ok : Created::SrUnavailable;
+    return result == NVSDK_NGX_Result_Success && g.feature ? Created::Ok : Created::FeatureFailed;
 }
 
-static_assert(unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_A) == 1u &&
+static_assert(unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_D) == 4u &&
               unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_E) == 5u &&
               unsigned(NVSDK_NGX_DLSS_Hint_Render_Preset_K) == 11u);
+
+#include "PrivateEffects.inl"
 
 Constants Shaping(const Config& cfg, unsigned first, unsigned completed,
                   DlssNr::SuperiorScaling::FrequencyScales scales)
@@ -536,8 +682,30 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     if (!prepared &&
         !Dispatch(shader, cmd, encode, proxy, answer, motion, nullptr, nullptr, nullptr, g.carrier, &g.temporalMotion))
         return nullptr;
+    bool idle = false;
+    float mix = g.presetFade.weight;
+    if (g.resident && g.resident->ready)
+    {
+        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto& probe = *g.motionProbe;
+        UpdateMotion(g, shader, cmd, originalMotion, regions.motion, frame, now, hold || reset);
+        if (probe.selection.Advance(now))
+            g.reset = true;
+        idle = probe.selection.idle;
+        mix *= probe.selection.fade.weight;
+    }
+    // The private DLSS sees only NR's small edit on a flat grey carrier, so it cannot tell a moved-away object from
+    // the surface behind it by colour and keeps the old edit there: the ghost. Where the picture was just uncovered
+    // (the disocclusion field, from depth and motion alone, so it exists before DLSS) it is told to take the current
+    // frame instead. Transformer K holds history longest and still gets the repair after DLSS on top.
+    ID3D12Resource* bias =
+        GhostBiasMask(g, shader, cmd, temporalDepth, proxy, answer, frame, reset || g.reset, packedDepthPrecision);
     g.temporalOutput.To(cmd, Uav);
-    auto* p = g.parameters;
+    auto* p = idle ? g.resident->parameters : g.parameters;
+    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, bias);
+    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X, 0u);
+    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y, 0u);
+    auto* feature = idle ? g.resident->feature : g.feature;
     p->Set(NVSDK_NGX_Parameter_Color, g.carrier.Get());
     p->Set(NVSDK_NGX_Parameter_Output, g.temporalOutput.Get());
     p->Set(NVSDK_NGX_Parameter_Depth, temporalDepth);
@@ -555,10 +723,10 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     p->Set(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, 1.0f);
     p->Set(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, 1.0f);
     p->Set(NVSDK_NGX_Parameter_Sharpness, 0.0f);
-    if (NVNGXProxy::D3D12_EvaluateFeature()(cmd, g.feature, p, nullptr) != NVSDK_NGX_Result_Success)
+    if (NVNGXProxy::D3D12_EvaluateFeature()(cmd, feature, p, nullptr) != NVSDK_NGX_Result_Success)
     {
         g.reset = true;
-        Say("Private DLSS evaluation failed; keeping the game frame.");
+        Fail("Private DLSS evaluation failed; using the current NR edit.", frame.SubmissionEpoch);
         return nullptr;
     }
     g.temporalOutput.To(cmd, Srv);
@@ -566,8 +734,23 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     decode.Mode = 38u;
     decode.Width = g.workWidth;
     decode.Height = g.workHeight;
-    if (!Dispatch(shader, cmd, decode, g.temporalOutput.Get(), nullptr, nullptr, nullptr, nullptr, nullptr, g.carrier))
-        return nullptr;
+    // The repair is tuned for K: it follows the model that runs, not the one asked for (a runtime without K runs its
+    // default instead).
+    if (g.actualPreset == DlssNr::SuperiorScaling::TransformerK)
+    {
+        if (!RejectTransformerGhosts(g, shader, cmd, decode, temporalDepth, proxy, answer, frame, reset || g.reset,
+                                     packedDepthPrecision))
+            return nullptr;
+    }
+    else
+    {
+        // Stable CNN frames use the existing read-only decode. Only a fade needs the current edit.
+        if (mix < 1.f)
+            Fields::SetPrivateFade(decode, 1.f - mix);
+        if (!Dispatch(shader, cmd, decode, g.temporalOutput.Get(), nullptr, mix < 1.f ? proxy : nullptr, nullptr,
+                      mix < 1.f ? answer : nullptr, nullptr, g.carrier))
+            return nullptr;
+    }
     g.reset = false;
     return g.carrier.Get();
 }
@@ -583,12 +766,11 @@ DlssNr::SuperiorScaling::PrivatePresetChoice& PresetChoice()
 enum class Began
 {
     Run,        // record Superior this frame
-    Wait,       // private DLSS creation recorded; skip NR until its submission epoch has passed (one frame)
+    Wait,       // packed metadata belongs to an unsubmitted recording on another list
     Unavailable // Superior cannot run: GiveUp() was called, skip this frame, the next one runs the ordinary path
 };
 
-// Called before janblade records its normal input/exposure path. Only private DLSS
-// creation gets a submission-only frame, exactly like NR feature creation above it.
+// Called before recording the normal input and exposure path.
 Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* device, DXGI_FORMAT format,
             unsigned width, unsigned height, unsigned workWidth, unsigned workHeight, float modelScale,
             const DlssNrFrameInfo& frame, bool temporal, bool haveDepth, const DlssNr::Spatial::Layout* layout)
@@ -596,41 +778,49 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
     auto& state = GetState();
     g_used = true;
     state.lifetime.Collect();
-    if (temporal && !haveDepth)
-    {
-        GiveUp("temporal stabilization needs the game's depth and motion guides", false);
-        return Began::Unavailable;
-    }
     // WarpMap.hlsli maps uv * (gWidth, gHeight) -- the frame size the resolve and warp cache are dispatched at -- through
     // PwPack, which expects pixels of the layout's native size (gNativeWorkSize.xy). The packed layout is built from this
     // same frame, so they are equal; refuse a layout that is not rather than warp with the wrong scale.
     if (layout && (layout->nativeW != width || layout->nativeH != height))
     {
-        GiveUp("its packed layout does not match the frame size", false);
+        GiveUp("its packed layout does not match the frame size");
         return Began::Unavailable;
     }
     const auto& cfg = *Config::Instance();
-    const bool disableIsHDR = cfg.DlssNrSuperiorScalingDisableIsHDR.value_or_default();
+    using namespace DlssNr::SuperiorScaling;
     const unsigned preset = PresetChoice().Select(cfg.DlssNrSuperiorScalingPreset.value_or_default(),
                                                   cfg.DlssNrModelResolutionAuto.value_or_default(),
                                                   cfg.DlssNrWorkingScale.value_or_default(), modelScale);
+    const bool shaping = temporal;
+    temporal = shaping && preset != NoPrivateDlss;
     if (auto* previous = state.current.get())
     {
-        // Handles from a runtime NGX has since shut down are gone already: never evaluate or release them.
         const bool ngxGone = (previous->feature || previous->parameters) && !NgxAlive(previous->ngxEpoch);
         if (ngxGone)
             previous->DropNgx();
-        // The game's queue is not part of the key: NGX records on the given list and the lifetime tracker follows
-        // the lists to whichever queue runs them.
-        if (ngxGone || previous->device.Get() != device || previous->width != width || previous->height != height ||
+        const bool geometryChanged =
+            previous->device.Get() != device || previous->width != width || previous->height != height ||
             previous->workWidth != workWidth || previous->workHeight != workHeight || previous->format != format ||
             previous->inverted != frame.DepthInverted || previous->beforeSr != frame.BeforeUpscale ||
-            previous->temporal != temporal || previous->packed != (layout != nullptr) ||
-            (temporal && previous->disableIsHDR != disableIsHDR) || (layout && previous->layout != *layout) ||
-            DlssNr::SuperiorScaling::PrivatePresetChanged(previous->preset, preset))
+            previous->packed != (layout != nullptr) || (layout && previous->layout != *layout);
+        const bool selectionChanged = previous->temporal != temporal || previous->preset != preset;
+        if (!ngxGone && !geometryChanged && haveDepth && previous->PrivateReady() &&
+            (previous->actualPreset == CnnD || previous->actualPreset == CnnE))
+        {
+            const auto now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (previous->presetFade.Advance(!selectionChanged, now) > 0.f && selectionChanged)
+            {
+                Record(cmd);
+                return Began::Run;
+            }
+        }
+        if (ngxGone || geometryChanged || selectionChanged)
         {
             Drop();
-            g_nr.reset = true;
+            state.lifetime.Collect(); // if the old recording is already retired, switch in this frame
+            Say("");
+            if (geometryChanged)
+                g_nr.reset = true;
         }
     }
     if (!state.current)
@@ -646,47 +836,98 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
         g.inverted = frame.DepthInverted;
         g.beforeSr = frame.BeforeUpscale;
         g.temporal = temporal;
-        g.disableIsHDR = disableIsHDR;
+        g.shaping = shaping;
         g.packed = layout != nullptr;
         if (layout)
             g.layout = *layout;
         g.preset = preset;
     }
     auto& g = *state.current;
-    if (temporal && !g.feature)
+    // Allocator tracking (an earlier retire of the private DLSS) while one is wanted, exists or retires. A session only
+    // trusts bindings written after it began, so the list this frame records into (reset before) is unbound when the
+    // tracking has just come on: it is turned on as soon as a private DLSS is wanted, not when it exists, so every
+    // frame from the one after its creation is bound.
+    const bool wantPrivate = temporal && haveDepth && !g.privateFailed && !state.srUnavailable;
+    const bool track = wantPrivate || g.feature || g.resident || state.RetirePending();
+    if (track && !state.allocatorHookAttempted)
     {
-        switch (CreateTemporal(g, shader, cmd))
+        state.allocatorHookAttempted = true;
+        ResTrack_Dx12::HookLateAllocatorReset(device);
+    }
+    DlssNr::AllocatorEpochs::SetWanted(track);
+    Record(cmd);
+    const auto identity = Util::RealObjectIdentity(cmd);
+    if (g.packed && !g.warp.Get())
+    {
+        if (!CreateWarp(g, shader, cmd))
         {
-        case Created::Ok:
-            g.createEpoch = frame.SubmissionEpoch;
-            g.waitedFrames = 0;
-            Say("Waiting for private DLSS creation submission.");
-            return Began::Wait;
-        case Created::ResourcesFailed:
-            GiveUp("its surfaces or passes could not be created", false);
-            return Began::Unavailable;
-        case Created::SrUnavailable:
-            GiveUp("private NVIDIA DLSS SR (NGX) is not available", true);
+            GiveUp("its packed warp could not be created");
             return Began::Unavailable;
         }
+        g.creation = identity;
+        g.creationSubmitted = false;
     }
-    // A later call is not proof the creation was submitted (some engines record more than one upscale per list):
-    // the submission epoch must have moved on, as for the NR feature itself.
-    if (temporal && g.waitedFrames != UINT_MAX)
+    if (g.packed && !g.creationSubmitted && g.creation != identity)
+        return Began::Wait;
+
+    // Compose the current edit while a private feature is unavailable or its creation is pending.
+    if (!haveDepth)
+        g.reset = true;
+    if (!temporal || !haveDepth || g.privateFailed)
+        return Began::Run;
+    if (!g.feature && state.srUnavailable)
     {
-        if (frame.SubmissionEpoch == g.createEpoch)
+        g.privateFailed = true;
+        Say("NVIDIA DLSS is not available here. Using the current NR edit.");
+        return Began::Run;
+    }
+    if (!g.feature)
+    {
+        if (state.RetirePending() && state.retireWaitFrames++ < kRetireWaitFrames)
+        {
+            Say("Waiting for the previous private DLSS to retire. Using the current NR edit.");
+            return Began::Run;
+        }
+        if (state.retireWaitFrames > kRetireWaitFrames)
+            LOG_WARN("Superior Scaling: the previous private DLSS has not retired after {} frames; creating the new "
+                     "one beside it",
+                     kRetireWaitFrames);
+        state.retireWaitFrames = 0;
+        if (const auto created = CreateTemporal(g, shader, cmd); created != Created::Ok)
+        {
+            g.privateFailed = true;
+            if (created == Created::SrUnavailable)
+            {
+                state.srUnavailable = true;
+                Say("NVIDIA DLSS is not available here. Using the current NR edit.");
+            }
+            else
+                Say("Private DLSS could not be created. Using the current NR edit.");
+            return Began::Run;
+        }
+        g.creationSubmitted = false;
+        g.createEpoch = frame.SubmissionEpoch;
+        g.waitedFrames = 0;
+        return Began::Run;
+    }
+    if (g.waitedFrames != UINT_MAX)
+    {
+        if (!g.creationSubmitted || frame.SubmissionEpoch == g.createEpoch)
         {
             if (++g.waitedFrames > kCreationWaitFrames)
             {
-                GiveUp("the private DLSS creation was never submitted", false);
-                return Began::Unavailable;
+                g.privateFailed = true;
+                Say("Private DLSS creation was not submitted. Using the current NR edit.");
             }
-            return Began::Wait;
+            return Began::Run;
         }
-        g.waitedFrames = UINT_MAX; // ready
-        Say("");
+        g.waitedFrames = UINT_MAX;
+        LOG_INFO("Superior Scaling: private DLSS preset {} ready after submission", g.actualPreset);
+        Say(g.actualPreset == g.preset ? ""
+                                       : "This DLSS version does not have the selected model; it runs its own default "
+                                         "model instead.");
     }
-    Record(cmd);
+    UpdateResidentCnn(g, cmd, frame);
     return Began::Run;
 }
 
@@ -708,6 +949,18 @@ void Shutdown()
     Drop();
     s.lifetime.Collect();
     PresetChoice() = {};
+    DlssNr::AllocatorEpochs::SetWanted(false);
+}
+
+// Each NR frame Superior does not run: what it retired keeps closing at allocator resets until it is gone, then the
+// tracking (and its cost on every game Reset) stops.
+void Idle()
+{
+    auto& s = GetState();
+    if (!g_used)
+        return;
+    s.lifetime.Collect();
+    DlssNr::AllocatorEpochs::SetWanted(s.RetirePending());
 }
 
 bool MatchGuides(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Resource* depth,

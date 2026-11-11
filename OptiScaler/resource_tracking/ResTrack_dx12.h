@@ -750,6 +750,9 @@ class ResTrack_Dx12
     static void HookDevice(ID3D12Device* device);
     // True when both are on: the queue submit hook and the command list Reset hook.
     static bool HookLateNrQueue(ID3D12Device* device);
+    // ID3D12CommandAllocator::Reset, for DlssNr::AllocatorEpochs (Superior Scaling asks when it first needs it).
+    // Needs HookLateNrQueue's list Reset hook; comes off with it.
+    static bool HookLateAllocatorReset(ID3D12Device* device);
     static void ReleaseHooks();
     static void ReleaseDeviceHooks();
     static void ClearPossibleHudless();

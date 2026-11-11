@@ -254,9 +254,9 @@ That output already reconstructed detail at that ratio, so NR running at the sam
 
 ## Upscale Mode: Superior Scaling
 
-An Upscale Mode of its own (NR Output). Below 100% Model resolution it shrinks the picture with an Area filter, shapes NR's change by frequency between passes and at the end, and runs a private NVIDIA DLSS (DLAA) on that change to keep it steady over time. Once selected it also works at 100% while Compress screen edges shrinks the model's input. **DLSS to temporally stabilize NR** picks that private DLSS's preset: A (faster) or K (steadier in motion); if the runtime does not offer it, its default preset is used.
+Superior Scaling uses Area downsampling, frequency shaping and guided reconstruction of the NR edit. The **DLSS to temporally stabilize NR** menu offers **No DLSS**, **CNN (recommended)** and **Transformer**. CNN uses D in motion and switches to resident E in still scenes at reduced model resolution. At higher model resolution it uses E under the existing guided range rule. On surfaces that were just uncovered, both CNN and Transformer are told to drop their history; Transformer also repairs any ghost left in its output. The installed DLSS runtime must support the requested presets.
 
-It needs DirectX 12 (or a DirectX 12 bridge), the game's depth and motion, and NVIDIA DLSS through NGX. Where any of these is missing (Vulkan, a non-NVIDIA card, the vendor-neutral port) Matched residual runs instead and the menu says why; select Superior Scaling again to retry. Upscale Method has no effect with it. Details: [Superior-Scaling-port.md](Superior-Scaling-port.md).
+It needs DirectX 12 (or a DirectX 12 bridge); on Vulkan Matched residual runs instead and the menu says so. CNN and Transformer also need the game's depth (on frames without it Superior runs like **No DLSS**) and NVIDIA DLSS through NGX. Without it (a non-NVIDIA card, the vendor-neutral port) Superior Scaling still runs, like **No DLSS**, the DLSS choice is greyed out and the menu says why; select Superior Scaling again to retry. Upscale Method has no effect with it. Details: [Superior-Scaling-port.md](Superior-Scaling-port.md).
 
 ## Final Image Composition
 

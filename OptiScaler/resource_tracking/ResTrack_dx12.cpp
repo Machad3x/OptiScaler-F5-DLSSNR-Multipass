@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include <dlssnr/DlssNr_ExposureScan.h>
+#include <dlssnr/DlssNr_AllocatorEpochs.h>
 #include <dlssnr/DlssNr.h>
 
 #include "ResTrack_dx12.h"
@@ -121,6 +122,19 @@ typedef void(STDMETHODCALLTYPE* PFN_ExecuteCommandLists)(ID3D12CommandQueue* Thi
 using PFN_LateReset = HRESULT(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, ID3D12CommandAllocator*,
                                                   ID3D12PipelineState*);
 static PFN_LateReset o_LateReset = nullptr;
+using PFN_AllocatorReset = HRESULT(STDMETHODCALLTYPE*)(ID3D12CommandAllocator*);
+static PFN_AllocatorReset o_LateAllocatorReset = nullptr;
+// Set only after the allocator detour committed, cleared before it comes off (o_LateAllocatorReset stays the
+// trampoline the hook calls). Off: the list Reset hook writes no allocator bindings.
+static std::atomic_bool lateAllocatorHooked = false;
+
+static HRESULT STDMETHODCALLTYPE hkLateAllocatorReset(ID3D12CommandAllocator* allocator)
+{
+    const auto result = o_LateAllocatorReset(allocator);
+    if (SUCCEEDED(result))
+        DlssNr::AllocatorEpochs::AllocatorReset(allocator);
+    return result;
+}
 // True when hkLateReset went on after the tracker's hkReset (the usual order: the tracker hooks at device creation,
 // NR later). See DetachLateReset.
 static bool lateResetOnTop = false;
@@ -129,7 +143,11 @@ static HRESULT STDMETHODCALLTYPE hkLateReset(ID3D12GraphicsCommandList* cmd, ID3
 {
     const auto result = o_LateReset(cmd, allocator, pipeline);
     if (SUCCEEDED(result))
+    {
         DlssNr::FinishedPictureResetCommandList(cmd);
+        if (lateAllocatorHooked.load(std::memory_order_acquire))
+            DlssNr::AllocatorEpochs::ListReset(cmd, allocator);
+    }
     return result;
 }
 
@@ -141,12 +159,20 @@ static void DetachLateReset()
     if (o_LateReset == nullptr)
         return;
 
+    // Resets from now on go unseen: end the allocator-tracking session before either hook comes off.
+    const bool allocatorHooked = lateAllocatorHooked.exchange(false, std::memory_order_acq_rel);
+    DlssNr::AllocatorEpochs::SetHooked(false);
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourDetach(&(PVOID&) o_LateReset, hkLateReset);
+    if (allocatorHooked)
+        DetourDetach(&(PVOID&) o_LateAllocatorReset, hkLateAllocatorReset);
 
     if (DetourTransactionCommit() == NO_ERROR)
+    {
         o_LateReset = nullptr;
+        o_LateAllocatorReset = nullptr;
+    }
     else
         LOG_ERROR("Failed to unhook the DLSS-NR command list Reset");
 }
@@ -2634,6 +2660,43 @@ bool ResTrack_Dx12::HookLateNrQueue(ID3D12Device* device)
         allocator->Release();
     }
     return o_ExecuteCommandLists != nullptr && o_LateReset != nullptr;
+}
+
+bool ResTrack_Dx12::HookLateAllocatorReset(ID3D12Device* device)
+{
+    static std::mutex hookMutex;
+    std::lock_guard<std::mutex> lock(hookMutex);
+    if (lateAllocatorHooked.load(std::memory_order_acquire))
+        return true;
+    // Bindings come from the list Reset hook: without it there is nothing to track.
+    if (!o_LateReset || !device)
+        return false;
+    ID3D12CommandAllocator* allocator = nullptr;
+    if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))))
+        return false;
+    ID3D12CommandAllocator* real = nullptr;
+    if (!CheckForRealObject(__FUNCTION__, allocator, (IUnknown**) &real))
+        real = allocator;
+    o_LateAllocatorReset = (PFN_AllocatorReset) (*(void***) real)[8]; // ID3D12CommandAllocator::Reset
+    allocator->Release();
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    if (DetourAttach(&(PVOID&) o_LateAllocatorReset, hkLateAllocatorReset) != NO_ERROR)
+    {
+        DetourTransactionAbort();
+        o_LateAllocatorReset = nullptr;
+        LOG_WARN("Could not hook the command allocator Reset; Superior Scaling keeps the ordinary list lifetime");
+        return false;
+    }
+    if (DetourTransactionCommit() != NO_ERROR)
+    {
+        o_LateAllocatorReset = nullptr;
+        LOG_WARN("Could not hook the command allocator Reset; Superior Scaling keeps the ordinary list lifetime");
+        return false;
+    }
+    lateAllocatorHooked.store(true, std::memory_order_release);
+    DlssNr::AllocatorEpochs::SetHooked(true);
+    return true;
 }
 
 void ResTrack_Dx12::HookToQueue(ID3D12Device* InDevice)
