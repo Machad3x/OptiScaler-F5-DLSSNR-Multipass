@@ -89,6 +89,8 @@ template <class T> ComPtr<T> Ensure(ID3D12Object* object, REFGUID key)
 void Stop() { session.fetch_add(1, std::memory_order_acq_rel); }
 } // namespace
 
+bool Hooked() { return hooked.load(std::memory_order_acquire); }
+
 bool Active()
 {
     return hooked.load(std::memory_order_acquire) && wanted.load(std::memory_order_acquire) && GetKeys().valid;
