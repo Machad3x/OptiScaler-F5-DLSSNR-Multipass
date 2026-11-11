@@ -15,6 +15,7 @@ constexpr auto Srv = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
 // Frames to wait for the private DLSS creation's submission before giving up on it for this session.
 constexpr unsigned kCreationWaitFrames = 240;
+constexpr unsigned kRetireWaitFrames = 240; // about 2-4 s; a normal retire takes 2-3 frames
 
 struct Texture
 {
@@ -45,9 +46,9 @@ struct ResidentCnn
     {
         if (!NgxAlive(ngxEpoch))
             return;
-        if (feature)
+        if (feature && NVNGXProxy::D3D12_ReleaseFeature())
             NVNGXProxy::D3D12_ReleaseFeature()(feature);
-        if (parameters)
+        if (parameters && NVNGXProxy::D3D12_DestroyParameters())
             NVNGXProxy::D3D12_DestroyParameters()(parameters);
     }
 };
@@ -182,8 +183,18 @@ struct State
     bool wasSelected = false, wasActive = false;
     std::string status;
     std::string unavailable;   // why Superior is not running this session; empty while it runs
+    bool allocatorHookAttempted = false;
     bool srUnavailable = false;
-    std::weak_ptr<Generation> retiringPrivate;
+    // Generations whose private DLSS is still retiring. A new one is created only once they are gone (one feature
+    // at a time), but never waited on longer than kRetireWaitFrames: a recording that never closes (no Reset hook, a
+    // list the game keeps for good) must not keep the private DLSS off for the session.
+    std::vector<std::weak_ptr<Generation>> retiringPrivate;
+    unsigned retireWaitFrames = 0;
+    bool RetirePending()
+    {
+        std::erase_if(retiringPrivate, [](const auto& g) { return g.expired(); });
+        return !retiringPrivate.empty();
+    }
 };
 // Same process-local ownership as janblade's g_nr. Keep unresolved GPU ownership at teardown.
 State& GetState()
@@ -211,8 +222,8 @@ void Drop()
     if (!s.current)
         return;
     auto old = std::move(s.current);
-    if (old->feature)
-        s.retiringPrivate = old;
+    if (old->feature || old->resident)
+        s.retiringPrivate.push_back(old);
     s.lifetime.Retire([old] {});
     s.lifetime.BeginGeneration();
 }
@@ -247,17 +258,16 @@ void Submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* 
     s.lifetime.Submitted(queue, count, lists);
     // The hook stopped watching these lists after this submission. A list whose recording is still open can be
     // submitted again (replayed) and is still to be Reset, so it stays watched until then; others are forgotten.
-    if (s.current && s.current->creation)
-        for (UINT i = 0; i < count; ++i)
-            if (Util::RealObjectIdentity(lists[i]) == s.current->creation)
-                s.current->creationSubmitted = true;
     if (s.current)
         for (UINT i = 0; i < count; ++i)
         {
             auto& g = *s.current;
-            if (g.resident && g.resident->creation == Util::RealObjectIdentity(lists[i]))
+            const auto identity = Util::RealObjectIdentity(lists[i]);
+            if (g.creation && identity == g.creation)
+                g.creationSubmitted = true;
+            if (g.resident && g.resident->creation == identity)
                 g.resident->submitted = true;
-            if (g.ghosts && g.ghosts->commands == Util::RealObjectIdentity(lists[i]))
+            if (g.ghosts && g.ghosts->commands == identity)
                 g.ghosts->submitted = true;
         }
     for (UINT i = 0; i < count; ++i)
@@ -794,6 +804,15 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
         g.preset = preset;
     }
     auto& g = *state.current;
+    // Allocator tracking (an earlier retire of the private DLSS) only while there is one to retire. Set before Record,
+    // so this frame's recording already carries the allocator it uses.
+    const bool track = g.feature || g.resident || state.RetirePending();
+    if (track && !state.allocatorHookAttempted)
+    {
+        state.allocatorHookAttempted = true;
+        ResTrack_Dx12::HookLateAllocatorReset(device);
+    }
+    DlssNr::AllocatorEpochs::SetWanted(track);
     Record(cmd);
     const auto identity = Util::RealObjectIdentity(cmd);
     if (g.packed && !g.warp.Get())
@@ -816,11 +835,16 @@ Began Begin(DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Device* d
         return Began::Run;
     if (!g.feature)
     {
-        if (!state.retiringPrivate.expired())
+        if (state.RetirePending() && state.retireWaitFrames++ < kRetireWaitFrames)
         {
             Say("Waiting for the previous private DLSS to retire. Using the current NR edit.");
             return Began::Run;
         }
+        if (state.retireWaitFrames > kRetireWaitFrames)
+            LOG_WARN("Superior Scaling: the previous private DLSS has not retired after {} frames; creating the new "
+                     "one beside it",
+                     kRetireWaitFrames);
+        state.retireWaitFrames = 0;
         if (CreateTemporal(g, shader, cmd) != Created::Ok)
         {
             g.privateFailed = true;
@@ -869,6 +893,18 @@ void Shutdown()
     Drop();
     s.lifetime.Collect();
     PresetChoice() = {};
+    DlssNr::AllocatorEpochs::SetWanted(false);
+}
+
+// Each NR frame Superior does not run: what it retired keeps closing at allocator resets until it is gone, then the
+// tracking (and its cost on every game Reset) stops.
+void Idle()
+{
+    auto& s = GetState();
+    if (!g_used)
+        return;
+    s.lifetime.Collect();
+    DlssNr::AllocatorEpochs::SetWanted(s.RetirePending());
 }
 
 bool MatchGuides(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsCommandList* cmd, ID3D12Resource* depth,

@@ -3,6 +3,7 @@
 #include <dlssnr/DlssNr_SuperiorScaling.h>
 #include <dlssnr/DlssNr_SuperiorGains.h>
 #include <dlssnr/DlssNr_GpuLifetime.h>
+#include <dlssnr/DlssNr_AllocatorEpochs.h>
 #include <output/SdrToHdr_ProxyDx12.h>
 #include <native/DriverInitGate.h>
 
@@ -3699,6 +3700,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.reset = true;
         SuperiorRun::Drop();
     }
+    if (!superior && !g_contextRun)
+        SuperiorRun::Idle();
 
     // Depth is the one input the model can run without: NVIDIA's own retail DLL treats it as an optional
     // refinement of motion-vector dilation at object edges (it is null in every known capture, including

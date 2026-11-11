@@ -26,11 +26,9 @@ class GpuLifetime
     ~GpuLifetime();
     GpuLifetime(const GpuLifetime&) = delete;
     GpuLifetime& operator=(const GpuLifetime&) = delete;
+    // trackAllocator: the recording also ends when the allocator its list recorded into is reset (AllocatorEpochs),
+    // while that tracking is active; otherwise, and for lists it has no binding for, the ordinary list lifetime.
     void Record(ID3D12GraphicsCommandList* commands, bool trackAllocator = false);
-    // Call after successful native D3D12 resets. An allocator reset invalidates earlier recordings even if their
-    // command list objects stay in the pool. Unobserved associations keep the ordinary list lifetime.
-    static void NoteCommandListAllocator(ID3D12GraphicsCommandList* commands, ID3D12CommandAllocator* allocator);
-    static void NoteAllocatorReset(ID3D12CommandAllocator* allocator);
     // Only for a caller-owned list that will be reset before any reuse. A submitted recording still waits on its fence.
     void MarkSingleSubmit(ID3D12GraphicsCommandList* commands);
     // One reusable monotonic fence per queue, kept only while a recording still waits on it; aliases are normalized
