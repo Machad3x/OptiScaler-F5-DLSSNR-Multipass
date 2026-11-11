@@ -216,13 +216,15 @@ bool UpdateGhostHistory(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComman
     if (!Dispatch(shader, cmd, c, depth, g.temporalMotion.Get(), old, nullptr, nullptr, nullptr, h.reconstructed,
                   &h.state[next], nullptr, false, true))
         return false;
+    // Carry the selected depth texel through the scratch field. Dilation reuses the field after reference history.
     c.Mode = DlssNrMode_PrivateGhostAge;
     if (!Dispatch(shader, cmd, c, depth, g.temporalMotion.Get(), old, h.reconstructed.Get(), nullptr, nullptr,
-                  h.state[next], &h.state[next]))
+                  h.field, &h.state[next]))
         return false;
     c.Mode = DlssNrMode_PrivateGhostReference;
     if (!Dispatch(shader, cmd, c, h.state[next].Get(), previous ? h.raw[h.index].Get() : proxy,
-                  previous ? h.reference[h.index].Get() : proxy, proxy, answer, depth, h.raw[next], &h.reference[next]))
+                  previous ? h.reference[h.index].Get() : proxy, proxy, answer, h.field.Get(), h.raw[next],
+                  &h.reference[next]))
         return false;
 
     c.Mode = DlssNrMode_PrivateGhostDilate;
@@ -271,11 +273,29 @@ bool RejectTransformerGhosts(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsC
     }
 
     auto& h = *g.ghosts;
-    decode.Mode = DlssNrMode_PrivateGhostDecode;
+    const unsigned w = g.workWidth, ht = g.workHeight;
+    const bool ringReady = Ensure(h.rings, g.device.Get(), DXGI_FORMAT_R32G32_FLOAT, (w + 3) / 4, (ht + 3) / 4);
     decode.Passthrough = g.inverted;
-    if (!Dispatch(shader, cmd, decode, g.temporalOutput.Get(), h.expanded.Get(), proxy, depth, answer, h.field.Get(),
-                  g.carrier))
-        return false;
+    bool seeded = false;
+    if (ringReady)
+    {
+        decode.Mode = DlssNrMode_PrivateGhostDecodeSeed;
+        seeded = Dispatch(shader, cmd, decode, g.temporalOutput.Get(), h.expanded.Get(), proxy, depth, answer,
+                          h.field.Get(), g.carrier, &h.rings, nullptr, true);
+    }
+    if (!seeded)
+    {
+        decode.Mode = DlssNrMode_PrivateGhostDecode;
+        if (!Dispatch(shader, cmd, decode, g.temporalOutput.Get(), h.expanded.Get(), proxy, depth, answer,
+                      h.field.Get(), g.carrier))
+            return false;
+        if (!ringReady)
+            return true;
+        Constants seed {};
+        Fields::SetPrivateRings(seed, w, ht, g.inverted, precision, false);
+        if (!Dispatch(shader, cmd, seed, g.carrier.Get(), nullptr, nullptr, depth, nullptr, nullptr, h.rings))
+            return true;
+    }
 
     if (!h.checkedTypedLoad)
     {
@@ -285,13 +305,7 @@ bool RejectTransformerGhosts(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsC
             (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0;
         h.checkedTypedLoad = true;
     }
-    const unsigned w = g.workWidth, ht = g.workHeight;
-    if (!Ensure(h.rings, g.device.Get(), DXGI_FORMAT_R32G32_FLOAT, (w + 3) / 4, (ht + 3) / 4))
-        return true; // unfeathered mask remains valid
     Constants c {};
-    Fields::SetPrivateRings(c, w, ht, g.inverted, precision, false);
-    if (!Dispatch(shader, cmd, c, g.carrier.Get(), nullptr, nullptr, depth, nullptr, nullptr, h.rings))
-        return true;
     Fields::SetPrivateRings(c, w, ht, g.inverted, precision, true);
     if (h.typedLoad)
     {
@@ -299,8 +313,12 @@ bool RejectTransformerGhosts(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsC
         if (!Dispatch(shader, cmd, c, proxy, h.rings.Get(), proxy, depth, answer, nullptr, g.carrier))
             g.carrier.To(cmd, Srv);
     }
-    else if (Ensure(h.featherOutput, g.device.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, w, ht) &&
-             Dispatch(shader, cmd, c, g.carrier.Get(), h.rings.Get(), proxy, depth, answer, nullptr, h.featherOutput))
-        std::swap(g.carrier, h.featherOutput);
+    else
+    {
+        g.carrier.To(cmd, Srv);
+        if (Ensure(h.featherOutput, g.device.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, w, ht) &&
+            Dispatch(shader, cmd, c, g.carrier.Get(), h.rings.Get(), proxy, depth, answer, nullptr, h.featherOutput))
+            std::swap(g.carrier, h.featherOutput);
+    }
     return true;
 }

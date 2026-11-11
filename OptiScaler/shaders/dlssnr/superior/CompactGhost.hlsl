@@ -18,17 +18,30 @@ cbuffer Params : register(b0)
     uint fullWidth, fullHeight;
 };
 Texture2D<float> Depth : register(t0);
+SamplerState LinearClamp : register(s0);
 Texture2D<float2> Motion : register(t1);
 Texture2D<uint2> Previous : register(t2);
 Texture2D<uint> Reconstructed : register(t3);
+#if DLSSNR_COMPACT_GHOST_STAGE == 2
+RWTexture2D<float> WritePhase : register(u0);
+#else
 RWTexture2D<uint> WriteDepth : register(u0);
+#endif
 RWTexture2D<uint2> WriteState : register(u1);
 uint2 PreviousState(int2 p) { return Previous.Load(int3(p, 0)); }
 uint2 CurrentState(int2 p) { return WriteState[p]; }
 void StoreState(int2 p, uint2 bits) { WriteState[p] = bits; }
+#if DLSSNR_COMPACT_GHOST_STAGE == 2
+void StoreAge(int2 p, uint2 packed, float age)
+{
+    packed.x = (packed.x & ~127u) | (uint) clamp(age, 0.0, 120.0);
+    StoreState(p, packed);
+}
+#endif
 float4 PreviousGhostGuide(int2 p) { return UnpackGhost(PreviousState(p)); }
 #include "GhostSurfaceContinuation.hlsli"
 bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height); }
+#ifdef DLSSNR_COMPACT_GHOST_STAGE
 [numthreads(8, 8, 1)] void CompactGhostMain(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= width || id.y >= height)
@@ -36,16 +49,50 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
     int2 p = int2(id.xy);
 #if DLSSNR_COMPACT_GHOST_STAGE == 1
     float nearZ = -1;
-    uint2 chosen = min(id.xy * DLSSNR_GHOST_STEP, uint2(fullWidth, fullHeight) - 1);
-    [unroll] for (uint y = 0; y < DLSSNR_GHOST_STEP; ++y)[unroll] for (uint x = 0; x < DLSSNR_GHOST_STEP; ++x)
+    uint2 first = id.xy * DLSSNR_GHOST_STEP;
+    uint2 chosen = min(first, uint2(fullWidth, fullHeight) - 1);
+#if DLSSNR_GHOST_STEP == 4
+    // Gather only complete active cells. The depth allocation can be larger than the active viewport.
+    [branch] if (all(first + 3 < uint2(fullWidth, fullHeight)))
     {
-        uint2 q = min(id.xy * DLSSNR_GHOST_STEP + uint2(x, y), uint2(fullWidth, fullHeight) - 1);
-        float z = Depth.Load(int3(q, 0));
-        float n = GhostNearDepth(z, inverted);
-        if (n > nearZ)
+        uint2 extent;
+        Depth.GetDimensions(extent.x, extent.y);
+        float2 uv = (float2(first) + 1) / float2(extent);
+        float4 upperLeft = Depth.GatherRed(LinearClamp, uv);
+        float4 upperRight = Depth.GatherRed(LinearClamp, uv, int2(2, 0));
+        float4 lowerLeft = Depth.GatherRed(LinearClamp, uv, int2(0, 2));
+        float4 lowerRight = Depth.GatherRed(LinearClamp, uv, int2(2, 2));
+        float4 rows[4] = {
+            float4(upperLeft.wz, upperRight.wz), float4(upperLeft.xy, upperRight.xy),
+            float4(lowerLeft.wz, lowerRight.wz), float4(lowerLeft.xy, lowerRight.xy)
+        };
+        [unroll] for (uint y = 0; y < 4; ++y)
         {
-            nearZ = n;
-            chosen = q;
+            float4 z = rows[y];
+            float4 n = float4(GhostNearDepth(z.x, inverted), GhostNearDepth(z.y, inverted),
+                              GhostNearDepth(z.z, inverted), GhostNearDepth(z.w, inverted));
+            float rowMax = max(max(n.x, n.y), max(n.z, n.w));
+            if (rowMax > nearZ)
+            {
+                uint x = n.x == rowMax ? 0 : n.y == rowMax ? 1 : n.z == rowMax ? 2 : 3;
+                nearZ = rowMax;
+                chosen = first + uint2(x, y);
+            }
+        }
+    }
+    else
+#endif
+    {
+        [unroll] for (uint y = 0; y < DLSSNR_GHOST_STEP; ++y)[unroll] for (uint x = 0; x < DLSSNR_GHOST_STEP; ++x)
+        {
+            uint2 q = min(id.xy * DLSSNR_GHOST_STEP + uint2(x, y), uint2(fullWidth, fullHeight) - 1);
+            float z = Depth.Load(int3(q, 0));
+            float n = GhostNearDepth(z, inverted);
+            if (n > nearZ)
+            {
+                nearZ = n;
+                chosen = q;
+            }
         }
     }
     float2 mv = Motion.Load(int3(chosen, 0));
@@ -73,10 +120,11 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
     uint2 packed = CurrentState(p);
     float4 current = UnpackGhost(packed);
     uint phase = packed.x & (DLSSNR_GHOST_STEP == 4 ? 15u : 3u);
-    current.y = 0;
+    // Reuse the scratch mask texture until dilation. All 4-bit phases are exact in R16_FLOAT.
+    WritePhase[p] = float(phase);
     if (initialized == 0 || current.x <= 0)
     {
-        StoreState(p, PackGhost(current));
+        StoreAge(p, packed, 0);
         return;
     }
 #if DLSSNR_GHOST_STEP == 4
@@ -88,13 +136,13 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
     int2 oldPixel = int2(round(previousPos));
     if (!Inside(oldPixel))
     {
-        StoreState(p, PackGhost(current));
+        StoreAge(p, packed, 0);
         return;
     }
     float4 old = UnpackGhost(PreviousState(oldPixel));
     if (!all(isfinite(old)) || old.x <= 0)
     {
-        StoreState(p, PackGhost(current));
+        StoreAge(p, packed, 0);
         return;
     }
     float nFrames = isfinite(frames) ? clamp(frames, 1, 120) : 16;
@@ -114,19 +162,19 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
     {
         if (ContinueGhostSurface(current, old, chosen, tolerance, precision, gate))
         {
-            StoreState(p, PackGhost(float4(current.x, max(0, min(old.y, nFrames) - 1), current.zw)));
+            StoreAge(p, packed, max(0, min(old.y, nFrames) - 1));
             return;
         }
     }
     if (current.x > old.x * (1 + tolerance) + precision)
     {
-        StoreState(p, PackGhost(current));
+        StoreAge(p, packed, 0);
         return;
     }
     bool previousOccluder = old.x > current.x * (1 + tolerance) + precision;
     if (errorSquared <= gateSquared * 4 && !previousOccluder)
     {
-        StoreState(p, PackGhost(float4(current.x, max(0, min(old.y, nFrames) - 1), current.zw)));
+        StoreAge(p, packed, max(0, min(old.y, nFrames) - 1));
         return;
     }
     bool relativeMotion = false;
@@ -147,7 +195,7 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
                 relativeMotion = dot(layerDelta, layerDelta) >= gateSquared;
                 if (relativeMotion && previousOccluder && old.x > neighbour.x * (1 + tolerance) + precision)
                 {
-                    StoreState(p, PackGhost(float4(current.x, nFrames, current.zw)));
+                    StoreAge(p, packed, nFrames);
                     return;
                 }
             }
@@ -176,7 +224,7 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
             if (differentMotion && previousOccluder && old.x > neighbour.x * (1 + tolerance) + precision)
             {
                 // A matching visible background layer and a different foreground motion prove disappearance.
-                StoreState(p, PackGhost(float4(current.x, nFrames, current.zw)));
+                StoreAge(p, packed, nFrames);
                 return;
             }
         }
@@ -241,12 +289,14 @@ bool Inside(int2 p) { return all(p >= 0) && p.x < int(width) && p.y < int(height
     float age = error <= bestError + gate ? max(0, min(old.y, nFrames) - 1) : 0;
     if (exposed || contact)
         age = nFrames;
-    StoreState(p, PackGhost(float4(current.x, age, current.zw)));
+    StoreAge(p, packed, age);
 #endif
 }
 
-    [numthreads(8, 8, 1)] void ClearVisibility(uint3 id : SV_DispatchThreadID)
+#else
+[numthreads(8, 8, 1)] void ClearVisibility(uint3 id : SV_DispatchThreadID)
 {
     if (id.x < width && id.y < height)
         WriteDepth[id.xy] = 0;
 }
+#endif

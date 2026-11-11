@@ -89,9 +89,6 @@ inline void SetPrivateRings(DlssNrConstants& c, unsigned w, unsigned h, bool inv
     c.Mode = apply ? DlssNrMode_PrivateGhostFeather : DlssNrMode_PrivateGhostRings;
     c.Width = apply ? w : (w + 3) / 4;
     c.Height = apply ? h : (h + 3) / 4;
-    c.GuideWidth = 4;
-    c.GuideHeight = h;
-    c.Passthrough = 3;
     c.ColourStrength = .05f;
     c.DebugView = inverted;
     c.MaxRatio = depthPrecision;

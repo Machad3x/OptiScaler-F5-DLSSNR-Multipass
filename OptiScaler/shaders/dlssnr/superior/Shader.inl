@@ -28,6 +28,7 @@ namespace DlssNr::Superior::Bytecode
 #include "precompile/private_ghost_reference_Shader.h"
 #include "precompile/private_ghost_dilate_Shader.h"
 #include "precompile/private_ghost_decode_Shader.h"
+#include "precompile/private_ghost_decode_seed_Shader.h"
 #include "precompile/private_ghost_rings_Shader.h"
 #include "precompile/private_ghost_rings_apply_Shader.h"
 #include "precompile/private_ghost_rings_inplace_Shader.h"
@@ -136,7 +137,7 @@ bool DlssNr_Dx12::DispatchSuperiorPass(ID3D12GraphicsCommandList* InCmdList,
     using namespace DlssNr::Superior::Bytecode;
     using namespace DlssNr::Superior;
     const bool privatePass = InConstants.Mode >= DlssNrMode_SuperiorCarrierMotion &&
-                             InConstants.Mode <= DlssNrMode_PrivateGhostBias;
+                             InConstants.Mode <= DlssNrMode_PrivateGhostDecodeSeed;
     ID3D12PipelineState* pipeline = privatePass ? nullptr : SuperiorPipeline(InConstants, InSource);
     const auto get = [&](unsigned index, const void* blob, size_t size)
     {
@@ -167,9 +168,11 @@ bool DlssNr_Dx12::DispatchSuperiorPass(ID3D12GraphicsCommandList* InCmdList,
             { private_ghost_rings_apply_cso, sizeof(private_ghost_rings_apply_cso) },
             { private_ghost_rings_inplace_cso, sizeof(private_ghost_rings_inplace_cso) },
             { private_ghost_bias_cso, sizeof(private_ghost_bias_cso) },
+            { private_ghost_decode_seed_cso, sizeof(private_ghost_decode_seed_cso) },
         };
         static_assert(std::size(privateBlobs) ==
-                      DlssNrMode_PrivateGhostBias - DlssNrMode_SuperiorCarrierMotion + 1);
+                      DlssNrMode_PrivateGhostDecodeSeed - DlssNrMode_SuperiorCarrierMotion + 1);
+        static_assert(sizeof(_superiorPipeline) / sizeof(_superiorPipeline[0]) >= 16u + std::size(privateBlobs));
         const unsigned index = InConstants.Mode - DlssNrMode_SuperiorCarrierMotion;
         pipeline = get(16u + index, privateBlobs[index].data, privateBlobs[index].bytes);
         if (!pipeline)
@@ -243,13 +246,16 @@ bool DlssNr_Dx12::DispatchSuperiorPass(ID3D12GraphicsCommandList* InCmdList,
 
     // Sized from the constants rather than from a resource, because the pass that shrinks the proxy
     // writes fewer pixels than its source has.
-    const UINT dispatchWidth = InConstants.Mode == DlssNr::Superior::DlssNrMode_Meter
-                                   ? InConstants.Width
-                                   : (InConstants.Width + _numThreadsX - 1) / _numThreadsX;
+    // The ring apply shaders use a 16x16 group and cover 32x16 pixels.
+    const bool applyRings = InConstants.Mode == DlssNrMode_PrivateGhostFeather ||
+                            InConstants.Mode == DlssNrMode_PrivateGhostFeatherInPlace;
+    const bool decodeSeed = InConstants.Mode == DlssNrMode_PrivateGhostDecodeSeed;
+    const UINT threadsX = applyRings ? 32u : (decodeSeed ? 16u : _numThreadsX);
+    const UINT dispatchWidth =
+        InConstants.Mode == DlssNrMode_Meter ? InConstants.Width : (InConstants.Width + threadsX - 1) / threadsX;
     // Final-low PSO uses 8x16, the generic fallback 8x8; dispatch for the selected PSO.
-    const UINT threadsY = pipeline == _superiorPipeline[8] || pipeline == _superiorRawLow
-                              ? DlssNr::SuperiorScaling::LowGroupHeight
-                              : _numThreadsY;
+    const bool tallLow = pipeline == _superiorPipeline[8] || pipeline == _superiorRawLow;
+    const UINT threadsY = applyRings ? 16u : (tallLow ? DlssNr::SuperiorScaling::LowGroupHeight : _numThreadsY);
     const UINT dispatchHeight = InConstants.Mode == DlssNr::Superior::DlssNrMode_Meter
                                     ? InConstants.Height
                                     : (InConstants.Height + threadsY - 1) / threadsY;

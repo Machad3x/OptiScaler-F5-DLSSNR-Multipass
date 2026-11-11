@@ -100,6 +100,67 @@ float GhostWeight(int2 pixel, float3 raw, float3 filtered)
 }
 #endif
 
+#ifdef SUPERIOR_GHOST_DECODE_SEED
+float4 DecodePixel(uint2 pixel, out float nearDepth)
+{
+    int3 p = int3(pixel, 0);
+    nearDepth = 0;
+    float3 encoded = gSource.Load(p).rgb;
+    float3 filtered = SanitizeFinite3(encoded, .5) - .5;
+#ifdef SUPERIOR_GHOST_DECODE
+    float field = Visibility.SampleLevel(gLinear, (float2(pixel) + .5) / float2(gWidth, gHeight), 0);
+    float mask = isfinite(field) ? saturate(field) : 0;
+    nearDepth = GhostNearDepth(gMotion.Load(p).x, gPassthrough);
+    if (mask > 0 && nearDepth > 0)
+    {
+        float3 raw = CurrentEdit(p.xy);
+        mask *= GhostWeight(p.xy, raw, encoded);
+        return float4(mask >= 1 ? raw : lerp(filtered, raw, mask), mask);
+    }
+    return float4(filtered, 0);
+#else
+    float rawWeight = asfloat(gExposurePadding);
+    float3 raw = CurrentEdit(p.xy);
+    return float4(rawWeight >= 1 ? raw : lerp(filtered, raw, rawWeight), 1);
+#endif
+}
+
+// Decode writes binary16 alpha. Reduce the same rounded values before selecting the winning depth.
+groupshared float2 MaskTile[128];
+
+[numthreads(16, 8, 1)]
+void PrivateDecode(uint3 id : SV_DispatchThreadID, uint3 local : SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+    const uint lane = local.y * 16 + local.x;
+    float2 seed = 0;
+    if (id.x < gWidth && id.y < gHeight)
+    {
+        float4 value = DecodePixel(id.xy, seed.y);
+        gTarget[id.xy] = value;
+        seed.x = f16tof32(f32tof16(value.a));
+    }
+    MaskTile[lane] = seed;
+    GroupMemoryBarrierWithGroupSync();
+    if (lane < 8)
+    {
+        uint2 origin = uint2(lane % 4, lane / 4) * 4;
+        uint2 cell = group.xy * uint2(4, 2) + origin / 4;
+        if (any(cell >= (uint2(gWidth, gHeight) + 3) / 4))
+            return;
+        float2 best = 0;
+        // Match the seed shader's first-maximum tie break in row-major order.
+        [unroll] for (uint y = 0; y < 4; ++y)
+        [unroll] for (uint x = 0; x < 4; ++x)
+        {
+            float2 sample = MaskTile[(origin.y + y) * 16 + origin.x + x];
+            if (sample.x > best.x)
+                best = sample;
+        }
+        gKeep[cell] = best.y > 0 ? float4(best, 0, 0) : 0;
+    }
+}
+
+#else
 [numthreads(8, 8, 1)] void PrivateDecode(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= gWidth || id.y >= gHeight)
@@ -125,7 +186,9 @@ float GhostWeight(int2 pixel, float3 raw, float3 filtered)
 #endif
 }
 
-    [numthreads(8, 8, 1)] void PrivateEncode(uint3 id : SV_DispatchThreadID)
+#endif
+
+[numthreads(8, 8, 1)] void PrivateEncode(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= gWidth || id.y >= gHeight)
         return;

@@ -34,7 +34,8 @@ enum DlssNrMode : uint32_t
     DlssNrMode_PrivateGhostRings = 48,     // quarter-size boundary rings around the repaired area
     DlssNrMode_PrivateGhostFeather = 49,   // outward feather of the repair into a second texture
     DlssNrMode_PrivateGhostFeatherInPlace = 50, // the same, in place (needs typed UAV loads on RGBA16F)
-    DlssNrMode_PrivateGhostBias = 51 // quarter-size disocclusion field -> the private DLSS's bias-current-colour mask
+    DlssNrMode_PrivateGhostBias = 51, // quarter-size disocclusion field -> the private DLSS's bias-current-colour mask
+    DlssNrMode_PrivateGhostDecodeSeed = 52 // carrier decode plus exact 4x4 feather seed
 };
 
 struct alignas(256) DlssNrConstants

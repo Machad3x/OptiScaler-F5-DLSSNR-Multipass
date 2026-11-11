@@ -694,17 +694,21 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
         idle = probe.selection.idle;
         mix *= probe.selection.fade.weight;
     }
-    // The private DLSS sees only NR's small edit on a flat grey carrier, so it cannot tell a moved-away object from
-    // the surface behind it by colour and keeps the old edit there: the ghost. Where the picture was just uncovered
-    // (the disocclusion field, from depth and motion alone, so it exists before DLSS) it is told to take the current
-    // frame instead. Transformer K holds history longest and still gets the repair after DLSS on top.
-    ID3D12Resource* bias =
-        GhostBiasMask(g, shader, cmd, temporalDepth, proxy, answer, frame, reset || g.reset, packedDepthPrecision);
+    // Transformer reuses one disocclusion field for the bias before DLSS and the repair after it. CNN keeps its
+    // D/E route without allocating or dispatching the ghost field; its steady-state cost stays unchanged.
+    const bool repair = DlssNr::SuperiorScaling::NeedsGhostField(g.actualPreset);
+    ID3D12Resource* bias = repair ? GhostBiasMask(g, shader, cmd, temporalDepth, proxy, answer, frame,
+                                                reset || g.reset, packedDepthPrecision)
+                                 : nullptr;
     g.temporalOutput.To(cmd, Uav);
     auto* p = idle ? g.resident->parameters : g.parameters;
-    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, bias);
-    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X, 0u);
-    p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y, 0u);
+    if (repair)
+    {
+        // CNN owns separate parameters and never binds a bias, so it needs no per-frame mask parameter updates.
+        p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, bias);
+        p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_X, 0u);
+        p->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_SubrectBase_Y, 0u);
+    }
     auto* feature = idle ? g.resident->feature : g.feature;
     p->Set(NVSDK_NGX_Parameter_Color, g.carrier.Get());
     p->Set(NVSDK_NGX_Parameter_Output, g.temporalOutput.Get());
@@ -736,7 +740,7 @@ ID3D12Resource* Stabilize(Generation& g, DlssNr_Dx12& shader, ID3D12GraphicsComm
     decode.Height = g.workHeight;
     // The repair is tuned for K: it follows the model that runs, not the one asked for (a runtime without K runs its
     // default instead).
-    if (g.actualPreset == DlssNr::SuperiorScaling::TransformerK)
+    if (repair)
     {
         if (!RejectTransformerGhosts(g, shader, cmd, decode, temporalDepth, proxy, answer, frame, reset || g.reset,
                                      packedDepthPrecision))

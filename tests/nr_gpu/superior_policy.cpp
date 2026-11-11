@@ -4,6 +4,11 @@
 #include "../../OptiScaler/dlssnr/DlssNr_InterPassSchedule.h"
 #include "../../OptiScaler/shaders/dlssnr/superior/Constants.h"
 using namespace DlssNr::Superior;
+static_assert(!DlssNr::SuperiorScaling::NeedsGhostField(DlssNr::SuperiorScaling::NoPrivateDlss));
+static_assert(!DlssNr::SuperiorScaling::NeedsGhostField(DlssNr::SuperiorScaling::CnnD));
+static_assert(!DlssNr::SuperiorScaling::NeedsGhostField(DlssNr::SuperiorScaling::CnnE));
+static_assert(!DlssNr::SuperiorScaling::NeedsGhostField(0)); // Runtime default after a rejected preset hint.
+static_assert(DlssNr::SuperiorScaling::NeedsGhostField(DlssNr::SuperiorScaling::TransformerK));
 #include "../../OptiScaler/shaders/dlssnr/DlssNr_Guides.h"
 #include <optional>
 

@@ -26,6 +26,8 @@ constexpr uint32_t LowGroupHeight = 16u;
 inline bool Enabled(uint32_t transfer) { return transfer == Transfer; }
 template <class C> inline bool Enabled(const C& cfg) { return Enabled(cfg.DlssNrTransfer.value_or_default()); }
 constexpr unsigned NoPrivateDlss = 0, CnnPreference = 1, CnnD = 4, CnnE = 5, TransformerK = 11;
+// Only the running K model builds the shared pre-DLSS bias/post-DLSS repair field.
+constexpr bool NeedsGhostField(unsigned actualPreset) { return actualPreset == TransformerK; }
 inline unsigned Preset(unsigned preset)
 {
     return preset == NoPrivateDlss || preset == TransformerK ? preset : CnnPreference;

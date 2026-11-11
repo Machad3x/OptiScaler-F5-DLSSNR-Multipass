@@ -1,4 +1,3 @@
-#include "GhostDepth.hlsli"
 // Optional low-grid raw edit and original occluder reference. No readback or NGX history changes.
 #ifndef DLSSNR_GHOST_STEP
 #define DLSSNR_GHOST_STEP 2
@@ -25,7 +24,7 @@ Texture2D<float4> OldRaw : register(t1);
 Texture2D<float4> OldReference : register(t2);
 Texture2D<float4> Proxy : register(t3);
 Texture2D<float4> Answer : register(t4);
-Texture2D<float> Depth : register(t5);
+Texture2D<float> Phase : register(t5);
 RWTexture2D<float4> Raw : register(u0);
 RWTexture2D<float4> Reference : register(u1);
 
@@ -44,22 +43,12 @@ RWTexture2D<float4> Reference : register(u1);
         Reference[id.xy] = 0;
         return;
     }
-    float nearZ = -1;
-    uint2 chosen = min(id.xy * DLSSNR_GHOST_STEP, uint2(fullWidth, fullHeight) - 1);
-    [unroll] for (uint y = 0; y < DLSSNR_GHOST_STEP; ++y)[unroll] for (uint x = 0; x < DLSSNR_GHOST_STEP; ++x)
-    {
-        uint2 q = min(id.xy * DLSSNR_GHOST_STEP + uint2(x, y), uint2(fullWidth, fullHeight) - 1);
-        float z = Depth.Load(int3(q, 0));
-        float n = GhostNearDepth(z, inverted);
-        if (n > nearZ)
-        {
-            nearZ = n;
-            chosen = q;
-        }
-    }
+    uint phase = uint(Phase.Load(int3(id.xy, 0)));
+    uint2 chosen = id.xy * DLSSNR_GHOST_STEP +
+                   uint2(phase % DLSSNR_GHOST_STEP, phase / DLSSNR_GHOST_STEP);
     float3 proxy = Proxy.Load(int3(chosen, 0)).rgb, answer = Answer.Load(int3(chosen, 0)).rgb;
     float3 edit = answer - proxy;
-    bool valid = nearZ > 0 && all(isfinite(edit)) && all(abs(edit) <= 65504);
+    bool valid = all(isfinite(edit)) && all(abs(edit) <= 65504);
     Raw[id.xy] = valid ? float4(edit, 1) : 0;
     float4 reference = 0;
     if (initialized != 0 && valid && state.y > 0 && all(isfinite(state)))
