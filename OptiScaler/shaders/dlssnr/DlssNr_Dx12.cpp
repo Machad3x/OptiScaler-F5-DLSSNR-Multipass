@@ -831,6 +831,16 @@ bool EnsureCapabilityParams(ID3D12Device* device)
     if (g_nr.capabilityParams != nullptr)
         return true;
 
+    // The vendor-neutral port needs no NVIDIA NGX core: its model is self-contained, so skip the NGX
+    // initialisation (which is Windows/NVIDIA-driver only and fails on Proton) and run with a null
+    // capability block. The NGX forwarder below still needs the core, and keeps the old path.
+    if (g_nr.isPort)
+    {
+        LOG_INFO("DLSS-NR port: skipping NGX core initialisation (not needed)");
+        g_nr.capabilityParams = nullptr;
+        return true;
+    }
+
     if (!NVNGXProxy::IsDx12Inited() && !NVNGXProxy::InitDx12(device))
     {
         g_nr.reason = "the NGX core would not initialise";
@@ -3911,7 +3921,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ProbeProxyDispatch(cmdList);
 
     // The port needs no capability block, so it also runs where the NGX core cannot start (AMD, Intel).
-    if (!EnsureForwarder() || (!g_nr.isPort && !EnsureCapabilityParams(device)))
+    // On Proton/Linux the NGX core cannot initialise either (BAD00000), so skip it there too for both
+    // the port and the NGX forwarder (the forwarder handles a null capability block).
+    if (!EnsureForwarder() || (!g_nr.isPort && !State::Instance().isRunningOnLinux && !EnsureCapabilityParams(device)))
     {
         g_nr.failed = true;
         LOG_ERROR("DLSS-NR unavailable: {}", g_nr.reason);

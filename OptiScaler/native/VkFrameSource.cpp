@@ -260,11 +260,37 @@ bool VkFrameSource::EnsureD3D12(VkPhysicalDevice physical, std::string& why)
     if (SUCCEEDED(hr))
         hr = factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter));
 
+    if (SUCCEEDED(hr) && adapter != nullptr)
+    {
+        DXGI_ADAPTER_DESC desc;
+        if (SUCCEEDED(adapter->GetDesc(&desc)))
+        {
+            LOG_INFO("Native motion (Vulkan): adapter = {}, vendor = 0x{:X}", 
+                std::string(desc.Description, desc.Description + wcslen(desc.Description)),
+                desc.VendorId);
+        }
+    }
+
     if (SUCCEEDED(hr))
     {
-        hr = D3d12Proxy::Module() == nullptr
-                 ? D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&_device12))
-                 : D3d12Proxy::D3D12CreateDevice_()(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&_device12));
+        // Try FL 12_1 first (needed for NGX/DLSS-NR), fall back to 12_0, then 11_0.
+        const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_0 };
+        for (auto level : levels)
+        {
+            hr = D3d12Proxy::Module() == nullptr
+                     ? D3D12CreateDevice(adapter.Get(), level, IID_PPV_ARGS(&_device12))
+                     : D3d12Proxy::D3D12CreateDevice_()(adapter.Get(), level, IID_PPV_ARGS(&_device12));
+            if (SUCCEEDED(hr) && _device12 != nullptr)
+            {
+                LOG_INFO("Native motion (Vulkan): D3D12 device created at feature level {}", (int) level);
+                break;
+            }
+            if (_device12 != nullptr)
+            {
+                _device12->Release();
+                _device12 = nullptr;
+            }
+        }
     }
 
     if (FAILED(hr) || _device12 == nullptr)

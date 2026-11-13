@@ -808,41 +808,52 @@ __declspec(dllexport) void *dlssnr_call_create(const wchar_t *snippetPath, const
     std::lock_guard<std::recursive_mutex> lock(g_snippetMutex);
     g_modelError.clear();
     auto* snippet = loadSnippet(snippetPath);
-    if (!snippet || !capabilityParams) {
-        recordModelError(snippet, "model DLL or capability parameters unavailable");
+    if (!snippet) {
+        recordModelError(snippet, "model DLL unavailable");
         return nullptr;
     }
+    // On Proton/Linux the NVIDIA NGX core cannot initialise, so capabilityParams may be null.
+    // The model can still run with a null block: the tuning writes below are skipped and the
+    // snippet's init receives null, matching the vendor-neutral port's behaviour.
     if (!snippet->initialisedDevices.count(device) && snippet->init) {
         // OptiScaler's own generic application id, the one it already hands DLSS when a game's id is
         // not wanted. What was here before was 0x4350324B -- "CP2K" -- so every game that ever loaded
         // this announced itself to the driver as Cyberpunk 2077.
         dlssnr_call_last_init = snippet->init(0x24480451ull, dataPath, device, 0x0000015, capabilityParams);
         if (dlssnr_call_last_init != 1) {
-            recordModelError(snippet, "model initialization failed");
-            return nullptr;
+            // On Proton, NGX core is unavailable so capabilityParams is null and init may report failure.
+            // For the port this is expected; for the NGX version we still try to create the feature.
+            if (capabilityParams != nullptr) {
+                recordModelError(snippet, "model initialization failed");
+                return nullptr;
+            }
+            // Null caps (Proton): proceed despite init result, the feature creation will tell us if it works.
         }
         snippet->initialisedDevices.insert(device);
     }
-    setUInt(capabilityParams, "DLSSNR.Enabled", 1);
-    setUInt(capabilityParams, "DLSSNR.Width", width);
-    setUInt(capabilityParams, "DLSSNR.Height", height);
-    setUInt(capabilityParams, "CreationNodeMask", 1);
-    setUInt(capabilityParams, "VisibilityNodeMask", 1);
-    // Written unconditionally, including zero. This block belongs to the driver and outlives the
-    // feature, so skipping the write for "default" left whichever preset was chosen last still sitting
-    // in it -- and going back to default did nothing at all.
-    setUInt(capabilityParams, "DLSSNR.Hint.Render.Preset", (unsigned int) preset);
+    if (capabilityParams != nullptr) {
+        setUInt(capabilityParams, "DLSSNR.Enabled", 1);
+        setUInt(capabilityParams, "DLSSNR.Width", width);
+        setUInt(capabilityParams, "DLSSNR.Height", height);
+        setUInt(capabilityParams, "CreationNodeMask", 1);
+        setUInt(capabilityParams, "VisibilityNodeMask", 1);
+        // Written unconditionally, including zero. This block belongs to the driver and outlives the
+        // feature, so skipping the write for "default" left whichever preset was chosen last still sitting
+        // in it -- and going back to default did nothing at all.
+        setUInt(capabilityParams, "DLSSNR.Hint.Render.Preset", (unsigned int) preset);
 
-    // The tuning has to be here rather than at evaluate. Everything this sets before create takes
-    // effect; everything set only at evaluate is ignored, which is why none of these controls did
-    // anything for a long time. The model reads them once, when it builds the feature.
-    setFloat(capabilityParams, "DLSSNR.Intensity", intensity);
-    setUInt(capabilityParams, "DLSSNR.Style", (unsigned int) style);
-    setFloat(capabilityParams, "DLSSNR.LocalStructureStrength", localStructure);
-    setFloat(capabilityParams, "DLSSNR.LocalToneStrength", localTone);
-    setFloat(capabilityParams, "DLSSNR.SkinStructureStrength", skinStructure);
-    setAutomaticMask(capabilityParams, useAutoMask);
-    setUInt(capabilityParams, "DLSSNR.UICorrection", (unsigned int) uiCorrection);
+        // The tuning has to be here rather than at evaluate. Everything this sets before create takes
+        // effect; everything set only at evaluate is ignored, which is why none of these controls did
+        // anything for a long time. The model reads them once, when it builds the feature.
+        setFloat(capabilityParams, "DLSSNR.Intensity", intensity);
+        setUInt(capabilityParams, "DLSSNR.Style", (unsigned int) style);
+        setFloat(capabilityParams, "DLSSNR.LocalStructureStrength", localStructure);
+        setFloat(capabilityParams, "DLSSNR.LocalToneStrength", localTone);
+        setFloat(capabilityParams, "DLSSNR.SkinStructureStrength", skinStructure);
+        setAutomaticMask(capabilityParams, useAutoMask);
+        setUInt(capabilityParams, "DLSSNR.UICorrection", (unsigned int) uiCorrection);
+    }
+
     void *handle = nullptr;
     dlssnr_call_last_create = snippet->create(cmd, 18, capabilityParams, &handle);
     if (dlssnr_call_last_create == 1 && handle) g_featureOwners[handle] = snippet;
