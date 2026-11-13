@@ -257,8 +257,23 @@ bool VkFrameSource::EnsureD3D12(VkPhysicalDevice physical, std::string& why)
     if (SUCCEEDED(hr))
         hr = factory2.As(&factory);
 
+    // Try EnumAdapterByLuid first (matches the Vulkan physical device).
     if (SUCCEEDED(hr))
         hr = factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter));
+
+    // Fallback: enumerate all adapters and pick the first one (NVIDIA GPU).
+    if (FAILED(hr) || adapter == nullptr)
+    {
+        LOG_WARN("Native motion (Vulkan): EnumAdapterByLuid failed, trying EnumAdapters1");
+        hr = S_OK;
+        ComPtr<IDXGIAdapter1> adapter1;
+        if (SUCCEEDED(factory->EnumAdapters1(0, &adapter1)))
+        {
+            adapter1.As(&adapter);
+            if (adapter != nullptr)
+                hr = S_OK;
+        }
+    }
 
     if (SUCCEEDED(hr) && adapter != nullptr)
     {
