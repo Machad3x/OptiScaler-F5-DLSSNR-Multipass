@@ -843,10 +843,21 @@ bool EnsureCapabilityParams(ID3D12Device* device)
 
     if (!NVNGXProxy::IsDx12Inited() && !NVNGXProxy::InitDx12(device))
     {
-        // On Linux/Proton, NGX init fails (BAD00000). Fall back to null caps instead of failing.
+        // On Linux/Proton, NGX init fails (BAD00000). Try allocating a parameter block instead.
         if (State::Instance().isRunningOnLinux)
         {
-            LOG_WARN("DLSS-NR: NGX core would not initialise on Linux/Proton (BAD00000), falling back to null caps");
+            LOG_WARN("DLSS-NR: NGX core would not initialise on Linux/Proton (BAD00000), trying to allocate params");
+            if (NVNGXProxy::D3D12_AllocateParameters() != nullptr)
+            {
+                NVSDK_NGX_Result allocResult = NVNGXProxy::D3D12_AllocateParameters()(&g_nr.capabilityParams);
+                if (allocResult == NVSDK_NGX_Result_Success && g_nr.capabilityParams != nullptr)
+                {
+                    LOG_INFO("DLSS-NR: allocated parameter block successfully on Proton");
+                    return true;
+                }
+                LOG_WARN("DLSS-NR: failed to allocate parameter block: {}", (int)allocResult);
+            }
+            LOG_WARN("DLSS-NR: falling back to null caps (may crash the model)");
             g_nr.capabilityParams = nullptr;
             return true;
         }
