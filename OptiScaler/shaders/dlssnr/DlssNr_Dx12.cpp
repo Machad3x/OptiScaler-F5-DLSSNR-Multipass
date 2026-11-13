@@ -843,6 +843,13 @@ bool EnsureCapabilityParams(ID3D12Device* device)
 
     if (!NVNGXProxy::IsDx12Inited() && !NVNGXProxy::InitDx12(device))
     {
+        // On Linux/Proton, NGX init fails (BAD00000). Fall back to null caps instead of failing.
+        if (State::Instance().isRunningOnLinux)
+        {
+            LOG_WARN("DLSS-NR: NGX core would not initialise on Linux/Proton (BAD00000), falling back to null caps");
+            g_nr.capabilityParams = nullptr;
+            return true;
+        }
         g_nr.reason = "the NGX core would not initialise";
         return false;
     }
@@ -3921,9 +3928,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ProbeProxyDispatch(cmdList);
 
     // The port needs no capability block, so it also runs where the NGX core cannot start (AMD, Intel).
-    // On Proton/Linux the NGX core cannot initialise either (BAD00000), so skip it there too for both
-    // the port and the NGX forwarder (the forwarder handles a null capability block).
-    if (!EnsureForwarder() || (!g_nr.isPort && !State::Instance().isRunningOnLinux && !EnsureCapabilityParams(device)))
+    // Try NGX init even on Linux/Proton. If it fails (BAD00000), fall through to null caps.
+    if (!EnsureForwarder() || (!g_nr.isPort && !EnsureCapabilityParams(device)))
     {
         g_nr.failed = true;
         LOG_ERROR("DLSS-NR unavailable: {}", g_nr.reason);
